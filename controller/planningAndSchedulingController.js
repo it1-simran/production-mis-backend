@@ -1,0 +1,536 @@
+const mongoose = require("mongoose");
+const moment = require("moment");
+const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
+const ProcessLogsModel = require("../models/ProcessLogs");
+const RoomPlanModel = require("../models/roomPlan");
+const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
+const ShiftModel = require("../models/shiftManagement");
+const InventoryModel = require("../models/inventoryManagement");
+const ProcessModel = require("../models/Process");
+module.exports = {
+  create: async (req, res) => {
+    try {
+      const formatDateForMongoose = (dateString) => {
+        const [day, month, yearAndTime] = dateString.split("/");
+        const [year, time] = yearAndTime.split(" ");
+        const [hours, minutes, seconds] = time.split(":");
+        return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+      };
+      const data = req?.body;
+      const planingId = req?.body?.selectedProcess;
+      data.ProcessShiftMappings = JSON.parse(data?.ProcessShiftMappings);
+      data.startDate = formatDateForMongoose(data?.startDate);
+      data.estimatedEndDate = formatDateForMongoose(data?.estimatedEndDate);
+      const newPlanAndScheduling = new PlaningAndSchedulingModel(data);
+      await newPlanAndScheduling.save();
+      const processUpdater = await ProcessModel.findByIdAndUpdate(
+        planingId,
+        {
+          $set: {
+            status: req?.body?.status,
+          },
+        },
+        { new: true }
+      );
+      const assignOperator = JSON.parse(data?.assignedOperators);
+      let seatsDetails = {};
+      if (assignOperator.length > 0) {
+        const keys = Object.keys(assignOperator);
+        const roomAndSeatNumber = keys[0].split("-");
+        seatsDetails = {
+          rowNumber: roomAndSeatNumber[0],
+          seatNumber: roomAndSeatNumber[1],
+        };
+        const data1 = {
+          planId: newPlanAndScheduling?._id,
+          userId: assignOperator[keys[0]][0]?._id,
+          roomName: data?.selectedRoom,
+          kitIssued: data?.issuedKits,
+          cartonIssued: data?.issuedCarton,
+          seatDetails: seatsDetails,
+          ProcessShiftMappings: data?.ProcessShiftMappings,
+          startDate: data?.startDate,
+          estimatedEndDate: data?.estimatedEndDate,
+        };
+
+        const assignOperators = new assignedOperatorsToPlanModel(data1);
+        await assignOperators.save();
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Planing And Scheduling Created Successfully!!",
+        newPlanAndScheduling,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  update: async (req, res) => {
+    try {
+      const formatDateForMongoose = (dateString) => {
+        const [day, month, yearAndTime] = dateString.split("/");
+        const [year, time] = yearAndTime.split(" ");
+        const [hours, minutes, seconds] = time.split(":");
+
+        return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+      };
+      const id = req.params.id;
+      const updatedData = req.body;
+      updatedData.ProcessShiftMappings = JSON.parse(
+        updatedData.ProcessShiftMappings
+      );
+      updatedData.startDate = formatDateForMongoose(updatedData.startDate);
+      updatedData.estimatedEndDate = formatDateForMongoose(
+        updatedData.estimatedEndDate
+      );
+      const updatedPlaningAndScheduling =
+        await PlaningAndSchedulingModel.findByIdAndUpdate(id, updatedData, {
+          new: true,
+          runValidators: true,
+        });
+
+      if (!updatedPlaningAndScheduling) {
+        return res
+          .status(404)
+          .json({ message: "Planing and Scheduling not found" });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Planing and Scheduling Updated Successfully!!",
+        shift: updatedPlaningAndScheduling,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  view: async (req, res) => {
+    try {
+      let plans = await PlaningAndSchedulingModel.aggregate([
+        {
+          $lookup: {
+            from: "processes",
+            localField: "selectedProcess",
+            foreignField: "_id",
+            as: "planingData",
+          },
+        },
+        { $unwind: "$planingData" },
+        {
+          $project: {
+            _id: 1,
+            processName: 1,
+            selectedProcess: 1,
+            selectedRoom: 1,
+            selectedShift: 1,
+            issuedKits: 1,
+            issuedCarton: 1,
+            ProcessShiftMappings: 1,
+            repeatCount: 1,
+            startDate: 1,
+            assignedJigs: 1,
+            assignedOperators:1,
+            assignedStages:1,
+            isDrafted:1,
+            totalUPHA:1,
+            totalTimeEstimation:1,
+            status:"$planingData.status",
+            estimatedEndDate:1,
+            consumedKit:1,
+            downTime: 1,
+            processName : "$planingData.name"
+          },
+        },
+      ]);
+      return res.status(200).json({
+        status: 200,
+        message: "Planning and scheduling fetched successfully!",
+        plans,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  checkAvailability: async (req, res) => {
+    try {
+      const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } =
+        req.body;
+      let changedData = JSON.parse(shiftDataChange);
+      console.log("shiftId ==>", shiftId);
+      if (!roomId || !shiftId || !startDate || !expectedEndDate) {
+        return res.status(400).json({
+          error:
+            "Room ID, Shift ID, Start Date, and Expected End Date are required.",
+        });
+      }
+      const parsedStartDate = moment.utc(startDate, "DD/MM/YY HH:mm:ss", true);
+      const parsedEndDate = moment.utc(
+        expectedEndDate,
+        "DD/MM/YY HH:mm:ss",
+        true
+      );
+      if (!parsedStartDate.isValid() || !parsedEndDate.isValid()) {
+        return res.status(400).json({
+          status: 400,
+          error: "Invalid date format. Expected format: DD/MM/YY HH:mm:ss.",
+        });
+      }
+      if (parsedStartDate.isAfter(parsedEndDate)) {
+        return res.status(400).json({
+          status: 400,
+          error: "Start Date must be earlier than Expected End Date.",
+        });
+      }
+      const shift = await ShiftModel.findById(shiftId);
+      if (!shift) {
+        return res.status(404).json({
+          status: 404,
+          error: "Shift not found.",
+        });
+      }
+      let shiftStartTime, shiftEndTime;
+      shiftStartTime = moment(shift.startTime, "HH:mm");
+      shiftEndTime = moment(shift.endTime, "HH:mm");
+      // const query = {
+      //   selectedRoom: new mongoose.Types.ObjectId(roomId),
+      //   $or: [
+      //     {
+      //       startDate: {
+      //         $gte: parsedStartDate.toISOString(),
+      //         $lte: parsedEndDate.toISOString(),
+      //       },
+      //     },
+      //     {
+      //       estimatedEndDate: {
+      //         $gte: parsedStartDate.toISOString(),
+      //         $lte: parsedEndDate.toISOString(),
+      //       },
+      //     },
+      //     {
+      //       $and: [
+      //         { startDate: { $lte: parsedStartDate.toISOString() } },
+      //         { estimatedEndDate: { $gte: parsedEndDate.toISOString() } },
+      //       ],
+      //     },
+      //   ],
+      //   isDrafted: 0,
+      // };
+      // const plans = await PlaningAndSchedulingModel.find(query);
+      // const query = [
+      //   {
+      //     $match: {
+      //       selectedRoom: new mongoose.Types.ObjectId(roomId),
+      //       isDrafted: 0,
+      //       $or: [
+      //         {
+      //           startDate: {
+      //             $gte: parsedStartDate.toISOString(),
+      //             $lte: parsedEndDate.toISOString(),
+      //           },
+      //         },
+      //         {
+      //           estimatedEndDate: {
+      //             $gte: parsedStartDate.toISOString(),
+      //             $lte: parsedEndDate.toISOString(),
+      //           },
+      //         },
+      //         {
+      //           $and: [
+      //             { startDate: { $lte: parsedStartDate.toISOString() } },
+      //             { estimatedEndDate: { $gte: parsedEndDate.toISOString() } },
+      //           ],
+      //         },
+      //       ],
+      //     },
+      //   },
+        // {
+        //   $lookup: {
+        //     from: "processes",
+        //     localField: "selectedProcess",
+        //     foreignField: "_id",
+        //     as: "processDetails",
+        //   },
+        // },
+        // {
+        //   $unwind: "$processDetails",
+        // },
+      // ];
+      
+      // const plans = await PlaningAndSchedulingModel.aggregate(query);
+
+      const query = [
+        {
+          $match: {
+            selectedRoom: new mongoose.Types.ObjectId(roomId),
+            isDrafted: 0,
+            $or: [
+              { startDate: { $gte: new Date(parsedStartDate), $lte: new Date(parsedEndDate) } },
+              { estimatedEndDate: { $gte: new Date(parsedStartDate), $lte: new Date(parsedEndDate) } },
+              {
+                $and: [
+                  { startDate: { $lte: new Date(parsedStartDate) } },
+                  { estimatedEndDate: { $gte: new Date(parsedEndDate) } },
+                ],
+              },
+            ],
+          },
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "selectedProcess",
+            foreignField: "_id",
+            as: "processDetails",
+          },
+        },
+        {
+          $match: { "processDetails.status": { $nin: ["completed", "waiting_schedule"] } }
+        },
+        {
+          $unwind: {
+            path: "$processDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+      ];
+      const plans = await PlaningAndSchedulingModel.aggregate(query);
+      const filteredPlans = plans.filter((plan) => {
+        const { startTime, endTime } = plan.ProcessShiftMappings || {};
+        if (!startTime || !endTime) return false;
+        const planStartTime = moment(startTime, "HH:mm");
+        const planEndTime = moment(endTime, "HH:mm");
+        return (
+          shiftStartTime.isSameOrBefore(planEndTime.startOf("minute")) &&
+          shiftEndTime.isSameOrAfter(planStartTime.startOf("minute"))
+        );
+      });
+      if (filteredPlans.length === 0) {
+        return res.status(404).json({
+          status: 404,
+          error:
+            "No available seats for the given room, shift, and date range.",
+        });
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Available seats fetched successfully!",
+        plans: filteredPlans,
+      });
+    } catch (error) {
+      console.error("Error in checkAvailability: ", error.message);
+      return res.status(500).json({
+        status: 500,
+        error: "Internal server error.",
+        details: error.message,
+      });
+    }
+  },
+  checkAvailabilityFromCurrentDate: async (req, res) => {
+    try {
+      const { roomId, shiftId } = req.body;
+      if (!roomId || !shiftId) {
+        return res.status(400).json({
+          status: 400,
+          error: "Room ID and Shift ID are required.",
+        });
+      }
+      const currentDate = moment.utc().startOf("day");
+      const startISO = currentDate.toISOString();
+      const endDate = moment.utc().add(30, "days").toISOString();
+      const roomPlan = await RoomPlanModel.findById(roomId);
+      if (!roomPlan) {
+        return res.status(404).json({
+          status: 404,
+          error: "Room not found.",
+        });
+      }
+      const totalSeatsInRoom = roomPlan.lines.reduce(
+        (totalSeats, line) => totalSeats + line.seats.length,
+        0
+      );
+      const plans = await PlaningAndSchedulingModel.find({
+        selectedRoom: new mongoose.Types.ObjectId(roomId),
+        selectedShift: new mongoose.Types.ObjectId(shiftId),
+        isDrafted: 0,
+      });
+      const seatAvailability = {};
+      plans.forEach((plan) => {
+        const planStartDate = moment(plan.startDate).startOf("day");
+        const planEndDate = moment(plan.estimatedEndDate).endOf("day");
+        let currentDateInRange = planStartDate.clone();
+        while (currentDateInRange.isSameOrBefore(planEndDate)) {
+          const dateString = currentDateInRange.toISOString().split("T")[0];
+          if (!seatAvailability[dateString]) {
+            seatAvailability[dateString] = totalSeatsInRoom;
+          }
+          const assignedStages = Object.keys(
+            JSON.parse(plan?.assignedStages || "{}")
+          ).length;
+          seatAvailability[dateString] -= assignedStages;
+          currentDateInRange.add(1, "days");
+        }
+      });
+      const dates = Object.keys(seatAvailability);
+      return res.status(200).json({
+        status: 200,
+        message: "Planning and scheduling fetched successfully!",
+        seatAvailability,
+      });
+    } catch (error) {
+      console.error(
+        "Error in checkAvailabilityFromCurrentDate: ",
+        error.message
+      );
+      return res.status(500).json({
+        status: 500,
+        error: "Internal server error.",
+        details: error.message,
+      });
+    }
+  },
+  delete: async (req, res) => {
+    try {
+      const planId = req.params.id;
+      const planingAndScheduling =
+        await PlaningAndSchedulingModel.findByIdAndDelete(planId);
+      await ProcessLogsModel.deleteMany({ planId });
+      if (!planingAndScheduling) {
+        return res
+          .status(404)
+          .json({ message: "Planing & Scheduling not found" });
+      }
+      res.status(200).json({
+        message: "Planing & Scheduling deleted successfully",
+        planingAndScheduling,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  deletePlaningMultiple: async (req, res) => {
+    try {
+      const ids = req.body.deleteIds;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({
+          message: "Invalid request, ids must be an array of strings",
+        });
+      }
+      const objectIds = ids.map((id) => {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          return new mongoose.Types.ObjectId(id);
+        } else {
+          throw new Error(`Invalid ObjectId: ${id}`);
+        }
+      });
+      const result = await PlaningAndSchedulingModel.deleteMany({
+        _id: { $in: objectIds },
+      });
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ message: "No items found to delete" });
+      }
+      return res.status(200).json({
+        message: `${result.deletedCount} item(s) deleted successfully`,
+      });
+    } catch (error) {
+      if (error.message.startsWith("Invalid ObjectId")) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Error deleting multiple items:", error);
+      return res
+        .status(500)
+        .json({ message: "Server error", error: error.message });
+    }
+  },
+  getPlaningAnDschedulingByID: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find({_id
+        :id});
+      if (!PlaningAndScheduling) {
+        return res.status(404).json({ error: "Product not found" });
+      } 
+      return res.status(200).json(PlaningAndScheduling[0]);
+    } catch (error) {
+      console.error("Error Fetching Planing And Scheduling :", error);
+      return res.status(500).json({ message: "Server error", error: error.message });
+    }
+  },
+  getPlaningAnDschedulingByProcessId: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find({selectedProcess
+        :id});
+      if (!PlaningAndScheduling) {
+        return res.status(404).json({ error: "Product not found" });
+      }
+      return res.status(200).json(PlaningAndScheduling[0]);
+    } catch (error) {
+      console.error("Error Fetching Planing And Scheduling :", error);
+      return res.status(500).json({ message: "Server error", error: error.message });
+    }
+  },
+  fetchAllPlaningModel: async (req, res) => {
+    try {
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find();
+      return res.status(200).json({
+        status: 200,
+        message: "Planing Model Fetched Successfully!!",
+        PlaningAndScheduling,
+      });
+    } catch (error) {
+      return res.status(500).json({ staus: 500, error: error.message });
+    }
+  },
+  planingAndSchedulingLogs: async (req, res) => {
+    try {
+      const data = req?.body;
+      const processLogs = new ProcessLogsModel(data);
+      await processLogs.save();
+      return res.status(200).json({
+        status: 200,
+        message: "Process Logs Created Successfully!!",
+        processLogs,
+      });
+    } catch (error) {
+      return res.status(500).json({ staus: 500, error: error.message });
+    }
+  },
+  getProcessLogsByProcessId: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const processLogs = await ProcessLogsModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(id),
+          }
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "processId",
+            foreignField: "_id",
+            as: "planingData",
+          },
+        },
+        { $unwind: "$planingData" },
+        {
+          $project: {
+            _id: 1,
+            action: 1,
+            processId: 1,
+            userId: 1,
+            description: 1,
+            timestamp: 1,
+            processtName: "$planingData.name",
+          },
+        },
+      ]);
+      if (!processLogs) {
+        return res.status(404).json({ error: "Product not found" });
+      }
+      return res.status(200).json(processLogs);
+    } catch (error) {
+      return res.status(500).json({ staus: 500, error: error.message });
+    }
+  },
+};
