@@ -11,15 +11,29 @@ module.exports = {
     try {
       const data = req.body;
       const productType = data.selectedProduct;
-      const devices = JSON.parse(data.devices);
       const currentStage = req.body.currentStage;
-
+      const processID = req.body.processId;
+      const prefix = req.body.prefix;
+      const noOfSerialRequired = req.body.noOfSerialRequired;
+      const suffix = req.body.suffix;
+      const enableZero = req.body.enableZero;
+      const lastSerialNo = req.body.lastSerialNo;
+      const noOfZeroRequired = req.body.noOfZeroRequired;
+      const serials = generateSerials(
+        lastSerialNo,
+        prefix,
+        parseInt(noOfSerialRequired),
+        suffix,
+        enableZero,
+        noOfZeroRequired
+      );
       const savedDevices = [];
 
-      for (const value of devices) {
+      for (const value of serials) {
         const device = new deviceModel({
           productType,
-          serialNo: value[0],
+          processID,
+          serialNo: value,
           currentStage,
         });
         const savedDevice = await device.save();
@@ -30,6 +44,25 @@ module.exports = {
         status: 200,
         message: "Devices added successfully",
         data: savedDevices,
+      });
+    } catch (error) {
+      console.log("error ==>", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getLastEntryBasedOnPrefixAndSuffix: async (req, res) => {
+    try {
+      const data = req.query;
+      const lastEntry = await deviceModel
+        .findOne({
+          serialNo: { $regex: `^${data.prefix}.*${data.suffix}$` },
+        })
+        .sort({ createdAt: -1 })
+        .exec();
+      return res.status(200).json({
+        status: 200,
+        message: "Last Entry Fetched Successfully",
+        data: lastEntry,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -169,70 +202,266 @@ module.exports = {
     }
   },
   createDeviceTestEntry: async (req, res) => {
-    try {
-      const data = req.body;
-      let nextIndex;
-      const planing = await planingAndScheduling.findById(data.planId);
-      const products = await productModel.findById(data.productId);
-      let assignedStages = JSON.parse(planing.assignedStages);
-      let assignedOperator = JSON.parse(planing.assignedOperators);
-      let matchingIndices = Object.keys(assignedOperator).filter((key) =>
-        assignedOperator[key].some(
-          (operator) => operator._id === data.operatorId
-        )
-      );
+  try {
+    const data = req.body;
 
-      if (matchingIndices.length > 0) {
-        let currentIndex = matchingIndices[0];
-        let currentStage = assignedStages[currentIndex][0]?.name;
-        let productStages = products.stages.map((stage) => stage.stageName);
-        let lastStage = productStages[productStages.length - 1];
-        nextIndex = Object.keys(assignedStages).find(
-          (index) => index > currentIndex
-        );
-        if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
-          assignedStages[currentIndex][0].totalUPHA -= 1;
-          if (data.status === "Pass") {
-            assignedStages[currentIndex][0].passedDevice += 1;
+    // Retrieve the planing and product data
+    let planing;
+    try {
+      planing = await planingAndScheduling.findById(data.planId);
+      if (!planing) {
+        return res.status(404).json({
+          status: 404,
+          message: "Planing not found",
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({
+        status: 500,
+        message: `Error fetching planing data: ${err.message}`,
+      });
+    }
+
+    let products;
+    try {
+      products = await productModel.findById(data.productId);
+      if (!products) {
+        return res.status(404).json({
+          status: 404,
+          message: "Product not found",
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({
+        status: 500,
+        message: `Error fetching product data: ${err.message}`,
+      });
+    }
+
+    // Parse assignedStages and assignedOperators safely
+    let assignedStages = {};
+    let assignedOperator = {};
+
+    try {
+      assignedStages = JSON.parse(planing.assignedStages) || {};
+      assignedOperator = JSON.parse(planing.assignedOperators) || {};
+    } catch (err) {
+      return res.status(500).json({
+        status: 500,
+        message: 'Invalid JSON format in planing data.',
+      });
+    }
+
+    // Ensure assignedCustomStagesOp is an array before using .push
+    if (!Array.isArray(planing.assignedCustomStagesOp)) {
+      assignedCustomStagesOp = JSON.parse(planing.assignedCustomStagesOp); // Initialize as an empty array if it's not already an array
+    }
+
+    // Find the matching operator index
+    let matchingIndices = Object.keys(assignedOperator).filter((key) =>
+      assignedOperator[key].some(
+        (operator) => operator._id === data.operatorId
+      )
+    );
+
+    if (matchingIndices.length > 0) {
+      let currentIndex = matchingIndices[0];
+      let currentStage = assignedStages[currentIndex][0]?.name;
+      let productStages = (products.stages || []).map((stage) => stage.stageName);
+      let commonStages = (products.commonStages || []).map((stage) => stage.stageName);
+      const mergedStages = [...productStages, ...commonStages];
+
+      let lastProductStage = productStages[productStages.length - 1];
+      let lastStage = mergedStages[mergedStages.length - 1];
+
+      // Calculate the nextIndex
+      let nextIndex = Object.keys(assignedStages)
+        .map(Number)
+        .find((index) => index > Number(currentIndex));
+
+      // Update stages
+      if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
+        assignedStages[currentIndex][0].totalUPHA -= 1;
+
+        if (data.status === "Pass") {
+          assignedStages[currentIndex][0].passedDevice += 1;
+          if (currentStage === lastProductStage) {
+            if (commonStages.length > 0) {
+              assignedStages[currentIndex][0].totalUPHA -= 1;
+              const customStageData = {
+                name: commonStages[0],
+                totalUPHA: 1,
+                passedDevice: 0,
+                ngDevice: 0,
+              };
+              console.log("customStageData ===>", customStageData);
+              assignedCustomStagesOp.push(customStageData);
+            }
           } else {
-            assignedStages[currentIndex][0].ngDevice += 1;
+            if (
+              nextIndex &&
+              assignedStages[nextIndex] &&
+              assignedStages[nextIndex][0]
+            ) {
+              assignedStages[nextIndex][0].totalUPHA += 1;
+            }
           }
-        }
-        if (currentStage === lastStage) {
-          assignedStages[currentIndex][0].totalUPHA -= 1;
-          planing.consumedKit += 1;
         } else {
-          if (
-            nextIndex &&
-            assignedStages[nextIndex] &&
-            assignedStages[nextIndex][0] &&
-            data.status === "Pass"
-          ) {
-            assignedStages[nextIndex][0].totalUPHA += 1;
-          }
+          assignedStages[currentIndex][0].ngDevice += 1;
         }
       }
+      if (currentStage === "FG to Store") {
+        planing.consumedKit += 1;
+      }
+
+      if (currentStage === lastStage) {
+        assignedStages[currentIndex][0].totalUPHA -= 1;
+      }
+      console.log("planing.assignedCustomStagesOp -->", assignedCustomStagesOp);
+      console.log("assignedStages ==>", assignedStages);
       planing.assignedStages = JSON.stringify(assignedStages);
-      const updatedstages = await planingAndScheduling.findByIdAndUpdate(
-        data.planId,
-        { $set: planing },
-        { new: true, runValidators: true }
-      );
-      if (updatedstages) {
-        const deviceTestRecord = new deviceTestRecords(data);
-        const savedDeviceTestRecord = await deviceTestRecord.save();
-        return res.status(200).json({
-          status: 200,
-          message: "Devices Test Entry added successfully",
-          data: savedDeviceTestRecord,
-        });
-      } else {
+      planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
+      let updatedstages;
+      try {
+        updatedstages = await planingAndScheduling.findByIdAndUpdate(
+          data.planId,
+          { $set: { assignedStages: planing.assignedStages, consumedKit: planing.consumedKit, assignedCustomStagesOp: planing.assignedCustomStagesOp } },
+          { new: true, runValidators: true }
+        );
+
+        if (!updatedstages) {
+          return res.status(500).json({
+            status: 500,
+            message: "Error updating planing data.",
+          });
+        }
+      } catch (err) {
         return res.status(500).json({
           status: 500,
-          message: "Erorr Updating Planning",
-          data: updatedstages,
+          message: `Error updating planing data: ${err.message}`,
         });
       }
+
+      // Record the device test entry
+      const deviceTestRecord = new deviceTestRecords(data);
+      let savedDeviceTestRecord;
+      try {
+        savedDeviceTestRecord = await deviceTestRecord.save();
+      } catch (err) {
+        return res.status(500).json({
+          status: 500,
+          message: `Error saving device test record: ${err.message}`,
+        });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device Test Entry added successfully",
+        data: savedDeviceTestRecord,
+      });
+    } else {
+      return res.status(404).json({
+        status: 404,
+        message: "Operator not found in assigned operators.",
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({
+      status: 500,
+      error: error.message,
+    });
+  }
+},
+
+  // createDeviceTestEntry: async (req, res) => {
+  //   try {
+  //     const data = req.body;
+  //     let nextIndex;
+  //     const planing = await planingAndScheduling.findById(data.planId);
+  //     const products = await productModel.findById(data.productId);
+  //     let assignedStages = JSON.parse(planing.assignedStages);
+  //     let assignedOperator = JSON.parse(planing.assignedOperators);
+  //     let matchingIndices = Object.keys(assignedOperator).filter((key) =>
+  //       assignedOperator[key].some(
+  //         (operator) => operator._id === data.operatorId
+  //       )
+  //     );
+
+  //     if (matchingIndices.length > 0) {
+  //       let currentIndex = matchingIndices[0];
+  //       let currentStage = assignedStages[currentIndex][0]?.name;
+  //       let productStages = products.stages.map((stage) => stage.stageName);
+  //       let commonStages = products.commonStages.map((stage) => stage.stageName);
+  //       console.log("productStages ==>", productStages);
+  //       console.log("commonStages ===>", commonStages);
+  //       const mergedStages = [...productStages, ...commonStages];
+  //       let lastStage = mergedStages[mergedStages.length - 1];
+  //       nextIndex = Object.keys(assignedStages).find(
+  //         (index) => index > currentIndex
+  //       );
+  //       if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
+  //         assignedStages[currentIndex][0].totalUPHA -= 1;
+  //         if (data.status === "Pass") {
+  //           assignedStages[currentIndex][0].passedDevice += 1;
+  //         } else {
+  //           assignedStages[currentIndex][0].ngDevice += 1;
+  //         }
+  //       }
+  //       if(currentStage === "FG to Store") {
+  //           planing.consumedKit += 1;
+  //       }
+  //       if (currentStage === lastStage) {
+  //         assignedStages[currentIndex][0].totalUPHA -= 1;
+
+  //       } else {
+  //         if (
+  //           nextIndex &&
+  //           assignedStages[nextIndex] &&
+  //           assignedStages[nextIndex][0] &&
+  //           data.status === "Pass"
+  //         ) {
+  //           assignedStages[nextIndex][0].totalUPHA += 1;
+  //         }
+  //       }
+  //     }
+  //     console.log("assignedStages ===>", assignedStages);
+  //     return false;
+  //     planing.assignedStages = JSON.stringify(assignedStages);
+  //     const updatedstages = await planingAndScheduling.findByIdAndUpdate(
+  //       data.planId,
+  //       { $set: planing },
+  //       { new: true, runValidators: true }
+  //     );
+  //     if (updatedstages) {
+  //       const deviceTestRecord = new deviceTestRecords(data);
+  //       const savedDeviceTestRecord = await deviceTestRecord.save();
+  //       return res.status(200).json({
+  //         status: 200,
+  //         message: "Devices Test Entry added successfully",
+  //         data: savedDeviceTestRecord,
+  //       });
+  //     } else {
+  //       return res.status(500).json({
+  //         status: 500,
+  //         message: "Erorr Updating Planning",
+  //         data: updatedstages,
+  //       });
+  //     }
+  //   } catch (error) {
+  //     return res.status(500).json({
+  //       status: 500,
+  //       error: error.message,
+  //     });
+  //   }
+  // },
+  getOverallDeviceTestEntry: async (req, res) => {
+    try {
+      const DeviceTestEntry = await deviceTestRecords.find();
+      return res.status(200).json({
+        status: 200,
+        status_msg: "Device Test Entry Fetched Sucessfully!!",
+        DeviceTestEntry,
+      });
     } catch (error) {
       return res.status(500).json({
         status: 500,
@@ -345,3 +574,29 @@ module.exports = {
     }
   },
 };
+function generateSerials(
+  lastSerialNo,
+  prefix,
+  noOfSerialRequired,
+  suffix,
+  enableZero,
+  noOfZeroRequired,
+  stepBy = 1,
+  repeatTimes = 1
+) {
+  let start = 1;
+  if (lastSerialNo) {
+    start += parseInt(lastSerialNo.split("-")[1]);
+    noOfSerialRequired += start;
+  }
+  const serials = [];
+  for (let i = start; i <= noOfSerialRequired; i += stepBy) {
+    const paddedNumber = enableZero
+      ? String(i).padStart(noOfZeroRequired, "0")
+      : i;
+    for (let r = 0; r < repeatTimes; r++) {
+      serials.push(`${prefix}${paddedNumber}${suffix}`);
+    }
+  }
+  return serials;
+}

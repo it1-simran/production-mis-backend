@@ -23,6 +23,7 @@ const inventory = require('../models/inventoryManagement');
 const productionManagerController = require('../controller/productionManagerController');
 const skillManagementController = require('../controller/skillController');
 const kitsController = require('../controller/kitsController');
+const OrderConfirmationController = require('../controller/orderConfirmationController');
 connectDB();
 router.get('/items', authController.getItems);
 router.get('/product/view',authController.authenticateToken,productController.view);
@@ -76,6 +77,7 @@ router.get('/shift/get/:id',authController.authenticateToken,shiftController.get
 router.put('/shift/update/:id',authController.authenticateToken,shiftController.updateshift);
 router.post('/process/create',authController.authenticateToken,processController.create);
 router.get('/process/view', authController.authenticateToken,processController.view);
+router.get('/getProcessesByProductId/:id',authController.authenticateToken,processController.getProcessesByProductId);
 router.delete('/process/delete/:id', authController.authenticateToken,processController.delete);
 router.post('/process/delete/multiple',authController.authenticateToken,processController.deleteProcessMultiple);
 router.get('/process/get/:id',authController.authenticateToken,processController.getProcessByID);
@@ -99,8 +101,10 @@ router.get('/process/logs/getLogsByProcessID/:id',authController.authenticateTok
 router.post('/assignPlanToOperator/create',authController.authenticateToken,assignedOperatorsToPlan.create);
 router.get(`/assignPlanToOperator/view/:id`,authController.authenticateToken,assignedOperatorsToPlan.getTaskByUserID);
 router.post('/devices/create', authController.authenticateToken,deviceController.create);
+router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken,deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id',authController.authenticateToken,deviceController.getDeviceByProductId);
 router.post('/deviceRecord/create',authController.authenticateToken,deviceController.createDeviceTestEntry);
+router.get('/getOverallDeviceTestEntry',authController.authenticateToken,deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id',authController.authenticateToken,deviceController.getDeviceTestEntryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId',authController.authenticateToken,deviceController.getDeviceTestHistoryByDeviceId);
 router.patch('/updateStageByDeviceId/:deviceId',authController.authenticateToken,deviceController.updateStageByDeviceId);
@@ -123,7 +127,6 @@ router.put('/inventory/process/updateIssueKit', authController.authenticateToken
 router.put('/inventory/process/updateIssueCarton', authController.authenticateToken, inventoryController.updateCarton);
 router.get('/production-manger/process/get', authController.authenticateToken,productionManagerController.getProcesses);
 router.get('/production-manger/getRemainingKit', authController.authenticateToken,productionManagerController.getRemainingKitFromCompletedProcess);
-
 router.put('/production-manager/process/updateProductionStatus', authController.authenticateToken,productionManagerController.updateProductionStatus);
 router.get('/production-manager/processStatics/get', authController.authenticateToken,productionManagerController.processStatics);
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
@@ -138,4 +141,12 @@ router.get('/operators/getVacantOperator', authController.authenticateToken, pro
 router.put('/operator/updateStatus/:id', authController.authenticateToken,processController.updateStatusAssignedOperator);
 router.post('/planing/createAssignedJigs', authController.authenticateToken,assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken,jigController.updateJigStatus);
+router.put("/process/updateIssueKitsToLine",authController.authenticateToken,processController.updateIssuedKitsToLine);
+router.put("/process/updateStatusRecivedKit/:id",authController.authenticateToken,processController.updateStatusRecievedKit);
+router.get("/process/getDeviceTestRecordsByPlanId/:id", authController.authenticateToken,processController.getDeviceTestRecordsByPlanId);
+router.get("/process/orderConfirmation/get",authController.authenticateToken,OrderConfirmationController.view);
+router.post('/process/orderConfirmation/create',authController.authenticateToken,OrderConfirmationController.create);
+router.put('/process/addDownTime/:id',authController.authenticateToken,planningAndSchedulingController.updateDownTime);
+router.put('/process/updateProcessStatus/:id',authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
+router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
 module.exports = router;

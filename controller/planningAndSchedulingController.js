@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const moment = require("moment");
+const momentTz = require("moment-timezone");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
 const ProcessLogsModel = require("../models/ProcessLogs");
 const RoomPlanModel = require("../models/roomPlan");
@@ -153,10 +154,8 @@ module.exports = {
   },
   checkAvailability: async (req, res) => {
     try {
-      const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } =
-        req.body;
+      const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } = req.body;
       let changedData = JSON.parse(shiftDataChange);
-      console.log("shiftId ==>", shiftId);
       if (!roomId || !shiftId || !startDate || !expectedEndDate) {
         return res.status(400).json({
           error:
@@ -191,73 +190,6 @@ module.exports = {
       let shiftStartTime, shiftEndTime;
       shiftStartTime = moment(shift.startTime, "HH:mm");
       shiftEndTime = moment(shift.endTime, "HH:mm");
-      // const query = {
-      //   selectedRoom: new mongoose.Types.ObjectId(roomId),
-      //   $or: [
-      //     {
-      //       startDate: {
-      //         $gte: parsedStartDate.toISOString(),
-      //         $lte: parsedEndDate.toISOString(),
-      //       },
-      //     },
-      //     {
-      //       estimatedEndDate: {
-      //         $gte: parsedStartDate.toISOString(),
-      //         $lte: parsedEndDate.toISOString(),
-      //       },
-      //     },
-      //     {
-      //       $and: [
-      //         { startDate: { $lte: parsedStartDate.toISOString() } },
-      //         { estimatedEndDate: { $gte: parsedEndDate.toISOString() } },
-      //       ],
-      //     },
-      //   ],
-      //   isDrafted: 0,
-      // };
-      // const plans = await PlaningAndSchedulingModel.find(query);
-      // const query = [
-      //   {
-      //     $match: {
-      //       selectedRoom: new mongoose.Types.ObjectId(roomId),
-      //       isDrafted: 0,
-      //       $or: [
-      //         {
-      //           startDate: {
-      //             $gte: parsedStartDate.toISOString(),
-      //             $lte: parsedEndDate.toISOString(),
-      //           },
-      //         },
-      //         {
-      //           estimatedEndDate: {
-      //             $gte: parsedStartDate.toISOString(),
-      //             $lte: parsedEndDate.toISOString(),
-      //           },
-      //         },
-      //         {
-      //           $and: [
-      //             { startDate: { $lte: parsedStartDate.toISOString() } },
-      //             { estimatedEndDate: { $gte: parsedEndDate.toISOString() } },
-      //           ],
-      //         },
-      //       ],
-      //     },
-      //   },
-        // {
-        //   $lookup: {
-        //     from: "processes",
-        //     localField: "selectedProcess",
-        //     foreignField: "_id",
-        //     as: "processDetails",
-        //   },
-        // },
-        // {
-        //   $unwind: "$processDetails",
-        // },
-      // ];
-      
-      // const plans = await PlaningAndSchedulingModel.aggregate(query);
-
       const query = [
         {
           $match: {
@@ -284,16 +216,17 @@ module.exports = {
           },
         },
         {
-          $match: { "processDetails.status": { $nin: ["completed", "waiting_schedule"] } }
-        },
-        {
           $unwind: {
             path: "$processDetails",
             preserveNullAndEmptyArrays: true,
           },
         },
+        {
+          $match: { "processDetails.status": { $nin: ["completed", "waiting_schedule"] } }
+        },
       ];
       const plans = await PlaningAndSchedulingModel.aggregate(query);
+      console.log("plans ===> ", plans);
       const filteredPlans = plans.filter((plan) => {
         const { startTime, endTime } = plan.ProcessShiftMappings || {};
         if (!startTime || !endTime) return false;
@@ -304,6 +237,7 @@ module.exports = {
           shiftEndTime.isSameOrAfter(planStartTime.startOf("minute"))
         );
       });
+      console.log("filteredPlans ==>", filteredPlans);
       if (filteredPlans.length === 0) {
         return res.status(404).json({
           status: 404,
@@ -444,11 +378,82 @@ module.exports = {
   getPlaningAnDschedulingByID: async (req, res) => {
     try {
       const id = req.params.id;
-      const PlaningAndScheduling = await PlaningAndSchedulingModel.find({_id
-        :id});
+      // const PlaningAndScheduling = await PlaningAndSchedulingModel.find({_id
+      //   :id});
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.aggregate([
+        {
+          $match: { _id: new mongoose.Types.ObjectId(id) },
+        },
+        {
+          $lookup: {
+            from: "assignkitstolines",
+            localField: "_id",
+            foreignField: "planId",
+            as: "assignKitsToLinesDetails",
+          },
+        },
+        { $unwind: {path:"$assignKitsToLinesDetails", preserveNullAndEmptyArrays: true}},
+        {
+          $lookup: {
+           from: "shifts",
+           localField: "selectedShift",
+           foreignField: "_id",
+           as: "shiftDetails"
+          }
+        },
+        { $unwind : {path: "$shiftDetails",
+          preserveNullAndEmptyArrays: true}
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "selectedProcess",
+            foreignField: "_id",
+            as: "processDetails"
+          }
+        },
+        { $unwind : {path: "$processDetails",
+          preserveNullAndEmptyArrays: true}
+        },
+        {
+          $project: {
+            _id: 1,
+            processName:1,
+            selectedProcess: 1,
+            selectedRoom: 1,
+            selectedShift: 1,
+            issuedKits: 1,
+            issuedCarton: 1,
+            ProcessShiftMappings: 1,
+            repeatCount: 1,
+            startDate: 1,
+            assignedJigs: 1,
+            assignedOperators:1,
+            assignedStages:1,
+            isDrafted:1,
+            totalUPHA:1,
+            totalTimeEstimation:1,
+            status:1,
+            estimatedEndDate:1,
+            consumedKit:1,
+            downTime:1,
+            assignedIssuedKits:"$assignKitsToLinesDetails.issuedKits",
+            assignedSeatDetails:"$assignKitsToLinesDetails.seatDetails",
+            assignedStatus:"$assignKitsToLinesDetails.status",
+            assignedIssuedKitsStatus:"$assignKitsToLinesDetails.issuedKitsStatus",
+            assignedCustomStages: 1,
+            assignedCustomStagesOp: 1,
+            startTime:"$shiftDetails.startTime",
+            processStatus: "$processDetails.status",
+            processQuantity: "$processDetails.quantity",
+            endTime:"$shiftDetails.endTime",
+            totalBreakTime:"$shiftDetails.totalBreakTime",
+          },
+        },
+      ]);
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
-      } 
+      }
       return res.status(200).json(PlaningAndScheduling[0]);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
@@ -533,4 +538,141 @@ module.exports = {
       return res.status(500).json({ staus: 500, error: error.message });
     }
   },
+  updateDownTime: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const selectedProcess = req.body.selectedProcess;
+      const downTime = req.body.downTime;
+      console.log("Received ID:", id);
+      console.log("Selected Process:", selectedProcess);
+      console.log("DownTime:", downTime);
+
+      const processData = {
+        status: 'down_time_hold'
+      };
+      const planingData = {
+        downTime: JSON.parse(downTime)
+      };
+      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(id, planingData, {
+        new: true,
+        runValidators: true,
+      });
+      const process = await ProcessModel.findByIdAndUpdate(selectedProcess, processData, {
+        new: true,
+        runValidators: true,
+      });
+      if (!process) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found with given ID.",
+        });
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Planning and Process updated successfully.",
+        process,
+      });
+    } catch (error) {
+      console.error("Error in updateDownTime:", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },  
+  updateProcessStatus: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const selectedProcess = req.body.selectedProcess;
+      const processData = {
+        status: req.body.status
+      };
+      const planingData = {
+        downTime: {}
+      };
+      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(id, planingData, {
+        new: true,
+        runValidators: true,
+      });
+      const process = await ProcessModel.findByIdAndUpdate(selectedProcess, processData, {
+        new: true,
+        runValidators: true,
+      });
+      if (!process) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found with given ID.",
+        });
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Planning and Process updated successfully.",
+        process,
+      });
+    } catch (error) {
+      console.error("Error in updateProcessStatus:", error);
+    }
+  },
+  getPlaningAndSchedulingDateWise: async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+  
+      let filterStartDate, filterEndDate;
+  
+      if (startDate && endDate) {
+        const parsedStart = moment.tz(startDate, "YYYY-MM-DD", "Asia/Kolkata");
+        const parsedEnd = moment.tz(endDate, "YYYY-MM-DD", "Asia/Kolkata");
+  
+        if (!parsedStart.isValid() || !parsedEnd.isValid()) {
+          return res.status(400).json({ status: 400, error: "Invalid date format. Use YYYY-MM-DD." });
+        }
+  
+        filterStartDate = parsedStart.startOf("day").toDate();
+        filterEndDate = parsedEnd.endOf("day").toDate();
+      } else {
+        const today = moment.tz("Asia/Kolkata");
+        filterStartDate = today.clone().startOf("isoWeek").toDate();
+        filterEndDate = today.clone().endOf("isoWeek").toDate();
+      }
+  
+      const response = await PlaningAndSchedulingModel.aggregate([
+        {
+          $match: {
+            startDate: {
+              $gte: filterStartDate,
+              $lte: filterEndDate,
+            },
+          },
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "selectedProcess",
+            foreignField: "_id",
+            as: "processDetails",
+          },
+        },
+        {
+          $unwind: "$processDetails",
+        },
+        {
+          $sort: { startDate: 1 },
+        },
+      ]);
+  
+      return res.status(200).json({
+        status: 200,
+        message: "Planning and Scheduling data fetched successfully",
+        plans: response,
+      });
+  
+    } catch (error) {
+      console.error("API Error:", error.message);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  checkTestRecordsDateWise: async (req, res) => {
+    try {
+    } catch (error) {
+      console.error(" Api Error :", error.message);
+      return res.status(500).json({ status: 500, error: error.message});
+    }
+  }
 };

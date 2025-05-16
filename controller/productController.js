@@ -9,7 +9,7 @@ module.exports = {
     try {
       const name = req.body.name;
       const stages = JSON.parse(req.body.Products);
-
+      const commonStages = JSON.parse(req.body.commonStages);
       if (!name || !stages || !stages.length) {
         return res.status(400).json({
           status: 400,
@@ -35,7 +35,7 @@ module.exports = {
         }
       }
 
-      const newProduct = new Product({ name, stages });
+      const newProduct = new Product({ name, stages,commonStages });
 
       const savedProduct = await newProduct.save();
       if(savedProduct) {
@@ -86,6 +86,41 @@ module.exports = {
     try {
       const id = req.params.id;
       const product = await Product.findById(id);
+      // const product = await Product.aggregate([
+      //   {
+      //     $match: { _id: ObjectId(id) },
+      //   },
+      //   {
+      //     $lookup: {
+      //       from: "assignkitstolines",
+      //       localField: "_id",
+      //       foreignField: "processId",
+      //       as: "processData",
+      //     },
+      //   },
+      //   { $unwind: "$processData"},
+      //   {
+      //     $project: {
+      //       _id: 1,
+      //       name:1,
+      //       selectedProduct: 1,
+      //       orderConfirmationNo: 1,
+      //       processID: 1,
+      //       quantity: 1,
+      //       issuedKits: 1,
+      //       issuedCartons: 1,
+      //       consumedKits: 1,
+      //       consumedCartons: 1,
+      //       descripition: 1,
+      //       fgToStore:1,
+      //       dispatchStatus:1,
+      //       deliverStatus:1,
+      //       kitStatus:1,
+      //       status:1,
+      //       processtName: "$planingData.name",
+      //     },
+      //   },
+      // ])
       if (!product) {
         return res.status(404).json({ error: "Product not found" });
       }
@@ -102,7 +137,8 @@ module.exports = {
     try {
       const id = req.params.id;
       const stages = JSON.parse(req.body.stages);
-      const updatedData = { name: req.body.name, stages };
+      const commonStages = JSON.parse(req.body.commonStages);
+      const updatedData = { name: req.body.name, stages, commonStages };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,
@@ -158,5 +194,5 @@ module.exports = {
         .status(500)
         .json({ message: "Server error", error: error.message });
     }
-  },
+  }
 };

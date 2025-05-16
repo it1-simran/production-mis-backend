@@ -3,7 +3,9 @@ const ProcessModel = require("../models/Process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
 const AsssignOperatorToPlanModel = require("../models/assignOperatorToPlan");
+const AsssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
+const DeviceTestRecordModel = require("../models/deviceTestModel");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -81,6 +83,9 @@ module.exports = {
             status: 1,
             createdAt: 1,
             updatedAt: 1,
+            fgToStore: 1,
+            dispatchStatus: 1,
+            deliverStatus:1,
             productName: "$productDetails.name",
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
@@ -95,19 +100,66 @@ module.exports = {
       return res.status(500).json({ staus: 500, error: error.message });
     }
   },
-  delete: async (req, res) => {
+  getProcessesByProductId : async (req, res) => {
     try {
-      const Process = await ProcessModel.findByIdAndDelete(req.params.id);
-      if (!Process) {
-        return res.status(404).json({ message: "Process not found" });
-      }
-      res
-        .status(200)
-        .json({ message: "Process Deleted Successfully!!", Process });
+      const Processes = await ProcessModel.find({selectedProduct: req.params.id});
+      return res.status(200).json({
+        status: 200,
+        status_msg: "Processes Fetched Sucessfully!!",
+          Processes,
+      });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      return res
+      .status(500)
+      .json({ message: "Server error", error: error.message });
     }
   },
+  delete: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const deletedProcess = await ProcessModel.findByIdAndDelete(id);
+  
+      if (!deletedProcess) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+      await Promise.all([
+        PlaningAndSchedulingModel.findOneAndDelete({ selectedProcess: id }),
+        AssignOperatorPlansModel.findOneAndDelete({ processId: id }),
+        AssignJigPlansModel.findOneAndDelete({ processId: id })
+      ]);
+  
+      return res.status(200).json({
+        message: "Process and related data deleted successfully!",
+        process: deletedProcess
+      });
+  
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        error: error.message || "Internal Server Error"
+      });
+    }
+  },
+  
+  // delete: async (req, res) => {
+  //   try {
+  //     const Process = await ProcessModel.findByIdAndDelete(req.params.id);
+  //     const planingAndScheduling = await PlaningAndSchedulingModel.findOneAndDelete({selectedProcess
+  //     :req.params.id});
+  //     const delAssignOperatorsplans = await AssignOperatorPlansModel.findOneAndDelete({processId
+  //     :req.params.id});
+  //     const assignJigPlans = await AssignJigPlansModel.findOneAndDelete({processId:req.params.id});
+      
+  //     if (!Process) {
+  //       return res.status(404).json({ message: "Process not found" });
+  //     }
+  //     res
+  //       .status(200)
+  //       .json({ message: "Process Deleted Successfully!!", Process });
+  //   } catch (error) {dsx
+  //     return res.status(500).json({ status: 500, error: error.message });
+  //   }
+  // },
   deleteProcessMultiple: async (req, res) => {
     try {
       const ids = req.body.deleteIds;
@@ -386,4 +438,102 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  updateIssuedKitsToLine: async (req, res) => {
+    try {
+      let data = req.body;
+      const condition = {
+        planId: data.planId,
+        processId: data.processId,
+      };
+      
+      const updateData = {
+        planId: data.planId,
+        processId: data.processId,
+        issuedKits: parseInt(data.issuedKits),
+        seatDetails: JSON.parse(data.seatDetails),
+        issuedKitsStatus: data.issuedKitsStatus,
+        status: 'ASSIGN_TO_OPERATOR',
+      };
+      let processData =  {
+        'status':req.body.processStatus
+      }
+      const options = {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+      };
+      
+      const updatedEntry = await AsssignKitsToLineModel.findOneAndUpdate(
+        condition,
+        updateData,
+        options
+      );      
+      // if(updatedEntry) {
+        const updatedPlan = await PlaningAndSchedulingModel.findByIdAndUpdate(
+          data.planId,
+          {assignedStages: data.assignedStage},
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+        const updatedProcess = await ProcessModel.findByIdAndUpdate(
+          data.processId,
+          processData,
+          { new: true, runValidators: true }
+        );
+        if(updatedProcess) {
+          return res.status(200).json({
+            status: 200,
+            message: "Issued Kits to Line Updated Successfully!!",
+            updatedProcess,
+          });
+        }
+      // }
+    } catch (error) {
+      return res.status(500).json({status: 500, error: error.message});
+    }
+  },
+  updateStatusRecievedKit: async(req, res) => {
+    try {
+      let id = req.params.id;
+      let data = { status: req.body.status};
+      let processData =  {
+        'status':req.body.processStatus
+      }
+      const updateStatus = await AsssignKitsToLineModel.findByIdAndUpdate(
+        id,
+        data,
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(
+        req.body.processId,
+        processData,
+        { new: true, runValidators: true }
+      );
+      return res.status(200).json({
+        status: 200,
+        message: "Update Status to Line SuccessFully !!",
+        updateStatus,
+      });
+    } catch (error) {
+      return res.status(500).json({status: 500, error: error.message});
+    }
+  },
+  getDeviceTestRecordsByPlanId: async (req, res) => {
+    try {
+      let planId = req.params.id;
+      const deviceTestRecords = await DeviceTestRecordModel.find({ planId: planId });
+      return res.status(200).json({
+        status: 200,
+        message: "Device Record Test Fetched SuccessFully !!",
+        deviceTestRecords,
+      });
+    } catch (error) {
+      return res.status(500).json({status:500, error: error.message});
+    }
+  }
 };

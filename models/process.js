@@ -24,7 +24,7 @@ const processSchema = new mongoose.Schema({
   },
   kitStatus: { 
     type: String,
-    enum:[
+    enum: [
       "issued",
       "partially_issued",
       "not_issued"
@@ -37,6 +37,8 @@ const processSchema = new mongoose.Schema({
       "waiting_schedule",
       "Waiting_Kits_allocation",
       "Waiting_Kits_approval",
+      "waiting_for_line_feeding",
+      "waiting_for_kits_confirmation",
       "active",
       "down_time_hold",
       "completed"
