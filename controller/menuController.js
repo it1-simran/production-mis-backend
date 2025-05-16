@@ -155,7 +155,7 @@ module.exports = {
         status_msg: "Menus Fetched Sucessfully!!",
         getMenu,
       });
-    } catch (e) {
+    } catch (error) {
       console.error("Error fetching Menu details:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }

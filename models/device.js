@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const deviceSchemas = new mongoose.Schema({
   productType: { type: mongoose.Schema.Types.ObjectId, ref: "products" },
+  processID: { type:mongoose.Schema.Types.ObjectId, ref: "processes"},
   serialNo: { type: String, required: true },
   imeiNo: { type: String, required: false, default: "" },
   modelName: { type: String, required: false, default: "" },

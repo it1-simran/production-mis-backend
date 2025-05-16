@@ -5,7 +5,8 @@ const productSchema = new mongoose.Schema({
   stages: [
     {
       stageName: { type: String, required: true },
-      requiredSkill:{type:String,required:true},
+      managedBy: {type:String,required:false},
+      requiredSkill: {type:String,required:true},
       upha: { type: String, required: true },
       sopFile: { type: String, default: "" },
       subSteps: [
@@ -75,6 +76,12 @@ const productSchema = new mongoose.Schema({
       ],
     },
   ],
+  commonStages:[{
+    stageName: { type: String, required: true },
+    managedBy: {type:String,required:false},
+    requiredSkill: {type:String,required:true},
+    upha: { type: String, required: true },
+  }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

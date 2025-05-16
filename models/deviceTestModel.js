@@ -5,6 +5,7 @@ const deviceTestSchema = new mongoose.Schema({
   planId: {type:mongoose.Schema.Types.ObjectId, ref:"planingandschedulings"},
   operatorId: {type:mongoose.Schema.Types.ObjectId, ref:"users"},
   serialNo: { type: String, required: false },
+  seatNumber:{type:String,required:false},
   stageName: { type: String, required: false },
   status: { type: String, required: false },
   timeConsumed: { type: String, required: false },
@@ -12,7 +13,6 @@ const deviceTestSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-// Creating the model from schema
 const deviceTest = mongoose.model("deviceTestRecords", deviceTestSchema);
 
 module.exports = deviceTest;

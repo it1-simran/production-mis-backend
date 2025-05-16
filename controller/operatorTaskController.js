@@ -75,6 +75,20 @@ module.exports = {
         },
         {
           $lookup: {
+            from: "assignkitstolines",
+            localField: "processId",
+            foreignField: "processId",
+            as: "assignKitsToLine",
+          },
+        },
+        {
+          $unwind: {
+            path: "$assignKitsToLine",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
             from: "roomplans",
             localField: "roomName",
             foreignField: "_id",
@@ -88,6 +102,7 @@ module.exports = {
           $project: {
             userId: 1,
             planId: "$planDetails._id",
+            processId: "$processDetails._id",
             seatDetails: 1,
             ProcessShiftMappings: 1,
             roomName: 1,
@@ -99,6 +114,12 @@ module.exports = {
             "planDetails.roomName": 1,
             "planDetails.seatDetails": 1,
             status: "$processDetails.status",
+            kitRecievedConfirmationId:"$assignKitsToLine._id",
+            kitRecievedSeatDetails:"$assignKitsToLine.seatDetails",
+            kitRecievedConfirmationStatus: "$assignKitsToLine.status",
+            issuedKitsStatus: "$assignKitsToLine.issuedKitsStatus",
+            assignedKitsToOperator:"$assignKitsToLine.issuedKits",
+            requiredKits:"$processDetails.issuedKits"
           },
         },
       ]);
