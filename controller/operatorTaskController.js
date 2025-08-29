@@ -16,6 +16,7 @@ module.exports = {
         userId: data.userId,
         roomName: data.roomName,
         seatDetails: seatsDetails,
+        stageType: data.stageType,
         ProcessShiftMappings: ProcessShiftMappings,
         status: data.status,
         startDate: moment(data.startDate, "YY/MM/DD HH:mm:ss").toDate(),
@@ -41,6 +42,17 @@ module.exports = {
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getOperatorTaskByUserID: async (req, res) => {
+    try {
+      const userId = req.params.id;
+      console.log("userId", userId);
+      const task  = await assignedOperatorsToPlanModel.findOne({'userId': userId});
+      console.log("task ==>", task);
+      return res.status(200).json({ status: 200, task });
+    } catch (error){
+      return res.status(500).json({status: 500, error: error.message});
     }
   },
   getTaskByUserID: async (req, res) => {

@@ -1,5 +1,5 @@
 const holidayModel = require("../models/holidayModel");
-
+const mongoose = require("mongoose");
 module.exports = {
   view: async (req, res) => {
     try {
@@ -15,26 +15,52 @@ module.exports = {
   },
   create: async (req, res) => {
     try {
-      const { holidayId, ...data } = req?.body;
+      const { holidayId, ...data } = req.body;
       const updatedHoliday = await holidayModel.findOneAndUpdate(
-        { _id: holidayId },
+        { _id: holidayId || new mongoose.Types.ObjectId() }, // Generate ID for creation if not present
         data,
         {
           new: true,
           upsert: true,
           runValidators: true,
+          setDefaultsOnInsert: true,
         }
       );
+      const message = holidayId
+        ? "Holiday updated successfully!"
+        : "Holiday created successfully!";
       return res.status(200).json({
         status: 200,
-        message: holidayId
-          ? "Holiday Updated Successfully!!"
-          : "Holiday Created Successfully!!",
+        message,
         holiday: updatedHoliday,
       });
     } catch (error) {
-      return res.status(500).json({ staus: 500, error: error.message });
+      return res.status(500).json({
+        status: 500,
+        error: error.message,
+      });
     }
+    // try {
+    //   const { holidayId, ...data } = req?.body;
+    //   const updatedHoliday = await holidayModel.findOneAndUpdate(
+    //     { _id: holidayId },
+    //     data,
+    //     {
+    //       new: true,
+    //       upsert: true,
+    //       runValidators: true,
+    //     }
+    //   );
+    //   return res.status(200).json({
+    //     status: 200,
+    //     message: holidayId
+    //       ? "Holiday Updated Successfully!!"
+    //       : "Holiday Created Successfully!!",
+    //     holiday: updatedHoliday,
+    //   });
+    // } catch (error) {
+    //   return res.status(500).json({ staus: 500, error: error.message });
+    // }
   },
   delete: async (req, res) => {
     try {
@@ -77,3 +103,4 @@ module.exports = {
     }
   },
 };
+

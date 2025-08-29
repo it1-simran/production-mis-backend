@@ -64,7 +64,6 @@ class UserService {
   }
   async getPassword(data) {
     try {
-
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(data, saltRounds);
 

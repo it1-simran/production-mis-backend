@@ -63,7 +63,7 @@ module.exports = {
         status_msg: "Products Fetched Sucessfully!!",
         Products,
       });
-    } catch (e) {
+    } catch (error) {
       console.error("Error fetching Products details:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }

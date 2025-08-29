@@ -56,6 +56,7 @@ module.exports = {
             consumedCartons: 1,
             descripition: 1,
             fgToStore: 1,
+            stages: 1,
             dispatchStatus: 1,
             deliverStatus: 1,
             kitStatus: 1,
