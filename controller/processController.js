@@ -10,7 +10,17 @@ module.exports = {
   create: async (req, res) => {
     try {
       const data = req?.body;
-      const newProcess = new ProcessModel(data);
+      const bindData = {
+        name: data?.name,
+        selectedProduct: data?.selectedProduct,
+        orderConfirmationNo: data?.orderConfirmationNo,
+        processID: data?.processID,
+        quantity: data?.quantity,
+        descripition: data?.descripition,
+        stages: JSON.parse(data?.stages),
+        commonStages: JSON.parse(data?.commonStages),
+      };
+      const newProcess = new ProcessModel(bindData);
       await newProcess.save();
       return res.status(200).json({
         status: 200,
@@ -47,27 +57,6 @@ module.exports = {
             preserveNullAndEmptyArrays: true,
           },
         },
-        // {
-        //   $lookup: {
-        //     from: "products",
-        //     localField: "selectedProduct",
-        //     foreignField: "_id",
-        //     as: "productDetails",
-        //   },
-        // },
-        // {$unwind:'$productDetails'},
-        // {
-        //   $lookup: {
-        //     from: "planingandschedulings",
-        //     localField:"_id",
-        //     foreignField: "selectedProcess",
-        //     as: "planingandScheduling"
-        //   },
-        // },
-        // {
-        //   $unwind:'$planingandScheduling',
-        //   preserveNullAndEmptyArrays: true
-        // },
         {
           $project: {
             _id: 1,
@@ -85,7 +74,9 @@ module.exports = {
             updatedAt: 1,
             fgToStore: 1,
             dispatchStatus: 1,
-            deliverStatus:1,
+            deliverStatus: 1,
+            stages: 1,
+            commonStages: 1,
             productName: "$productDetails.name",
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
@@ -100,47 +91,48 @@ module.exports = {
       return res.status(500).json({ staus: 500, error: error.message });
     }
   },
-  getProcessesByProductId : async (req, res) => {
+  getProcessesByProductId: async (req, res) => {
     try {
-      const Processes = await ProcessModel.find({selectedProduct: req.params.id});
+      const Processes = await ProcessModel.find({
+        selectedProduct: req.params.id,
+      });
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",
-          Processes,
+        Processes,
       });
     } catch (error) {
       return res
-      .status(500)
-      .json({ message: "Server error", error: error.message });
+        .status(500)
+        .json({ message: "Server error", error: error.message });
     }
   },
   delete: async (req, res) => {
     try {
       const { id } = req.params;
       const deletedProcess = await ProcessModel.findByIdAndDelete(id);
-  
+
       if (!deletedProcess) {
         return res.status(404).json({ message: "Process not found" });
       }
       await Promise.all([
         PlaningAndSchedulingModel.findOneAndDelete({ selectedProcess: id }),
         AssignOperatorPlansModel.findOneAndDelete({ processId: id }),
-        AssignJigPlansModel.findOneAndDelete({ processId: id })
+        AssignJigPlansModel.findOneAndDelete({ processId: id }),
       ]);
-  
+
       return res.status(200).json({
         message: "Process and related data deleted successfully!",
-        process: deletedProcess
+        process: deletedProcess,
       });
-  
     } catch (error) {
       return res.status(500).json({
         status: 500,
-        error: error.message || "Internal Server Error"
+        error: error.message || "Internal Server Error",
       });
     }
   },
-  
+
   // delete: async (req, res) => {
   //   try {
   //     const Process = await ProcessModel.findByIdAndDelete(req.params.id);
@@ -149,7 +141,7 @@ module.exports = {
   //     const delAssignOperatorsplans = await AssignOperatorPlansModel.findOneAndDelete({processId
   //     :req.params.id});
   //     const assignJigPlans = await AssignJigPlansModel.findOneAndDelete({processId:req.params.id});
-      
+
   //     if (!Process) {
   //       return res.status(404).json({ message: "Process not found" });
   //     }
@@ -201,7 +193,17 @@ module.exports = {
   update: async (req, res) => {
     try {
       const id = req.params.id;
-      const updatedData = req.body;
+      const data = req?.body;
+      const updatedData = {
+        name: data?.name,
+        selectedProduct: data?.selectedProduct,
+        orderConfirmationNo: data?.orderConfirmationNo,
+        processID: data?.processID,
+        quantity: data?.quantity,
+        descripition: data?.descripition,
+        stages: JSON.parse(data?.stages),
+        commonStages: JSON.parse(data?.commonStages),
+      };
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
         id,
         updatedData,
@@ -377,30 +379,43 @@ module.exports = {
   },
   getVacantOperator: async (req, res) => {
     try {
-      let users = await OperatorModel.aggregate([
-        {
-          $match: {
-            userType: "Operator",
-          },
-        },
-        {
-          $lookup: {
-            from: "assignpoperatorsplans",
-            localField: "_id",
-            foreignField: "userId",
-            as: "assignOperatorDetails",
-          },
-        },
-        {
-          $match: {
-            $or: [
-              { assignOperatorDetails: { $size: 0 } },
-              { "assignOperatorDetails.status": "Free" },
-            ],
-          },
-        },
-      ]);
+      const users = await OperatorModel.find();
 
+      // const users = await OperatorModel.aggregate([
+      //   {
+      //     $match: { userType: "Operator" },
+      //   },
+      //   {
+      //     $lookup: {
+      //       from: "assignpoperatorsplans",
+      //       localField: "_id",
+      //       foreignField: "userId",
+      //       as: "assignOperatorDetails",
+      //     },
+      //   },
+      //   {
+      //     $addFields: {
+      //       hasFreeStatus: {
+      //         $anyElementTrue: {
+      //           $map: {
+      //             input: "$assignOperatorDetails",
+      //             as: "detail",
+      //             in: { $eq: ["$$detail.status", "Free"] },
+      //           },
+      //         },
+      //       },
+      //     },
+      //   },
+      //   {
+      //     $match: {
+      //       $or: [
+      //         { assignOperatorDetails: { $eq: [] } },
+      //         { hasFreeStatus: true },
+      //       ],
+      //     },
+      //   },
+      // ]);
+      console.log("users ==>", users);
       return res.status(200).json({
         status: 200,
         message: "VacantOperator found!!",
@@ -417,11 +432,12 @@ module.exports = {
       let updateAssignedOperator;
       let operatorData = await AsssignOperatorToPlanModel.findOne({ userId });
       if (operatorData && Object.keys(operatorData).length > 0) {
-        updateAssignedOperator = await AsssignOperatorToPlanModel.findByIdAndUpdate(
-          operatorData._id,
-          { status },
-          { new: true, runValidators: true }
-        );
+        updateAssignedOperator =
+          await AsssignOperatorToPlanModel.findByIdAndUpdate(
+            operatorData._id,
+            { status },
+            { new: true, runValidators: true }
+          );
       } else {
         return res.status(500).json({
           status: 500,
@@ -445,62 +461,62 @@ module.exports = {
         planId: data.planId,
         processId: data.processId,
       };
-      
+
       const updateData = {
         planId: data.planId,
         processId: data.processId,
         issuedKits: parseInt(data.issuedKits),
         seatDetails: JSON.parse(data.seatDetails),
         issuedKitsStatus: data.issuedKitsStatus,
-        status: 'ASSIGN_TO_OPERATOR',
+        status: "ASSIGN_TO_OPERATOR",
       };
-      let processData =  {
-        'status':req.body.processStatus
-      }
+      let processData = {
+        status: req.body.processStatus,
+      };
       const options = {
         new: true,
         upsert: true,
         setDefaultsOnInsert: true,
       };
-      
+
       const updatedEntry = await AsssignKitsToLineModel.findOneAndUpdate(
         condition,
         updateData,
         options
-      );      
+      );
       // if(updatedEntry) {
-        const updatedPlan = await PlaningAndSchedulingModel.findByIdAndUpdate(
-          data.planId,
-          {assignedStages: data.assignedStage},
-          {
-            new: true,
-            runValidators: true,
-          }
-        );
-        const updatedProcess = await ProcessModel.findByIdAndUpdate(
-          data.processId,
-          processData,
-          { new: true, runValidators: true }
-        );
-        if(updatedProcess) {
-          return res.status(200).json({
-            status: 200,
-            message: "Issued Kits to Line Updated Successfully!!",
-            updatedProcess,
-          });
+      const updatedPlan = await PlaningAndSchedulingModel.findByIdAndUpdate(
+        data.planId,
+        { assignedStages: data.assignedStage },
+        {
+          new: true,
+          runValidators: true,
         }
+      );
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(
+        data.processId,
+        processData,
+        { new: true, runValidators: true }
+      );
+      if (updatedProcess) {
+        return res.status(200).json({
+          status: 200,
+          message: "Issued Kits to Line Updated Successfully!!",
+          updatedProcess,
+        });
+      }
       // }
     } catch (error) {
-      return res.status(500).json({status: 500, error: error.message});
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
-  updateStatusRecievedKit: async(req, res) => {
+  updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
-      let data = { status: req.body.status};
-      let processData =  {
-        'status':req.body.processStatus
-      }
+      let data = { status: req.body.status };
+      let processData = {
+        status: req.body.processStatus,
+      };
       const updateStatus = await AsssignKitsToLineModel.findByIdAndUpdate(
         id,
         data,
@@ -520,20 +536,22 @@ module.exports = {
         updateStatus,
       });
     } catch (error) {
-      return res.status(500).json({status: 500, error: error.message});
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
-  getDeviceTestRecordsByPlanId: async (req, res) => {
+  getDeviceTestRecordsByProcessId: async (req, res) => {
     try {
-      let planId = req.params.id;
-      const deviceTestRecords = await DeviceTestRecordModel.find({ planId: planId });
+      let processId = req.params.id;
+      const deviceTestRecords = await DeviceTestRecordModel.find({
+        processId: processId,
+      });
       return res.status(200).json({
         status: 200,
         message: "Device Record Test Fetched SuccessFully !!",
         deviceTestRecords,
       });
     } catch (error) {
-      return res.status(500).json({status:500, error: error.message});
+      return res.status(500).json({ status: 500, error: error.message });
     }
-  }
+  },
 };

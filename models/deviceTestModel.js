@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const deviceTestSchema = new mongoose.Schema({
   deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "devices" },
-  planId: {type:mongoose.Schema.Types.ObjectId, ref:"planingandschedulings"},
+  processId: {type:mongoose.Schema.Types.ObjectId, ref:"processes"},
   operatorId: {type:mongoose.Schema.Types.ObjectId, ref:"users"},
   serialNo: { type: String, required: false },
   seatNumber:{type:String,required:false},

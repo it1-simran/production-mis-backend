@@ -19,6 +19,7 @@ const assignOperatorToPlanSchema = new mongoose.Schema({
     },
     default: {},
   },
+  stageType: { type: String, required: false },
   ProcessShiftMappings: {
     type: {
       formattedShiftDate: {type: String, required: false, default: null},

@@ -24,6 +24,8 @@ const productionManagerController = require('../controller/productionManagerCont
 const skillManagementController = require('../controller/skillController');
 const kitsController = require('../controller/kitsController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
+const CartonController = require('../controller/cartonController');
+const cartonController = require('../controller/cartonController');
 connectDB();
 router.get('/items', authController.getItems);
 router.get('/product/view',authController.authenticateToken,productController.view);
@@ -100,6 +102,7 @@ router.post('/process/log/create',authController.authenticateToken,processContro
 router.get('/process/logs/getLogsByProcessID/:id',authController.authenticateToken,planningAndSchedulingController.getProcessLogsByProcessId);
 router.post('/assignPlanToOperator/create',authController.authenticateToken,assignedOperatorsToPlan.create);
 router.get(`/assignPlanToOperator/view/:id`,authController.authenticateToken,assignedOperatorsToPlan.getTaskByUserID);
+router.get(`/assignPlanToOperator/get/:id`, authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskByUserID);
 router.post('/devices/create', authController.authenticateToken,deviceController.create);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken,deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id',authController.authenticateToken,deviceController.getDeviceByProductId);
@@ -143,10 +146,14 @@ router.post('/planing/createAssignedJigs', authController.authenticateToken,assi
 router.put('/jig/updateStatus/:id', authController.authenticateToken,jigController.updateJigStatus);
 router.put("/process/updateIssueKitsToLine",authController.authenticateToken,processController.updateIssuedKitsToLine);
 router.put("/process/updateStatusRecivedKit/:id",authController.authenticateToken,processController.updateStatusRecievedKit);
-router.get("/process/getDeviceTestRecordsByPlanId/:id", authController.authenticateToken,processController.getDeviceTestRecordsByPlanId);
+router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken,processController.getDeviceTestRecordsByProcessId);
 router.get("/process/orderConfirmation/get",authController.authenticateToken,OrderConfirmationController.view);
 router.post('/process/orderConfirmation/create',authController.authenticateToken,OrderConfirmationController.create);
 router.put('/process/addDownTime/:id',authController.authenticateToken,planningAndSchedulingController.updateDownTime);
 router.put('/process/updateProcessStatus/:id',authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
+router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
+router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
+router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
+router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 module.exports = router;

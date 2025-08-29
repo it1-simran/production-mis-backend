@@ -53,7 +53,6 @@ module.exports = {
           startDate: data?.startDate,
           estimatedEndDate: data?.estimatedEndDate,
         };
-
         const assignOperators = new assignedOperatorsToPlanModel(data1);
         await assignOperators.save();
       }
@@ -188,8 +187,8 @@ module.exports = {
         });
       }
       let shiftStartTime, shiftEndTime;
-      shiftStartTime = moment(shift.startTime, "HH:mm");
-      shiftEndTime = moment(shift.endTime, "HH:mm");
+      shiftStartTime = moment(changedData.startTime, "HH:mm");
+      shiftEndTime = moment(changedData.endTime, "HH:mm");
       const query = [
         {
           $match: {
@@ -226,8 +225,7 @@ module.exports = {
         },
       ];
       const plans = await PlaningAndSchedulingModel.aggregate(query);
-      console.log("plans ===> ", plans);
-      const filteredPlans = plans.filter((plan) => {
+       const filteredPlans = plans.filter((plan) => {
         const { startTime, endTime } = plan.ProcessShiftMappings || {};
         if (!startTime || !endTime) return false;
         const planStartTime = moment(startTime, "HH:mm");
@@ -392,7 +390,8 @@ module.exports = {
             as: "assignKitsToLinesDetails",
           },
         },
-        { $unwind: {path:"$assignKitsToLinesDetails", preserveNullAndEmptyArrays: true}},
+        { $unwind: {path:"$assignKitsToLinesDetails",
+           preserveNullAndEmptyArrays: true}},
         {
           $lookup: {
            from: "shifts",
@@ -412,9 +411,24 @@ module.exports = {
             as: "processDetails"
           }
         },
-        { $unwind : {path: "$processDetails",
+        { 
+          $unwind : {path: "$processDetails",
           preserveNullAndEmptyArrays: true}
         },
+        // {
+        //   $lookup: {
+        //     from: "assignpoperatorsplans",
+        //     localField: "selectedProcess",
+        //     foreignField: "processId",
+        //     as: "assignOperatorToPlans"
+        //   }
+        // },
+        // {
+        //   $unwind : {
+        //     path : "$assignOperatorToPlans",
+        //     preserveNullAndEmptyArrays: true
+        //   }
+        // },
         {
           $project: {
             _id: 1,
@@ -448,9 +462,11 @@ module.exports = {
             processQuantity: "$processDetails.quantity",
             endTime:"$shiftDetails.endTime",
             totalBreakTime:"$shiftDetails.totalBreakTime",
+            //stageType: "$assignOperatorToPlans.stageType"
           },
         },
       ]);
+      console.log("PlaningAndScheduling ===>", PlaningAndScheduling);
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }

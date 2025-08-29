@@ -194,12 +194,12 @@ module.exports = {
       });
       const updateIssueCarton = {
         quantity: Inventory?.quantity - parseInt(req?.body?.issueCartonProcess),
-        updatedAt: new Date().toLocaleDateString(),
+        updatedAt: new Date(),
       };
       const updatedData = {
         issuedCartons:
           process?.issuedCartons + parseInt(req?.body?.issueCartonProcess),
-        updatedAt: new Date().toLocaleDateString(),
+          updatedAt: new Date(),
       };
       const updatedIssuedCarton = await InventoryModel.findByIdAndUpdate(
         Inventory._id,

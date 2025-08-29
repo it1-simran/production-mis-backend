@@ -61,6 +61,7 @@ module.exports = {
         userType,
         skills,
       } = req?.body;
+
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(req?.body.password, salt);
       const password = hashedPassword;
