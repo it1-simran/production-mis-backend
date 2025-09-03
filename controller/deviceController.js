@@ -526,6 +526,7 @@ module.exports = {
   },
   updateStageByDeviceId: async (req, res) => {
     try {
+
       let deviceId = req.params.deviceId;
       let updates = req.body;
       const updatedDevice = await deviceModel.findByIdAndUpdate(
