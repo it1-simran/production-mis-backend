@@ -156,4 +156,6 @@ router.post('/carton/createCarton', authController.authenticateToken, CartonCont
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
+router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
+router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
 module.exports = router;
