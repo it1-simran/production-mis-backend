@@ -4,7 +4,7 @@ const ShiftModel = require("../models/shiftManagement");
 module.exports = {
   create: async (req, res) => {
     try {
-      const { name, intervals, weekDays } = req.body;
+      const { name, intervals, weekDays,descripition } = req.body;
       if (!name || !weekDays) {
         return res.status(400).json({
           status: 400,
@@ -15,6 +15,7 @@ module.exports = {
         name,
         intervals,
         weekDays,
+        descripition
       };
       const newShiftModel = new ShiftModel(data);
       await newShiftModel.save();
@@ -117,6 +118,7 @@ module.exports = {
         name: req?.body?.name,
         startTime:req?.body?.startTime,
         endTime:req?.body?.endTime,
+        descripition:req?.body?.descripition,
         totalBreakTime:req?.body?.totalBreakTime,
         intervals: req?.body?.intervals,
         weekDays: req?.body?.weekDays,

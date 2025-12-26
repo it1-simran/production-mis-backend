@@ -349,11 +349,15 @@ module.exports = {
       );
       const endDate = new Date(startDate);
       endDate.setDate(startDate.getDate() + totalTimeEstimationInDays);
-      const updateQuanity = await ProcessModel.findByIdAndUpdate(
+      const updatedQuantity = await ProcessModel.findByIdAndUpdate(
         id,
-        { quantity: totalQuantity },
+        {
+          quantity: totalQuantity,
+          kitStatus: req.body.status,
+        },
         { new: true, runValidators: true }
       );
+
       const updatedPlaningAndScheduling =
         await PlaningAndSchedulingModel.findByIdAndUpdate(
           planingID,
@@ -513,7 +517,7 @@ module.exports = {
   updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
-      let data = { status: req.body.status };
+      let data = { status: req?.body?.status,issuedKitsStatus:req?.body?.issuedKitsStatus };
       let processData = {
         status: req.body.processStatus,
       };

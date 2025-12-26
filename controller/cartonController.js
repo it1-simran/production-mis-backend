@@ -57,7 +57,7 @@ module.exports = {
       });
     }
   },
- getCartonByProcessId: async (req, res) => {
+  getCartonByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
 
@@ -118,6 +118,136 @@ module.exports = {
       }
 
       // 📦 Separate arrays
+      const cartonSerials = cartons.map((c) => c.cartonSerial);
+
+      return res.json({
+        cartonSerials,
+        cartonDetails: cartons,
+      });
+    } catch (error) {
+      console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error: " + error.message });
+    }
+  },
+  getCartonsIntoStore: async (req, res) => {
+    try {
+      const { processId } = req.params;
+
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(processId),
+            status: "full",
+            cartonStatus: "FG_TO_STORE",
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+        { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "devicetestrecords",
+            localField: "devices._id",
+            foreignField: "deviceId",
+            as: "deviceTestRecords",
+          },
+        },
+        {
+          $addFields: {
+            "devices.testRecords": "$deviceTestRecords",
+          },
+        },
+        {
+          $group: {
+            _id: "$_id",
+            cartonSize: { $first: "$cartonSize" },
+            cartonSerial: { $first: "$cartonSerial" },
+            processId: { $first: "$processId" },
+            maxCapacity: { $first: "$maxCapacity" },
+            status: { $first: "$status" },
+            weightCarton: { $first: "$weightCarton" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            __v: { $first: "$__v" },
+            cartonStatus: { $first: "$cartonStatus" },
+            devices: { $push: "$devices" },
+          },
+        },
+      ]);
+      if (!cartons || cartons.length === 0) {
+        return res.status(404).json({ message: "No Carton Found" });
+      }
+      const cartonSerials = cartons.map((c) => c.cartonSerial);
+
+      return res.json({
+        cartonSerials,
+        cartonDetails: cartons,
+      });
+    } catch (error) {
+      console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error: " + error.message });
+    }
+  },
+  getCartonByProcessIdToPDI: async (req, res) => {
+    try {
+      const { processId } = req.params;
+
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(processId),
+            status: "full",
+            cartonStatus: "PDI",
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+        { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "devicetestrecords",
+            localField: "devices._id",
+            foreignField: "deviceId",
+            as: "deviceTestRecords",
+          },
+        },
+        {
+          $addFields: {
+            "devices.testRecords": "$deviceTestRecords",
+          },
+        },
+        {
+          $group: {
+            _id: "$_id",
+            cartonSize: { $first: "$cartonSize" },
+            cartonSerial: { $first: "$cartonSerial" },
+            processId: { $first: "$processId" },
+            maxCapacity: { $first: "$maxCapacity" },
+            status: { $first: "$status" },
+            weightCarton: { $first: "$weightCarton" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            __v: { $first: "$__v" },
+            cartonStatus: { $first: "$cartonStatus" },
+            devices: { $push: "$devices" },
+          },
+        },
+      ]);
+      if (!cartons || cartons.length === 0) {
+        return res.status(404).json({ message: "No Carton Found" });
+      }
       const cartonSerials = cartons.map((c) => c.cartonSerial);
 
       return res.json({
@@ -236,8 +366,6 @@ module.exports = {
           .status(400)
           .json({ success: false, message: "Carton serial is required" });
       }
-
-      // 1. Find and update the carton
       const carton = await cartonModel.findOneAndUpdate(
         { cartonSerial: selectedCarton },
         { $set: { cartonStatus: "FG_TO_STORE" } },
@@ -249,14 +377,13 @@ module.exports = {
           .status(404)
           .json({ success: false, message: "Carton not found" });
       }
-      // 2. Update all devices in this carton's devices array
       const devicesUpdate = await deviceModel.updateMany(
-        { _id: { $in: carton.devices } }, // use the devices array
+        { _id: { $in: carton.devices } },
         {
           $set: {
             currentStage: "FG_TO_STORE",
           },
-        } // update their status
+        }
       );
 
       return res.status(200).json({
@@ -302,19 +429,19 @@ module.exports = {
   fetchCurrentRunningProcessFG: async (req, res) => {
     try {
       // Step 1: Get processes with status active/complete
-      const processes = await ProcessModel
-        .find({
-          status: { $in: ["active", "complete"] },
-        })
-        .lean();
+      const processes = await ProcessModel.find({
+        status: { $in: ["active", "complete"] },
+      }).lean();
 
       // Step 2: Get cartons for each process
       const processData = await Promise.all(
         processes.map(async (process) => {
-          const cartons = await cartonModel.find({
-            processId: process._id,
-            cartonStatus: "FG_TO_STORE",
-          }).lean();
+          const cartons = await cartonModel
+            .find({
+              processId: process._id,
+              cartonStatus: "FG_TO_STORE",
+            })
+            .lean();
 
           // Step 3: Fetch devices for each carton
           const cartonsWithDevices = await Promise.all(

@@ -8,6 +8,7 @@ const deviceTestSchema = new mongoose.Schema({
   seatNumber:{type:String,required:false},
   stageName: { type: String, required: false },
   status: { type: String, required: false },
+  assignedDeviceTo: {type:String,required: false },
   timeConsumed: { type: String, required: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

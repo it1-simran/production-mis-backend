@@ -26,6 +26,7 @@ const kitsController = require('../controller/kitsController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
+const device = require('../models/device');
 connectDB();
 router.get('/items', authController.getItems);
 router.get('/product/view',authController.authenticateToken,productController.view);
@@ -41,8 +42,8 @@ router.put('/product/update/:id', productController.update);
 router.post('/upload-image/:userId', authController.authenticateToken,upload.single('profilePic'),userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken,upload.single('coverPic'),userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
-router.post('/jig/create', authController.authenticateToken,jigController.create);
-router.post('/jig/category/create', authController.authenticateToken,jigController.createJigCategory);
+router.post('/jig/create', authController.authenticateToken,jigController.createOrUpdate);
+router.post('/jig/category/create', authController.authenticateToken,jigController.createOrUpdateJigCategory);
 router.get('/jig/view',authController.authenticateToken,jigController.view);
 router.get('/jig/category/view',authController.authenticateToken,jigController.viewCategory);
 router.delete('/jig/delete/:id',authController.authenticateToken,jigController.delete);
@@ -50,6 +51,7 @@ router.delete('/jig/category/delete/:id',authController.authenticateToken,jigCon
 router.post('/jig/delete/multiple',authController.authenticateToken,jigController.deleteJigMultiple);
 router.post('/jig/categories/delete/multiple',authController.authenticateToken,jigController.deleteCategoryMultiple);
 router.get(`/fetchJigsById/:id`,authController.authenticateToken,jigController.fetchJigsById);
+router.get(`/fetchJigByJigId/:id`,authController.authenticateToken,jigController.fetchJigByJigId);
 router.post('/room-plan/create', authController.authenticateToken,roomPlanController.create);
 router.get('/room-plan/view', authController.authenticateToken,roomPlanController.view);
 router.delete('/room-plan/delete/:id', authController.authenticateToken,roomPlanController.deleteRoomPlan);
@@ -155,7 +157,32 @@ router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authen
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
+router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
+router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
+router.delete("/devices/remove-duplicates", async (req, res) => {
+  try {
+    const duplicates = await device.aggregate([
+      { $group: {
+          _id: "$serialNo",
+          ids: { $push: "$_id" },
+          count: { $sum: 1 }
+      }},
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    for (const doc of duplicates) {
+      doc.ids.shift(); // keep one
+      await device.deleteMany({ _id: { $in: doc.ids } });
+    }
+
+    res.status(200).json({ message: "Duplicate devices removed", count: duplicates.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
