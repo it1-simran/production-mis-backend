@@ -3,31 +3,93 @@ const Jig = require("../models/jig");
 const jigCategory = require("../models/jigCategory");
 const assignJigToPlanModel = require("../models/assignJigToPlan");
 module.exports = {
-  create: async (req, res) => {
+  createOrUpdate: async (req, res) => {
     try {
-      const { name, jigCategory } = req.body;
-      const newJig = new Jig({ name, jigCategory });
-      await newJig.save();
-      return res
-        .status(200)
-        .json({ status: 200, message: "Jig Created Succesfully", newJig });
+      const { id, name, jigCategory } = req.body;
+      if (id) {
+        const existingJig = await Jig.findById(id);
+        if (!existingJig) {
+          return res.status(404).json({
+            status: 404,
+            message: "Jig not found",
+          });
+        }
+        existingJig.name = name ?? existingJig.name;
+        existingJig.jigCategory = jigCategory ?? existingJig.jigCategory;
+        await existingJig.save();
+        return res.status(200).json({
+          status: 200,
+          message: "Jig updated successfully",
+          jig: existingJig,
+        });
+      } else {
+        const newJig = new Jig({ name, jigCategory });
+        await newJig.save();
+        return res.status(200).json({
+          status: 200,
+          message: "Jig created successfully",
+          jig: newJig,
+        });
+      }
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      console.error("Error in createOrUpdate Jig:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Internal Server Error",
+        error: error.message,
+      });
     }
   },
-  createJigCategory: async (req, res) => {
+  createOrUpdateJigCategory: async (req, res) => {
     try {
-      const { name, status } = req.body;
-      const jigCat = new jigCategory({ name, status });
-      await jigCat.save();
+      const { id, name, status } = req.body;
+      if (id) {
+        const existingJig = await jigCategory.findById(id);
+        if (!existingJig) {
+          return res.status(404).json({
+            status: 404,
+            message: "Jig Category not found",
+          });
+        }
+        existingJig.name = name ?? existingJig.name;
+        existingJig.status = status ?? existingJig.status;
+        await existingJig.save();
+        return res.status(200).json({
+          status: 200,
+          message: "Jig Category updated successfully",
+          jigCat: existingJig,
+        });
+      } else {
+        const newJig = new jigCategory({ name, status });
+        await newJig.save();
+        return res.status(200).json({
+          status: 200,
+          message: "Jig Category created successfully",
+          jigCat: newJig,
+        });
+      }
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Internal Server Error",
+        error: error.message,
+      });
+    }
+  },
 
-      return res
-        .status(200)
-        .json({ status: 200, message: "Jig Created Succesfully", jigCat });
-    } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
-    }
-  },
+  // createJigCategory: async (req, res) => {
+  //   try {
+  //     const { name, status } = req.body;
+  //     const jigCat = new jigCategory({ name, status });
+  //     await jigCat.save();
+
+  //     return res
+  //       .status(200)
+  //       .json({ status: 200, message: "Jig Created Succesfully", jigCat });
+  //   } catch (error) {
+  //     return res.status(500).json({ status: 500, error: error.message });
+  //   }
+  // },
   view: async (req, res) => {
     try {
       const Jigs = await Jig.find();
@@ -140,7 +202,7 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
-  updateJigStatus: async (req, res) =>{
+  updateJigStatus: async (req, res) => {
     try {
       let jigId = req.params.id;
       let status = req.body.status;
@@ -163,6 +225,19 @@ module.exports = {
         status: 200,
         message: "Vacant Operator found!!",
         updateAssignedOperator,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  fetchJigByJigId: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const Jigs = await Jig.findById(id);
+      return res.status(200).json({
+        status: 200,
+        status_msg: "Jigs Fetched Sucessfully!!",
+        Jigs,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

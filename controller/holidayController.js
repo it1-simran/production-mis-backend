@@ -3,14 +3,18 @@ const mongoose = require("mongoose");
 module.exports = {
   view: async (req, res) => {
     try {
-      const holidays = await holidayModel.find();
+      const holidays = await holidayModel.find({}, { holidayDate: 1, name: 1 }).lean().exec();
       return res.status(200).json({
         status: 200,
-        message: "Holidays Fetched Successfully!!",
+        message: "Holidays fetched successfully!",
         holidays,
       });
     } catch (error) {
-      return res.status(500).json({ staus: 500, error: error.message });
+      console.error("Error fetching holidays:", error);
+      return res.status(500).json({
+        status: 500,
+        error: error.message,
+      });
     }
   },
   create: async (req, res) => {

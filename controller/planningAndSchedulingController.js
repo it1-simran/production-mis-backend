@@ -129,16 +129,16 @@ module.exports = {
             repeatCount: 1,
             startDate: 1,
             assignedJigs: 1,
-            assignedOperators:1,
-            assignedStages:1,
-            isDrafted:1,
-            totalUPHA:1,
-            totalTimeEstimation:1,
-            status:"$planingData.status",
-            estimatedEndDate:1,
-            consumedKit:1,
+            assignedOperators: 1,
+            assignedStages: 1,
+            isDrafted: 1,
+            totalUPHA: 1,
+            totalTimeEstimation: 1,
+            status: "$planingData.status",
+            estimatedEndDate: 1,
+            consumedKit: 1,
             downTime: 1,
-            processName : "$planingData.name"
+            processName: "$planingData.name",
           },
         },
       ]);
@@ -153,7 +153,8 @@ module.exports = {
   },
   checkAvailability: async (req, res) => {
     try {
-      const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } = req.body;
+      const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } =
+        req.body;
       let changedData = JSON.parse(shiftDataChange);
       if (!roomId || !shiftId || !startDate || !expectedEndDate) {
         return res.status(400).json({
@@ -195,8 +196,18 @@ module.exports = {
             selectedRoom: new mongoose.Types.ObjectId(roomId),
             isDrafted: 0,
             $or: [
-              { startDate: { $gte: new Date(parsedStartDate), $lte: new Date(parsedEndDate) } },
-              { estimatedEndDate: { $gte: new Date(parsedStartDate), $lte: new Date(parsedEndDate) } },
+              {
+                startDate: {
+                  $gte: new Date(parsedStartDate),
+                  $lte: new Date(parsedEndDate),
+                },
+              },
+              {
+                estimatedEndDate: {
+                  $gte: new Date(parsedStartDate),
+                  $lte: new Date(parsedEndDate),
+                },
+              },
               {
                 $and: [
                   { startDate: { $lte: new Date(parsedStartDate) } },
@@ -221,11 +232,15 @@ module.exports = {
           },
         },
         {
-          $match: { "processDetails.status": { $nin: ["completed", "waiting_schedule"] } }
+          $match: {
+            "processDetails.status": {
+              $nin: ["completed", "waiting_schedule"],
+            },
+          },
         },
       ];
       const plans = await PlaningAndSchedulingModel.aggregate(query);
-       const filteredPlans = plans.filter((plan) => {
+      const filteredPlans = plans.filter((plan) => {
         const { startTime, endTime } = plan.ProcessShiftMappings || {};
         if (!startTime || !endTime) return false;
         const planStartTime = moment(startTime, "HH:mm");
@@ -260,49 +275,78 @@ module.exports = {
   checkAvailabilityFromCurrentDate: async (req, res) => {
     try {
       const { roomId, shiftId } = req.body;
+
       if (!roomId || !shiftId) {
         return res.status(400).json({
           status: 400,
           error: "Room ID and Shift ID are required.",
         });
       }
+
       const currentDate = moment.utc().startOf("day");
-      const startISO = currentDate.toISOString();
-      const endDate = moment.utc().add(30, "days").toISOString();
-      const roomPlan = await RoomPlanModel.findById(roomId);
+      const endDate = moment.utc().add(30, "days").endOf("day");
+
+      // ✅ Check if room exists
+      const roomPlan = await RoomPlanModel.findById(roomId).lean();
       if (!roomPlan) {
         return res.status(404).json({
           status: 404,
           error: "Room not found.",
         });
       }
-      const totalSeatsInRoom = roomPlan.lines.reduce(
-        (totalSeats, line) => totalSeats + line.seats.length,
-        0
-      );
+
+      const totalSeatsInRoom =
+        roomPlan.lines?.reduce(
+          (totalSeats, line) => totalSeats + (line.seats?.length || 0),
+          0
+        ) || 0;
+
+      // ✅ Fetch plans
       const plans = await PlaningAndSchedulingModel.find({
         selectedRoom: new mongoose.Types.ObjectId(roomId),
         selectedShift: new mongoose.Types.ObjectId(shiftId),
         isDrafted: 0,
-      });
+      }).lean();
+
+      if (!plans || plans.length === 0) {
+        // ✅ Return empty seat availability
+        return res.status(200).json({
+          status: 200,
+          message: "No planning data available.",
+          seatAvailability: {},
+        });
+      }
+
+      // ✅ Build seat availability
       const seatAvailability = {};
-      plans.forEach((plan) => {
+      for (const plan of plans) {
         const planStartDate = moment(plan.startDate).startOf("day");
         const planEndDate = moment(plan.estimatedEndDate).endOf("day");
+
         let currentDateInRange = planStartDate.clone();
         while (currentDateInRange.isSameOrBefore(planEndDate)) {
-          const dateString = currentDateInRange.toISOString().split("T")[0];
+          const dateString = currentDateInRange.format("YYYY-MM-DD");
+
           if (!seatAvailability[dateString]) {
             seatAvailability[dateString] = totalSeatsInRoom;
           }
-          const assignedStages = Object.keys(
-            JSON.parse(plan?.assignedStages || "{}")
-          ).length;
+
+          let assignedStages = 0;
+          try {
+            const parsedStages = JSON.parse(plan?.assignedStages || "{}");
+            assignedStages = Object.keys(parsedStages).length;
+          } catch (err) {
+            console.warn(
+              "Invalid JSON in assignedStages:",
+              plan.assignedStages
+            );
+          }
+
           seatAvailability[dateString] -= assignedStages;
           currentDateInRange.add(1, "days");
         }
-      });
-      const dates = Object.keys(seatAvailability);
+      }
+
       return res.status(200).json({
         status: 200,
         message: "Planning and scheduling fetched successfully!",
@@ -310,7 +354,7 @@ module.exports = {
       });
     } catch (error) {
       console.error(
-        "Error in checkAvailabilityFromCurrentDate: ",
+        "Error in checkAvailabilityFromCurrentDate:",
         error.message
       );
       return res.status(500).json({
@@ -320,6 +364,71 @@ module.exports = {
       });
     }
   },
+
+  // checkAvailabilityFromCurrentDate: async (req, res) => {
+  //   try {
+  //     const { roomId, shiftId } = req.body;
+  //     if (!roomId || !shiftId) {
+  //       return res.status(400).json({
+  //         status: 400,
+  //         error: "Room ID and Shift ID are required.",
+  //       });
+  //     }
+  //     const currentDate = moment.utc().startOf("day");
+  //     const startISO = currentDate.toISOString();
+  //     const endDate = moment.utc().add(30, "days").toISOString();
+  //     const roomPlan = await RoomPlanModel.findById(roomId);
+  //     if (!roomPlan) {
+  //       return res.status(404).json({
+  //         status: 404,
+  //         error: "Room not found.",
+  //       });
+  //     }
+  //     const totalSeatsInRoom = roomPlan.lines.reduce(
+  //       (totalSeats, line) => totalSeats + line.seats.length,
+  //       0
+  //     );
+  //     const plans = await PlaningAndSchedulingModel.find({
+  //       selectedRoom: new mongoose.Types.ObjectId(roomId),
+  //       selectedShift: new mongoose.Types.ObjectId(shiftId),
+  //       isDrafted: 0,
+  //     });
+  //     const seatAvailability = {};
+  //     plans.forEach((plan) => {
+  //       const planStartDate = moment(plan.startDate).startOf("day");
+  //       const planEndDate = moment(plan.estimatedEndDate).endOf("day");
+  //       let currentDateInRange = planStartDate.clone();
+  //       while (currentDateInRange.isSameOrBefore(planEndDate)) {
+  //         const dateString = currentDateInRange.toISOString().split("T")[0];
+  //         if (!seatAvailability[dateString]) {
+  //           seatAvailability[dateString] = totalSeatsInRoom;
+  //         }
+  //         const assignedStages = Object.keys(
+  //           JSON.parse(plan?.assignedStages || "{}")
+  //         ).length;
+  //         seatAvailability[dateString] -= assignedStages;
+  //         currentDateInRange.add(1, "days");
+  //       }
+  //     });
+  //     const dates = Object.keys(seatAvailability);
+  //     console.log("seatAvailability ==>", seatAvailability);
+  //     return res.status(200).json({
+  //       status: 200,
+  //       message: "Planning and scheduling fetched successfully!",
+  //       seatAvailability,
+  //     });
+  //   } catch (error) {
+  //     console.error(
+  //       "Error in checkAvailabilityFromCurrentDate: ",
+  //       error.message
+  //     );
+  //     return res.status(500).json({
+  //       status: 500,
+  //       error: "Internal server error.",
+  //       details: error.message,
+  //     });
+  //   }
+  // },
   delete: async (req, res) => {
     try {
       const planId = req.params.id;
@@ -390,30 +499,36 @@ module.exports = {
             as: "assignKitsToLinesDetails",
           },
         },
-        { $unwind: {path:"$assignKitsToLinesDetails",
-           preserveNullAndEmptyArrays: true}},
+        {
+          $unwind: {
+            path: "$assignKitsToLinesDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
         {
           $lookup: {
-           from: "shifts",
-           localField: "selectedShift",
-           foreignField: "_id",
-           as: "shiftDetails"
-          }
+            from: "shifts",
+            localField: "selectedShift",
+            foreignField: "_id",
+            as: "shiftDetails",
+          },
         },
-        { $unwind : {path: "$shiftDetails",
-          preserveNullAndEmptyArrays: true}
+        {
+          $unwind: { path: "$shiftDetails", preserveNullAndEmptyArrays: true },
         },
         {
           $lookup: {
             from: "processes",
             localField: "selectedProcess",
             foreignField: "_id",
-            as: "processDetails"
-          }
+            as: "processDetails",
+          },
         },
-        { 
-          $unwind : {path: "$processDetails",
-          preserveNullAndEmptyArrays: true}
+        {
+          $unwind: {
+            path: "$processDetails",
+            preserveNullAndEmptyArrays: true,
+          },
         },
         // {
         //   $lookup: {
@@ -432,7 +547,7 @@ module.exports = {
         {
           $project: {
             _id: 1,
-            processName:1,
+            processName: 1,
             selectedProcess: 1,
             selectedRoom: 1,
             selectedShift: 1,
@@ -442,26 +557,27 @@ module.exports = {
             repeatCount: 1,
             startDate: 1,
             assignedJigs: 1,
-            assignedOperators:1,
-            assignedStages:1,
-            isDrafted:1,
-            totalUPHA:1,
-            totalTimeEstimation:1,
-            status:1,
-            estimatedEndDate:1,
-            consumedKit:1,
-            downTime:1,
-            assignedIssuedKits:"$assignKitsToLinesDetails.issuedKits",
-            assignedSeatDetails:"$assignKitsToLinesDetails.seatDetails",
-            assignedStatus:"$assignKitsToLinesDetails.status",
-            assignedIssuedKitsStatus:"$assignKitsToLinesDetails.issuedKitsStatus",
+            assignedOperators: 1,
+            assignedStages: 1,
+            isDrafted: 1,
+            totalUPHA: 1,
+            totalTimeEstimation: 1,
+            status: 1,
+            estimatedEndDate: 1,
+            consumedKit: 1,
+            downTime: 1,
+            assignedIssuedKits: "$assignKitsToLinesDetails.issuedKits",
+            assignedSeatDetails: "$assignKitsToLinesDetails.seatDetails",
+            assignedStatus: "$assignKitsToLinesDetails.status",
+            assignedIssuedKitsStatus:
+              "$assignKitsToLinesDetails.issuedKitsStatus",
             assignedCustomStages: 1,
             assignedCustomStagesOp: 1,
-            startTime:"$shiftDetails.startTime",
+            startTime: "$shiftDetails.startTime",
             processStatus: "$processDetails.status",
             processQuantity: "$processDetails.quantity",
-            endTime:"$shiftDetails.endTime",
-            totalBreakTime:"$shiftDetails.totalBreakTime",
+            endTime: "$shiftDetails.endTime",
+            totalBreakTime: "$shiftDetails.totalBreakTime",
             //stageType: "$assignOperatorToPlans.stageType"
           },
         },
@@ -473,21 +589,26 @@ module.exports = {
       return res.status(200).json(PlaningAndScheduling[0]);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
-      return res.status(500).json({ message: "Server error", error: error.message });
+      return res
+        .status(500)
+        .json({ message: "Server error", error: error.message });
     }
   },
   getPlaningAnDschedulingByProcessId: async (req, res) => {
     try {
       const id = req.params.id;
-      const PlaningAndScheduling = await PlaningAndSchedulingModel.find({selectedProcess
-        :id});
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
+        selectedProcess: id,
+      });
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
       return res.status(200).json(PlaningAndScheduling[0]);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
-      return res.status(500).json({ message: "Server error", error: error.message });
+      return res
+        .status(500)
+        .json({ message: "Server error", error: error.message });
     }
   },
   fetchAllPlaningModel: async (req, res) => {
@@ -523,7 +644,7 @@ module.exports = {
         {
           $match: {
             processId: new mongoose.Types.ObjectId(id),
-          }
+          },
         },
         {
           $lookup: {
@@ -564,19 +685,27 @@ module.exports = {
       console.log("DownTime:", downTime);
 
       const processData = {
-        status: 'down_time_hold'
+        status: "down_time_hold",
       };
       const planingData = {
-        downTime: JSON.parse(downTime)
+        downTime: JSON.parse(downTime),
       };
-      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(id, planingData, {
-        new: true,
-        runValidators: true,
-      });
-      const process = await ProcessModel.findByIdAndUpdate(selectedProcess, processData, {
-        new: true,
-        runValidators: true,
-      });
+      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(
+        id,
+        planingData,
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+      const process = await ProcessModel.findByIdAndUpdate(
+        selectedProcess,
+        processData,
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
       if (!process) {
         return res.status(404).json({
           status: 404,
@@ -592,25 +721,33 @@ module.exports = {
       console.error("Error in updateDownTime:", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
-  },  
+  },
   updateProcessStatus: async (req, res) => {
     try {
       const id = req.params.id;
       const selectedProcess = req.body.selectedProcess;
       const processData = {
-        status: req.body.status
+        status: req.body.status,
       };
       const planingData = {
-        downTime: {}
+        downTime: {},
       };
-      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(id, planingData, {
-        new: true,
-        runValidators: true,
-      });
-      const process = await ProcessModel.findByIdAndUpdate(selectedProcess, processData, {
-        new: true,
-        runValidators: true,
-      });
+      const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(
+        id,
+        planingData,
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+      const process = await ProcessModel.findByIdAndUpdate(
+        selectedProcess,
+        processData,
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
       if (!process) {
         return res.status(404).json({
           status: 404,
@@ -629,17 +766,20 @@ module.exports = {
   getPlaningAndSchedulingDateWise: async (req, res) => {
     try {
       const { startDate, endDate } = req.query;
-  
+
       let filterStartDate, filterEndDate;
-  
+
       if (startDate && endDate) {
         const parsedStart = moment.tz(startDate, "YYYY-MM-DD", "Asia/Kolkata");
         const parsedEnd = moment.tz(endDate, "YYYY-MM-DD", "Asia/Kolkata");
-  
+
         if (!parsedStart.isValid() || !parsedEnd.isValid()) {
-          return res.status(400).json({ status: 400, error: "Invalid date format. Use YYYY-MM-DD." });
+          return res.status(400).json({
+            status: 400,
+            error: "Invalid date format. Use YYYY-MM-DD.",
+          });
         }
-  
+
         filterStartDate = parsedStart.startOf("day").toDate();
         filterEndDate = parsedEnd.endOf("day").toDate();
       } else {
@@ -647,7 +787,7 @@ module.exports = {
         filterStartDate = today.clone().startOf("isoWeek").toDate();
         filterEndDate = today.clone().endOf("isoWeek").toDate();
       }
-  
+
       const response = await PlaningAndSchedulingModel.aggregate([
         {
           $match: {
@@ -672,13 +812,12 @@ module.exports = {
           $sort: { startDate: 1 },
         },
       ]);
-  
+
       return res.status(200).json({
         status: 200,
         message: "Planning and Scheduling data fetched successfully",
         plans: response,
       });
-  
     } catch (error) {
       console.error("API Error:", error.message);
       return res.status(500).json({ status: 500, error: error.message });
@@ -688,7 +827,7 @@ module.exports = {
     try {
     } catch (error) {
       console.error(" Api Error :", error.message);
-      return res.status(500).json({ status: 500, error: error.message});
+      return res.status(500).json({ status: 500, error: error.message });
     }
-  }
+  },
 };

@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 const cartonModel = require("../models/cartonManagement");
+const deviceModel = require("../models/device");
+const ProcessModel = require("../models/Process");
+// const ProcessModel = require("../models/process");
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
@@ -57,20 +60,282 @@ module.exports = {
   getCartonByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
-      const carton = await cartonModel.find({
-        processId,
-        status: { $in: ["full"] },
-        cartonStatus: { $in: [""] },
-      });
-      if (!carton) {
+
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(processId),
+            status: "full",
+            cartonStatus: "PDI",
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+        { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "devicetestrecords",
+            localField: "devices._id",
+            foreignField: "deviceId",
+            as: "deviceTestRecords",
+          },
+        },
+
+        // ✅ Merge testRecords into devices
+        {
+          $addFields: {
+            "devices.testRecords": "$deviceTestRecords",
+          },
+        },
+
+        // 🌀 Group back to carton level
+        {
+          $group: {
+            _id: "$_id",
+            cartonSize: { $first: "$cartonSize" },
+            cartonSerial: { $first: "$cartonSerial" },
+            processId: { $first: "$processId" },
+            maxCapacity: { $first: "$maxCapacity" },
+            status: { $first: "$status" },
+            weightCarton: { $first: "$weightCarton" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            __v: { $first: "$__v" },
+            cartonStatus: { $first: "$cartonStatus" },
+            devices: { $push: "$devices" },
+          },
+        },
+      ]);
+
+      if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
       }
-      res.json(carton);
+
+      // 📦 Separate arrays
+      const cartonSerials = cartons.map((c) => c.cartonSerial);
+
+      return res.json({
+        cartonSerials,
+        cartonDetails: cartons,
+      });
     } catch (error) {
       console.error("Error fetching carton:", error);
-      res.status(500).json({ error: "Server error" });
+      res.status(500).json({ error: "Server error: " + error.message });
     }
   },
+  getCartonsIntoStore: async (req, res) => {
+    try {
+      const { processId } = req.params;
+
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(processId),
+            status: "full",
+            cartonStatus: "FG_TO_STORE",
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+        { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "devicetestrecords",
+            localField: "devices._id",
+            foreignField: "deviceId",
+            as: "deviceTestRecords",
+          },
+        },
+        {
+          $addFields: {
+            "devices.testRecords": "$deviceTestRecords",
+          },
+        },
+        {
+          $group: {
+            _id: "$_id",
+            cartonSize: { $first: "$cartonSize" },
+            cartonSerial: { $first: "$cartonSerial" },
+            processId: { $first: "$processId" },
+            maxCapacity: { $first: "$maxCapacity" },
+            status: { $first: "$status" },
+            weightCarton: { $first: "$weightCarton" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            __v: { $first: "$__v" },
+            cartonStatus: { $first: "$cartonStatus" },
+            devices: { $push: "$devices" },
+          },
+        },
+      ]);
+      if (!cartons || cartons.length === 0) {
+        return res.status(404).json({ message: "No Carton Found" });
+      }
+      const cartonSerials = cartons.map((c) => c.cartonSerial);
+
+      return res.json({
+        cartonSerials,
+        cartonDetails: cartons,
+      });
+    } catch (error) {
+      console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error: " + error.message });
+    }
+  },
+  getCartonByProcessIdToPDI: async (req, res) => {
+    try {
+      const { processId } = req.params;
+
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: new mongoose.Types.ObjectId(processId),
+            status: "full",
+            cartonStatus: "PDI",
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+        { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "devicetestrecords",
+            localField: "devices._id",
+            foreignField: "deviceId",
+            as: "deviceTestRecords",
+          },
+        },
+        {
+          $addFields: {
+            "devices.testRecords": "$deviceTestRecords",
+          },
+        },
+        {
+          $group: {
+            _id: "$_id",
+            cartonSize: { $first: "$cartonSize" },
+            cartonSerial: { $first: "$cartonSerial" },
+            processId: { $first: "$processId" },
+            maxCapacity: { $first: "$maxCapacity" },
+            status: { $first: "$status" },
+            weightCarton: { $first: "$weightCarton" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            __v: { $first: "$__v" },
+            cartonStatus: { $first: "$cartonStatus" },
+            devices: { $push: "$devices" },
+          },
+        },
+      ]);
+      if (!cartons || cartons.length === 0) {
+        return res.status(404).json({ message: "No Carton Found" });
+      }
+      const cartonSerials = cartons.map((c) => c.cartonSerial);
+
+      return res.json({
+        cartonSerials,
+        cartonDetails: cartons,
+      });
+    } catch (error) {
+      console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error: " + error.message });
+    }
+  },
+  // getCartonByProcessId: async (req, res) => {
+  //   try {
+  //     const { processId } = req.params;
+  //     // const carton = await cartonModel
+  //     //   .find({
+  //     //     processId,
+  //     //     status: { $in: ["full"] },
+  //     //     cartonStatus: { $in: ["PDI"] },
+  //     //   })
+  //     //   .populate({
+  //     //     path: "devices",
+  //     //     populate: {
+  //     //       path: "testRecords", // virtual field in Device schema
+  //     //       model: "deviceTest",
+  //     //     },
+  //     //   });
+  //     const carton = await cartonModel.aggregate([
+  //       {
+  //         $match: {
+  //           processId: new mongoose.Types.ObjectId(processId),
+  //           status: { $in: ["full"] },
+  //           cartonStatus: { $in: ["PDI"] },
+  //         },
+  //       },
+  //       {
+  //         $lookup: {
+  //           from: "devices", // exact name of your devices collection (check in MongoDB)
+  //           localField: "devices",
+  //           foreignField: "_id",
+  //           as: "devices",
+  //         },
+  //       },
+  //       {
+  //         $unwind: "$devices",
+  //       },
+  //       {
+  //         $lookup: {
+  //           from: "devicetestrecords", // exact name of the test record collection
+  //           localField: "devices._id",
+  //           foreignField: "deviceId",
+  //           as: "devices.testRecords", // this won't nest, but we'll fix that later
+  //         },
+  //       },
+  //       {
+  //         $group: {
+  //           _id: "$_id",
+  //           cartonSize: { $first: "$cartonSize" },
+  //           cartonSerial: { $first: "$cartonSerial" },
+  //           processId: { $first: "$processId" },
+  //           maxCapacity: { $first: "$maxCapacity" },
+  //           status: { $first: "$status" },
+  //           weightCarton: { $first: "$weightCarton" },
+  //           createdAt: { $first: "$createdAt" },
+  //           updatedAt: { $first: "$updatedAt" },
+  //           __v: { $first: "$__v" },
+  //           cartonStatus: { $first: "$cartonStatus" },
+  //           devices: {
+  //             $push: {
+  //               $mergeObjects: [
+  //                 "$devices",
+  //                 { testRecords: "$devices.testRecords" },
+  //               ],
+  //             },
+  //           },
+  //         },
+  //       },
+  //     ]);
+
+  //     if (!carton) {
+  //       return res.status(404).json({ message: "No Carton Found" });
+  //     }
+  //     res.json(carton);
+  //   } catch (error) {
+  //     console.error("Error fetching carton:", error);
+  //     res.status(500).json({ error: "Server error" + error.message });
+  //   }
+  // },
   getPartialCarton: async (req, res) => {
     try {
       const { processId } = req.params;
@@ -88,6 +353,47 @@ module.exports = {
       res.status(200).json(carton);
     } catch (error) {
       console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error" });
+    }
+  },
+
+  shiftToNextCommonStage: async (req, res) => {
+    try {
+      const { selectedCarton } = req.body;
+
+      if (!selectedCarton) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Carton serial is required" });
+      }
+      const carton = await cartonModel.findOneAndUpdate(
+        { cartonSerial: selectedCarton },
+        { $set: { cartonStatus: "FG_TO_STORE" } },
+        { new: true }
+      );
+
+      if (!carton) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Carton not found" });
+      }
+      const devicesUpdate = await deviceModel.updateMany(
+        { _id: { $in: carton.devices } },
+        {
+          $set: {
+            currentStage: "FG_TO_STORE",
+          },
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        carton,
+        updatedDevices: devicesUpdate.modifiedCount,
+        message: `Carton and ${devicesUpdate.modifiedCount} devices shifted to FG_TO_STORE successfully`,
+      });
+    } catch (error) {
+      console.error("Error updating carton/devices:", error);
       res.status(500).json({ error: "Server error" });
     }
   },
@@ -120,4 +426,60 @@ module.exports = {
         .json({ success: false, error: "Failed to shift cartons" });
     }
   },
+  fetchCurrentRunningProcessFG: async (req, res) => {
+    try {
+      // Step 1: Get processes with status active/complete
+      const processes = await ProcessModel.find({
+        status: { $in: ["active", "complete"] },
+      }).lean();
+
+      // Step 2: Get cartons for each process
+      const processData = await Promise.all(
+        processes.map(async (process) => {
+          const cartons = await cartonModel
+            .find({
+              processId: process._id,
+              cartonStatus: "FG_TO_STORE",
+            })
+            .lean();
+
+          // Step 3: Fetch devices for each carton
+          const cartonsWithDevices = await Promise.all(
+            cartons.map(async (carton) => {
+              const devices = await deviceModel
+                .find({
+                  _id: { $in: carton.devices },
+                })
+                .lean();
+
+              return {
+                ...carton,
+                devices, // devices + their testRecords
+              };
+            })
+          );
+
+          return {
+            ...process,
+            cartons: cartonsWithDevices,
+          };
+        })
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: processData,
+      });
+    } catch (error) {
+      console.error(
+        "Error fetching processes with FG_TO_STORE cartons:",
+        error
+      );
+      res.status(500).json({ success: false, error: "Server error" });
+    }
+  },
+
+  // fetchCurrentRunningProcessFG : async (req, res) => {
+
+  // }
 };

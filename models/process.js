@@ -90,7 +90,6 @@ const processSchema = new mongoose.Schema({
     stageName: { type: String, required: true },
     managedBy: {type:String,required:false},
     requiredSkill: {type:String,required:true},
-    upha: { type: String, required: true },
   }],
   dispatchStatus: {
     type:String,

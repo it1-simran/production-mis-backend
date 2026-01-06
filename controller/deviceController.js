@@ -1,10 +1,12 @@
 const deviceModel = require("../models/device");
+const deviceTestModel = require("../models/deviceTestModel");
 const processModel = require("../models/Process");
 const deviceTestRecords = require("../models/deviceTestModel");
 const planingAndScheduling = require("../models/planingAndSchedulingModel");
 const productModel = require("../models/Products");
 const inventoryModel = require("../models/inventoryManagement");
 const imeiModel = require("../models/imeiModel");
+const NGDevice = require("../models/NGDevice");
 const mongoose = require("mongoose");
 
 module.exports = {
@@ -220,11 +222,9 @@ module.exports = {
           message: `Error fetching planing data: ${err.message}`,
         });
       }
-
-
       let products;
       try {
-        products = await processModel.find({'_id':planing.selectedProcess});
+        products = await processModel.find({ _id: planing.selectedProcess });
         if (!products) {
           return res.status(404).json({
             status: 404,
@@ -272,14 +272,6 @@ module.exports = {
         let lastStage = mergedStages[mergedStages.length - 1];
         let nextIndex = getNextIndex(assignedStages, currentIndex);
         if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
-          //if (assignedStages[currentIndex][0].totalUPHA >= 0) {
-          // assignedStages[currentIndex][0].totalUPHA -= 1;
-          // } else {
-          //   return res.status(500).json({
-          //     status: 500,
-          //     message: "No remaining UPHA to decrement at current stage.",
-          //   });
-          // }
           if (data.status === "Pass") {
             assignedStages[currentIndex][0].totalUPHA -= 1;
             assignedStages[currentIndex][0].passedDevice += 1;
@@ -305,6 +297,112 @@ module.exports = {
             }
           } else {
             assignedStages[currentIndex][0].ngDevice += 1;
+            data.assignedDeviceTo = req.body.assignedDeviceTo;
+            if (
+              data.assignedDeviceTo === "assignedDeviceTo" ||
+              data.assignedDeviceTo === "QC"
+            ) {
+              try {
+                const ngPayload = {
+                  processId: planing.selectedProcess || data.processId || null,
+                  userId: data.operatorId || data.userId || null,
+                  department: data.assignedDeviceTo === "QC" ? "QC" : "TRC",
+                  serialNo:
+                    data.serialNo ||
+                    data.serialNoValue ||
+                    data.deviceSerial ||
+                    "",
+                  ngStage: currentStage || data.ngStage || "",
+                };
+                // Only attempt to create when required identifiers are present
+                if (
+                  ngPayload.processId &&
+                  ngPayload.userId &&
+                  ngPayload.serialNo
+                ) {
+                  const ngRecord = new NGDevice(ngPayload);
+                  await ngRecord.save();
+                } else {
+                  console.warn(
+                    "NGDevice not created due to missing fields",
+                    ngPayload
+                  );
+                }
+              } catch (ngErr) {
+                console.error("Error creating NGDevice record:", ngErr);
+              }
+            } else {
+              // Move device to previous stage
+              try {
+                const serial =
+                  data.serialNo ||
+                  data.serialNoValue ||
+                  data.deviceSerial ||
+                  data.serial ||
+                  null;
+                const deviceId = data.deviceId || null;
+                let deviceToUpdate = null;
+
+                if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
+                  deviceToUpdate = await deviceModel.findById(deviceId);
+                } else if (serial) {
+                  deviceToUpdate = await deviceModel.findOne({
+                    serialNo: serial,
+                  });
+                }
+
+                if (deviceToUpdate) {
+                  // determine previous stage key by sorting the assignedStages keys
+                  const keys = Object.keys(assignedStages).sort((a, b) => {
+                    const [a1, a2] = a.split("-").map(Number);
+                    const [b1, b2] = b.split("-").map(Number);
+                    return a1 - b1 || a2 - b2;
+                  });
+
+                  const curIdxStr = currentIndex.toString();
+                  const pos = keys.indexOf(curIdxStr);
+
+                  if (pos > 0) {
+                    const prevKey = keys[pos - 1];
+                    const prevStageName =
+                      assignedStages[prevKey] && assignedStages[prevKey][0]
+                        ? assignedStages[prevKey][0].name
+                        : null;
+
+                    if (prevStageName) {
+                      deviceToUpdate.currentStage = prevStageName;
+                      await deviceToUpdate.save();
+
+                      // update counters for previous stage so planing data stays consistent
+                      if (
+                        assignedStages[prevKey] &&
+                        assignedStages[prevKey][0]
+                      ) {
+                        assignedStages[prevKey][0].totalUPHA =
+                          (assignedStages[prevKey][0].totalUPHA || 0) + 1;
+                      }
+                    } else {
+                      console.warn(
+                        "Previous stage name not found for key",
+                        prevKey
+                      );
+                    }
+                  } else {
+                    console.warn(
+                      "No previous stage available for current index",
+                      currentIndex
+                    );
+                  }
+                } else {
+                  console.warn("Device not found to move to previous stage", {
+                    deviceId,
+                    serial,
+                  });
+                }
+              } catch (mvErr) {
+                console.error("Error moving device to previous stage:", mvErr);
+              }
+            }
           }
         }
         if (currentStage === "FG to Store") {
@@ -370,88 +468,6 @@ module.exports = {
       });
     }
   },
-
-  // createDeviceTestEntry: async (req, res) => {
-  //   try {
-  //     const data = req.body;
-  //     let nextIndex;
-  //     const planing = await planingAndScheduling.findById(data.planId);
-  //     const products = await productModel.findById(data.productId);
-  //     let assignedStages = JSON.parse(planing.assignedStages);
-  //     let assignedOperator = JSON.parse(planing.assignedOperators);
-  //     let matchingIndices = Object.keys(assignedOperator).filter((key) =>
-  //       assignedOperator[key].some(
-  //         (operator) => operator._id === data.operatorId
-  //       )
-  //     );
-
-  //     if (matchingIndices.length > 0) {
-  //       let currentIndex = matchingIndices[0];
-  //       let currentStage = assignedStages[currentIndex][0]?.name;
-  //       let productStages = products.stages.map((stage) => stage.stageName);
-  //       let commonStages = products.commonStages.map((stage) => stage.stageName);
-  //       console.log("productStages ==>", productStages);
-  //       console.log("commonStages ===>", commonStages);
-  //       const mergedStages = [...productStages, ...commonStages];
-  //       let lastStage = mergedStages[mergedStages.length - 1];
-  //       nextIndex = Object.keys(assignedStages).find(
-  //         (index) => index > currentIndex
-  //       );
-  //       if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
-  //         assignedStages[currentIndex][0].totalUPHA -= 1;
-  //         if (data.status === "Pass") {
-  //           assignedStages[currentIndex][0].passedDevice += 1;
-  //         } else {
-  //           assignedStages[currentIndex][0].ngDevice += 1;
-  //         }
-  //       }
-  //       if(currentStage === "FG to Store") {
-  //           planing.consumedKit += 1;
-  //       }
-  //       if (currentStage === lastStage) {
-  //         assignedStages[currentIndex][0].totalUPHA -= 1;
-
-  //       } else {
-  //         if (
-  //           nextIndex &&
-  //           assignedStages[nextIndex] &&
-  //           assignedStages[nextIndex][0] &&
-  //           data.status === "Pass"
-  //         ) {
-  //           assignedStages[nextIndex][0].totalUPHA += 1;
-  //         }
-  //       }
-  //     }
-  //     console.log("assignedStages ===>", assignedStages);
-  //     return false;
-  //     planing.assignedStages = JSON.stringify(assignedStages);
-  //     const updatedstages = await planingAndScheduling.findByIdAndUpdate(
-  //       data.planId,
-  //       { $set: planing },
-  //       { new: true, runValidators: true }
-  //     );
-  //     if (updatedstages) {
-  //       const deviceTestRecord = new deviceTestRecords(data);
-  //       const savedDeviceTestRecord = await deviceTestRecord.save();
-  //       return res.status(200).json({
-  //         status: 200,
-  //         message: "Devices Test Entry added successfully",
-  //         data: savedDeviceTestRecord,
-  //       });
-  //     } else {
-  //       return res.status(500).json({
-  //         status: 500,
-  //         message: "Erorr Updating Planning",
-  //         data: updatedstages,
-  //       });
-  //     }
-  //   } catch (error) {
-  //     return res.status(500).json({
-  //       status: 500,
-  //       error: error.message,
-  //     });
-  //   }
-  // },
   getOverallDeviceTestEntry: async (req, res) => {
     try {
       const DeviceTestEntry = await deviceTestRecords.find();
@@ -526,7 +542,6 @@ module.exports = {
   },
   updateStageByDeviceId: async (req, res) => {
     try {
-
       let deviceId = req.params.deviceId;
       let updates = req.body;
       const updatedDevice = await deviceModel.findByIdAndUpdate(

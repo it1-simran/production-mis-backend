@@ -24,7 +24,7 @@ const assignKitsToLineSchema = new mongoose.Schema({
     }],
     default: [],
   },
-  issuedKitsStatus: { type: String ,enum : ["PARTIALLY_ISSUED","ISSUED","NOT_ISSUED"],required: false},
+  issuedKitsStatus: { type: String ,enum : ["PARTIALLY_ISSUED","ISSUED","NOT_ISSUED",'REJECTED'],required: false},
   status:{type: String, enum: ["ASSIGN_TO_OPERATOR","CONFIRM","REJECT"],required: true},
   createdAt: {type: Date, default: Date.now},
   updatedAt: {type: Date, default: Date.now},
