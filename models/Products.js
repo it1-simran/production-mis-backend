@@ -60,6 +60,7 @@ const productSchema = new mongoose.Schema({
           jigFields: [
             {
               jigName: { type: String, required: false, default: "" },
+              unit: { type: String, required: false, default: "" },
               validationType: { type: String, required: false, default: "" },
               rangeFrom: { type: Number, default: 0 },
               rangeTo: { type: Number, default: 0 },
@@ -80,7 +81,6 @@ const productSchema = new mongoose.Schema({
     stageName: { type: String, required: true },
     managedBy: {type:String,required:false},
     requiredSkill: {type:String,required:true},
-    upha: { type: String, required: true },
   }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
