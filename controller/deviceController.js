@@ -540,6 +540,43 @@ module.exports = {
       });
     }
   },
+  updateStageBySerialNo: async (req, res) => {
+    try {
+      let serialNo = req.params.serialNo || req.body.serialNo;
+      let updates = req.body;
+      // let data = req.body.customFields;
+      // console.log("updates ===>", updates);
+      // console.log("data ===>", serialNo);
+
+      // return false;
+
+      // Find device by serialNo first
+      const device = await deviceModel.findOne({ serialNo: serialNo });
+      if (!device) {
+        return res.status(404).json({ message: "Device with serial number not found" });
+      }
+      
+      // Update the device by its ID
+      const updatedDevice = await deviceModel.findByIdAndUpdate(
+        device._id,
+        { $set: updates },
+        { new: true, runValidators: true }
+      );
+      if (!updatedDevice) {
+        return res.status(404).json({ message: "Device not found" });
+      }
+      res.status(200).json({
+        status: 200,
+        message: "Device updated successfully",
+        updatedDevice,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        error: error.message,
+      });
+    }
+  },
   updateStageByDeviceId: async (req, res) => {
     try {
       let deviceId = req.params.deviceId;

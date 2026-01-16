@@ -55,7 +55,7 @@ module.exports = {
       return res.status(500).json({status: 500, error: error.message});
     }
   },
-  getTaskByUserID: async (req, res) => {
+   getTaskByUserID: async (req, res) => {
     try {
       const userId = req.params.id;
       const currentDate = moment.utc().startOf("day").toISOString();

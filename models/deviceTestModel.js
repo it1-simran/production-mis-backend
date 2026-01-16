@@ -8,6 +8,19 @@ const deviceTestSchema = new mongoose.Schema({
   seatNumber:{type:String,required:false},
   stageName: { type: String, required: false },
   status: { type: String, required: false },
+  logs: {
+    type: [
+      {
+        stepName: { type: String, required: false },
+        stepType: { type: String, required: false },
+        logData: { type: mongoose.Schema.Types.Mixed, required: false },
+        status: { type: String, required: false },
+        createdAt: { type: Date, default: Date.now }
+      }
+    ],
+    required: false,
+    default: []
+  },
   assignedDeviceTo: {type:String,required: false },
   timeConsumed: { type: String, required: false },
   createdAt: { type: Date, default: Date.now },

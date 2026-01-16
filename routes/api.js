@@ -113,6 +113,7 @@ router.get('/getOverallDeviceTestEntry',authController.authenticateToken,deviceC
 router.get('/getDeviceTestEntryByOperatorId/:id',authController.authenticateToken,deviceController.getDeviceTestEntryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId',authController.authenticateToken,deviceController.getDeviceTestHistoryByDeviceId);
 router.patch('/updateStageByDeviceId/:deviceId',authController.authenticateToken,deviceController.updateStageByDeviceId);
+router.patch('/updateStageBySerialNo/:serialNo',authController.authenticateToken,deviceController.updateStageBySerialNo);
 router.post('/createReport',authController.authenticateToken,reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId',authController.authenticateToken,deviceController.getOverallProcessByOperatorId);
 router.post('/sticker/fields/create', authController.authenticateToken,stickerController.createStickerField);
