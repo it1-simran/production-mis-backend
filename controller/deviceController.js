@@ -273,7 +273,9 @@ module.exports = {
         let nextIndex = getNextIndex(assignedStages, currentIndex);
         if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
           if (data.status === "Pass") {
-            assignedStages[currentIndex][0].totalUPHA -= 1;
+            if (assignedStages[currentIndex][0].totalUPHA > 0) {
+              assignedStages[currentIndex][0].totalUPHA -= 1;
+            }
             assignedStages[currentIndex][0].passedDevice += 1;
             if (currentStage === lastProductStage) {
               if (commonStages.length > 0) {
@@ -413,6 +415,7 @@ module.exports = {
         }
         planing.assignedStages = JSON.stringify(assignedStages);
         planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
+
         let updatedstages;
         try {
           updatedstages = await planingAndScheduling.findByIdAndUpdate(
@@ -555,7 +558,7 @@ module.exports = {
       if (!device) {
         return res.status(404).json({ message: "Device with serial number not found" });
       }
-      
+
       // Update the device by its ID
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,

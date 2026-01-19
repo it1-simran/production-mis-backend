@@ -121,12 +121,18 @@ module.exports = {
             createdAt: 1,
             updatedAt: 1,
             status: 1,
-            kitStatus:1,
+            kitStatus: 1,
             productDetails: 1,
           },
         },
       ]);
-      let processInventory = data.filter((value) =>  value?.status  ==  "Waiting_Kits_allocation" || value?.kitStatus == "partially_issued");
+      const processInventory = data.filter(
+        (item) =>
+          item?.status === "Waiting_Kits_allocation" ||
+          item?.status === "active" ||
+          item?.kitStatus === "partially_issued"
+      );
+
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Inventories Fetched Sucessfully!!",
@@ -199,7 +205,7 @@ module.exports = {
       const updatedData = {
         issuedCartons:
           process?.issuedCartons + parseInt(req?.body?.issueCartonProcess),
-          updatedAt: new Date(),
+        updatedAt: new Date(),
       };
       const updatedIssuedCarton = await InventoryModel.findByIdAndUpdate(
         Inventory._id,
