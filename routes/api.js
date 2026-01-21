@@ -111,9 +111,11 @@ router.get('/devices/devicesByProductID/:id', authController.authenticateToken, 
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
+router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, deviceController.getDeviceTestHistoryByDeviceId);
 router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, deviceController.updateStageByDeviceId);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, deviceController.updateStageBySerialNo);
+router.post('/devices/markAsResolved', authController.authenticateToken, deviceController.markAsResolved);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
 router.post('/sticker/fields/create', authController.authenticateToken, stickerController.createStickerField);

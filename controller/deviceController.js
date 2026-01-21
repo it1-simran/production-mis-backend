@@ -489,22 +489,42 @@ module.exports = {
   getDeviceTestEntryByOperatorId: async (req, res) => {
     try {
       const id = req.params.id;
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
-      const deviceTestRecord = await deviceTestRecords.find({
-        operatorId: id,
-        createdAt: {
-          $gte: startOfDay,
-          $lt: endOfDay,
-        },
-      });
+      const { date, startDate, endDate } = req.query;
+
+      let query = { operatorId: id };
+      let startOfDay, endOfDay;
+
+      if (date) {
+        const targetDate = new Date(date);
+        startOfDay = new Date(targetDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        endOfDay = new Date(targetDate);
+        endOfDay.setHours(23, 59, 59, 999);
+      } else if (startDate && endDate) {
+        startOfDay = new Date(startDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        endOfDay = new Date(endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+      } else {
+        // Default to current date
+        startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+      }
+
+      query.createdAt = {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      };
+
+      const deviceTestRecord = await deviceTestRecords.find(query);
+
       if (deviceTestRecord.length === 0) {
         return res.status(404).json({
           status: 404,
           message:
-            "No device records found for the given Operator ID on the current date",
+            "No device records found for the given Operator ID with the specified filters/date",
         });
       }
       return res.status(200).json({
@@ -604,6 +624,74 @@ module.exports = {
       });
     }
   },
+  markAsResolved: async (req, res) => {
+    try {
+      const { deviceId, serialNumber, serialNo } = req.body;
+
+      if (!deviceId || !(serialNumber || serialNo)) {
+        return res.status(400).json({ message: "deviceId and serialNumber are required" });
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(deviceId)) {
+        return res.status(400).json({ message: "Invalid deviceId" });
+      }
+
+      const device = await deviceModel.findById(deviceId);
+      if (!device) {
+        return res.status(404).json({ message: "Device not found" });
+      }
+
+      const incomingSerial = serialNumber || serialNo;
+      if (device.serialNo !== incomingSerial) {
+        return res.status(400).json({ message: "Serial number does not match the device" });
+      }
+
+      const process = await processModel.findById(device.processID);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found for device" });
+      }
+
+      const firstStageName = Array.isArray(process.stages) && process.stages.length > 0
+        ? (process.stages[0]?.stageName || "")
+        : "";
+
+      const lastRecord = await deviceTestRecords
+        .findOne({ deviceId: device._id })
+        .sort({ createdAt: -1 });
+      if (lastRecord) {
+        await deviceTestRecords.deleteOne({ _id: lastRecord._id });
+      }
+
+      const testRecordPayload = {
+        deviceId: device._id,
+        processId: device.processID,
+        serialNo: device.serialNo,
+        stageName: "QC",
+        status: "QC Resolved",
+        assignedDeviceTo: "QC",
+      };
+
+      const testRecord = new deviceTestRecords(testRecordPayload);
+      const savedRecord = await testRecord.save();
+
+      const updatedDevice = await deviceModel.findByIdAndUpdate(
+        device._id,
+        { $set: { status: "", currentStage: firstStageName } },
+        { new: true, runValidators: true }
+      );
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device marked as resolved",
+        data: {
+          device: updatedDevice,
+          testRecord: savedRecord,
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   getOverallProcessByOperatorId: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
@@ -623,6 +711,51 @@ module.exports = {
       return res.status(500).json({
         status: 500,
         message: "An error occurred while retrieving the process.",
+        error: error.message,
+      });
+    }
+  },
+  getDeviceTestHistoryByOperatorId: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const { date, startDate, endDate } = req.query;
+
+      let query = { operatorId: id };
+
+      if (date) {
+        const targetDate = new Date(date);
+        const startOfDay = new Date(targetDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(targetDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: startOfDay, $lte: endOfDay };
+      } else if (startDate && endDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt = { $gte: start, $lte: end };
+      }
+
+      const deviceTestRecord = await deviceTestRecords
+        .find(query)
+        .sort({ createdAt: -1 });
+
+      if (deviceTestRecord.length === 0) {
+        return res.status(404).json({
+          status: 404,
+          message:
+            "No device records found for the given Operator ID with the specified filters",
+        });
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Device records retrieved successfully",
+        data: deviceTestRecord,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
         error: error.message,
       });
     }
