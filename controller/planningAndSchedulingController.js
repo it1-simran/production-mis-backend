@@ -139,6 +139,12 @@ module.exports = {
             consumedKit: 1,
             downTime: 1,
             processName: "$planingData.name",
+            isActiveProcess: {
+              $and: [
+                { $eq: [{ $toLower: "$planingData.status" }, "active"] },
+                { $lte: ["$startDate", "$$NOW"] }
+              ]
+            },
           },
         },
       ]);
@@ -579,6 +585,12 @@ module.exports = {
             endTime: "$shiftDetails.endTime",
             totalBreakTime: "$shiftDetails.totalBreakTime",
             //stageType: "$assignOperatorToPlans.stageType"
+            isActiveProcess: {
+              $and: [
+                { $eq: [{ $toLower: "$processDetails.status" }, "active"] },
+                { $lte: ["$startDate", "$$NOW"] }
+              ]
+            }
           },
         },
       ]);
@@ -813,10 +825,22 @@ module.exports = {
         },
       ]);
 
+      // compute active flag based on Asia/Kolkata current datetime and process status
+      const now = moment.tz("Asia/Kolkata").toDate();
+      const plansWithActive = response.map((p) => {
+        const start = p.startDate ? new Date(p.startDate) : null;
+        const processActive =
+          p.processDetails &&
+          typeof p.processDetails.status === "string" &&
+          p.processDetails.status.toLowerCase() === "active";
+        const inRange = start && start <= now;
+        return Object.assign({}, p, { isActiveProcess: processActive && inRange });
+      });
+
       return res.status(200).json({
         status: 200,
         message: "Planning and Scheduling data fetched successfully",
-        plans: response,
+        plans: plansWithActive,
       });
     } catch (error) {
       console.error("API Error:", error.message);

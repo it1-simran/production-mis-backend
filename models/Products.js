@@ -5,8 +5,8 @@ const productSchema = new mongoose.Schema({
   stages: [
     {
       stageName: { type: String, required: true },
-      managedBy: {type:String,required:false},
-      requiredSkill: {type:String,required:true},
+      managedBy: { type: String, required: false },
+      requiredSkill: { type: String, required: true },
       upha: { type: String, required: true },
       sopFile: { type: String, default: "" },
       subSteps: [
@@ -15,7 +15,12 @@ const productSchema = new mongoose.Schema({
           description: { type: String, default: "" },
           stepType: { type: String, required: false, enum: ["manual", "jig"] },
           isPrinterEnable: { type: Boolean, required: false, default: false },
-          isCheckboxNGStatus: { type: Boolean, required: false, default: false},
+          ngTimeout: { type: Number, required: false, default: 0 },
+          isCheckboxNGStatus: {
+            type: Boolean,
+            required: false,
+            default: false,
+          },
           isPackagingStatus: { type: Boolean, required: false, default: false },
           packagingData: {
             packagingType: { type: String, required: false, default: "" },
@@ -62,26 +67,44 @@ const productSchema = new mongoose.Schema({
               jigName: { type: String, required: false, default: "" },
               unit: { type: String, required: false, default: "" },
               validationType: { type: String, required: false, default: "" },
-              rangeFrom: { type: Number, default: 0 },
-              rangeTo: { type: Number, default: 0 },
-              value: { type: String, default: "" },
+              rangeFrom: { type: Number, default: 0, required:false },
+              rangeTo: { type: Number, default: 0, required:false },
+              value: { type: String, default: "", required:false},
+              lengthFrom:{ type: Number, default:0, required:false},
+              lengthTo:{ type: Number, default:0, required:false},
             },
+          ],
+          customFields: [
+            {
+              fieldName: { type: String, required: false, default: "" },
+              isSubExpan: { type: Boolean, required: false, default: false},
+              lengthFrom:{ type: Number, default:0, required:false},
+              lengthTo:{ type: Number, default:0, required:false},
+              rangeFrom: { type: Number, default:0, required:false  },
+              rangeTo: { type: Number, default:0, required:false  },  
+              validationType: { type: String, required: false, default: "" },
+              value: { type: String, default: "", required:false},
+            }
           ],
           stepFields: {
             validationType: { type: String, required: false },
             rangeFrom: { type: Number, default: 0 },
             rangeTo: { type: Number, default: 0 },
             value: { type: String, default: "" },
+            actionType: { type: String, required: false, default: "" },
+            command: { type: String, required: false, default: "" },
           },
         },
       ],
     },
   ],
-  commonStages:[{
-    stageName: { type: String, required: true },
-    managedBy: {type:String,required:false},
-    requiredSkill: {type:String,required:true},
-  }],
+  commonStages: [
+    {
+      stageName: { type: String, required: true },
+      managedBy: { type: String, required: false },
+      requiredSkill: { type: String, required: true },
+    },
+  ],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -2,30 +2,38 @@ const mongoose = require("mongoose");
 
 const processSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  selectedProduct: { type: mongoose.Schema.Types.ObjectId, ref: 'products', required: true },
+  selectedProduct: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "products",
+    required: true,
+  },
   orderConfirmationNo: { type: String, required: true },
   processID: { type: String, required: true },
   quantity: { type: String, required: true },
-  issuedKits: {type: Number, required:false, default:0},
-  issuedCartons: {type: Number, default:0},
-  consumedKits: {type:Number, default:0},
-  consumedCartons: {type:Number, default:0},
+  issuedKits: { type: Number, required: false, default: 0 },
+  issuedCartons: { type: Number, default: 0 },
+  consumedKits: { type: Number, default: 0 },
+  consumedCartons: { type: Number, default: 0 },
   descripition: { type: String, required: true },
-  fgToStore: {type: Number, required: false, default: 0},
+  fgToStore: { type: Number, required: false, default: 0 },
   stages: [
     {
       stageName: { type: String, required: true },
-      managedBy: {type:String,required:false},
-      requiredSkill: {type:String,required:true},
+      managedBy: { type: String, required: false },
+      requiredSkill: { type: String, required: true },
       upha: { type: String, required: true },
       sopFile: { type: String, default: "" },
-      subSteps: [
-        {
+      subSteps: [{
           stepName: { type: String, required: false },
           description: { type: String, default: "" },
           stepType: { type: String, required: false, enum: ["manual", "jig"] },
+          ngTimeout: { type: Number, required: false, default: 0 },
           isPrinterEnable: { type: Boolean, required: false, default: false },
-          isCheckboxNGStatus: { type: Boolean, required: false, default: false},
+          isCheckboxNGStatus: {
+            type: Boolean,
+            required: false,
+            default: false,
+          },
           isPackagingStatus: { type: Boolean, required: false, default: false },
           packagingData: {
             packagingType: { type: String, required: false, default: "" },
@@ -71,9 +79,11 @@ const processSchema = new mongoose.Schema({
             {
               jigName: { type: String, required: false, default: "" },
               validationType: { type: String, required: false, default: "" },
-              rangeFrom: { type: Number, default: 0 },
-              rangeTo: { type: Number, default: 0 },
-              value: { type: String, default: "" },
+              rangeFrom: { type: Number, default: 0, required:false },
+              rangeTo: { type: Number, default: 0, required:false },
+              value: { type: String, default: "", required:false },
+              lengthFrom:{ type: Number, default:0, required:false},
+              lengthTo:{ type: Number, default:0, required:false},
             },
           ],
           stepFields: {
@@ -81,34 +91,45 @@ const processSchema = new mongoose.Schema({
             rangeFrom: { type: Number, default: 0 },
             rangeTo: { type: Number, default: 0 },
             value: { type: String, default: "" },
+            actionType: { type: String, required: false, default: "" },
+            command: { type: String, required: false, default: "" },
           },
-        },
-      ],
+          customFields: [
+            {
+              fieldName: { type: String, required: false, default: "" },
+              isSubExpan: { type: Boolean, required: false, default: false},
+              lengthFrom:{ type: Number, default:0, required:false},
+              lengthTo:{ type: Number, default:0, required:false},
+              rangeFrom: { type: Number, default:0, required:false  },
+              rangeTo: { type: Number, default:0, required:false  },  
+              validationType: { type: String, required: false, default: "" },
+              value: { type: String, default: "", required:false},
+            }
+          ],
+        }],
     },
   ],
-  commonStages:[{
-    stageName: { type: String, required: true },
-    managedBy: {type:String,required:false},
-    requiredSkill: {type:String,required:true},
-  }],
+  commonStages: [
+    {
+      stageName: { type: String, required: true },
+      managedBy: { type: String, required: false },
+      requiredSkill: { type: String, required: true },
+    },
+  ],
   dispatchStatus: {
-    type:String,
-    enum: ['dispatched', 'not dispatched'],
-    default: 'not dispatched'
-  },
-  deliverStatus : {
-    type:String,
-    enum: ['delivered', 'not delivered'],
-    default: 'not delivered'
-  },
-  kitStatus: { 
     type: String,
-    enum: [
-      "issued",
-      "partially_issued",
-      "not_issued"
-    ],
-    default: "not_issued"
+    enum: ["dispatched", "not dispatched"],
+    default: "not dispatched",
+  },
+  deliverStatus: {
+    type: String,
+    enum: ["delivered", "not delivered"],
+    default: "not delivered",
+  },
+  kitStatus: {
+    type: String,
+    enum: ["issued", "partially_issued", "not_issued"],
+    default: "not_issued",
   },
   status: {
     type: String,
@@ -120,9 +141,9 @@ const processSchema = new mongoose.Schema({
       "waiting_for_kits_confirmation",
       "active",
       "down_time_hold",
-      "completed"
+      "completed",
     ],
-    default: "waiting_schedule"
+    default: "waiting_schedule",
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

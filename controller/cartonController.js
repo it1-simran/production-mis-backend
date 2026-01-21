@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 const cartonModel = require("../models/cartonManagement");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/Process");
+const deviceTestModel = require("../models/deviceTestModel");
+const inventoryModel = require("../models/inventoryManagement");
+const planingModel = require("../models/planingAndSchedulingModel");
 // const ProcessModel = require("../models/process");
 module.exports = {
   createOrUpdate: async (req, res) => {
@@ -66,7 +69,7 @@ module.exports = {
           $match: {
             processId: new mongoose.Types.ObjectId(processId),
             status: "full",
-            cartonStatus: "PDI",
+            cartonStatus: "",
           },
         },
         {
@@ -479,7 +482,105 @@ module.exports = {
     }
   },
 
-  // fetchCurrentRunningProcessFG : async (req, res) => {
+  keepInStore: async (req, res) => {
+    try {
+      const { processId } = req.params;
+      const {
+        selectedCarton,
+        operatorId,
+        planId,
+        status,
+        stageName,
+        logs,
+        timeConsumed,
+      } = req.body;
 
-  // }
+      if (!selectedCarton) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Carton serial is required" });
+      }
+
+      // 1. Fetch the carton by carton serial no
+      const carton = await cartonModel.findOne({ cartonSerial: selectedCarton });
+      if (!carton) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Carton not found" });
+      }
+
+      // 2. Fetch all devices in that carton
+      const devices = await deviceModel.find({ _id: { $in: carton.devices } });
+      if (!devices || devices.length === 0) {
+        return res
+          .status(404)
+          .json({ success: false, message: "No devices found in this carton" });
+      }
+
+      const deviceCount = devices.length;
+
+      // 3. Create device test entries for each device in the carton
+      const testEntries = devices.map((device) => ({
+        deviceId: device._id,
+        processId,
+        operatorId,
+        serialNo: device.serialNo,
+        stageName: stageName || "FG to Store",
+        status: status || "Pass",
+        logs: logs || [],
+        timeConsumed: timeConsumed || "0",
+      }));
+      await deviceTestModel.insertMany(testEntries);
+
+      // 4. Update the count for the consumed kits into the process
+      const process = await ProcessModel.findById(processId);
+      if (process) {
+        process.consumedKits = (process.consumedKits || 0) + deviceCount;
+        process.fgToStore = (process.fgToStore || 0) + deviceCount;
+        await process.save();
+      }
+
+      // 5. Update the count for the consumed kits into the planning if planId is provided
+      if (planId) {
+        const planing = await planingModel.findById(planId);
+        if (planing) {
+          planing.consumedKit = (planing.consumedKit || 0) + deviceCount;
+          await planing.save();
+        }
+      }
+
+      // 6. Update the inventory of the store
+      if (process && process.selectedProduct) {
+        const inventory = await inventoryModel.findOne({
+          productType: process.selectedProduct,
+        });
+        if (inventory) {
+          inventory.quantity = (inventory.quantity || 0) + deviceCount;
+          inventory.status = "In Stock";
+          await inventory.save();
+        }
+      }
+
+      // 7. Update all devices' current stage
+      await deviceModel.updateMany(
+        { _id: { $in: carton.devices } },
+        { $set: { currentStage: "KEEP_IN_STORE" } }
+      );
+
+      // 8. Update carton status to STOCKED
+      carton.cartonStatus = "STOCKED";
+      await carton.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `${deviceCount} devices from carton ${selectedCarton} kept in store successfully`,
+        devicesProcessed: deviceCount,
+      });
+    } catch (error) {
+      console.error("Error in keepInStore:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Server error: " + error.message });
+    }
+  },
 };

@@ -72,6 +72,7 @@ module.exports = {
             status: 1,
             createdAt: 1,
             updatedAt: 1,
+            consumedKits: 1,
             fgToStore: 1,
             dispatchStatus: 1,
             deliverStatus: 1,
@@ -517,7 +518,7 @@ module.exports = {
   updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
-      let data = { status: req?.body?.status,issuedKitsStatus:req?.body?.issuedKitsStatus };
+      let data = { status: req?.body?.status, issuedKitsStatus: req?.body?.issuedKitsStatus };
       let processData = {
         status: req.body.processStatus,
       };
