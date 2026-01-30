@@ -35,7 +35,7 @@ module.exports = {
           route: "/store/returned-kits",
         },
         {
-          icon: `<svg fill="#ffffff" width="64px" height="64px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" data-name="Layer 1" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M10,17h1v1a1,1,0,0,0,2,0V17h1a1,1,0,0,0,0-2H13V14a1,1,0,0,0-2,0v1H10a1,1,0,0,0,0,2ZM19,6H17V5a3,3,0,0,0-3-3H10A3,3,0,0,0,7,5V6H5A3,3,0,0,0,2,9V19a3,3,0,0,0,3,3H19a3,3,0,0,0,3-3V9A3,3,0,0,0,19,6ZM9,5a1,1,0,0,1,1-1h4a1,1,0,0,1,1,1V6H9ZM20,19a1,1,0,0,1-1,1H5a1,1,0,0,1-1-1V12H20Zm0-9H4V9A1,1,0,0,1,5,8H19a1,1,0,0,1,1,1Z"></path></g></svg>`,
+          icon: `<svg fill="#ffffff" width="18px" height="19px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" data-name="Layer 1" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M10,17h1v1a1,1,0,0,0,2,0V17h1a1,1,0,0,0,0-2H13V14a1,1,0,0,0-2,0v1H10a1,1,0,0,0,0,2ZM19,6H17V5a3,3,0,0,0-3-3H10A3,3,0,0,0,7,5V6H5A3,3,0,0,0,2,9V19a3,3,0,0,0,3,3H19a3,3,0,0,0,3-3V9A3,3,0,0,0,19,6ZM9,5a1,1,0,0,1,1-1h4a1,1,0,0,1,1,1V6H9ZM20,19a1,1,0,0,1-1,1H5a1,1,0,0,1-1-1V12H20Zm0-9H4V9A1,1,0,0,1,5,8H19a1,1,0,0,1,1,1Z"></path></g></svg>`,
           label: "Remaining Kits",
           route: "/production-manager/remaining-kit",
         },
@@ -71,6 +71,15 @@ module.exports = {
             { label: "View IMEI", route: "/device/viewIMEI" },
             { label: "Add Multiple IMEI", route: "/device/addIMEI" },
             { label: "Add Multiple Devices", route: "/device/addDevices" },
+          ],
+        },
+        {
+          icon: `<svg width="18" height="19" viewBox="0 0 24 24" id="meteor-icon-kit__solid-scanner" xmlns="http://www.w3.org/2000/svg" class="fill-current" > <g id="SVGRepo_bgCarrier" stroke-width="0"></g> <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" ></g> <g id="SVGRepo_iconCarrier"> <path fill-rule="evenodd" clip-rule="evenodd" d="M19.0002 -0.00007H23C23.5523 -0.00007 24 0.44763 24 0.99989C24 1.55216 23.5523 1.99986 23 1.99986H19.0002C18.4479 1.99986 18.0002 1.55216 18.0002 0.99989C18.0002 0.44763 18.4479 -0.00007 19.0002 -0.00007zM19.0002 3.99978H23C23.5523 3.99978 24 4.44748 24 4.99975V5.99971C24 6.55197 23.5523 6.99967 23 6.99967H19.0002C18.4479 6.99967 18.0002 6.55197 18.0002 5.99971V4.99975C18.0002 4.44748 18.4479 3.99978 19.0002 3.99978zM19.0002 8.9996H23C23.5523 8.9996 24 9.4473 24 9.9996C24 10.5518 23.5523 10.9995 23 10.9995H19.0002C18.4479 10.9995 18.0002 10.5518 18.0002 9.9996C18.0002 9.4473 18.4479 8.9996 19.0002 8.9996zM19.0002 12.9995H23C23.5523 12.9995 24 13.4472 24 13.9994C24 14.5517 23.5523 14.9994 23 14.9994H19.0002C18.4479 14.9994 18.0002 14.5517 18.0002 13.9994C18.0002 13.4472 18.4479 12.9995 19.0002 12.9995zM19.0002 16.9993H23C23.5523 16.9993 24 17.447 24 17.9993V18.9992C24 19.5515 23.5523 19.9992 23 19.9992H19.0002C18.4479 19.9992 18.0002 19.5515 18.0002 18.9992V17.9993C18.0002 17.447 18.4479 16.9993 19.0002 16.9993zM8.15554 16.9993L6.94041 20.3409C6.79671 20.7361 6.42114 20.9992 6.00065 20.9992H1.00083C0.306892 20.9992 -0.176077 20.3096 0.0610717 19.6575L3.16602 11.1189C1.8581 10.2171 1.00083 8.7085 1.00083 6.99967C1.00083 4.23835 3.23933 1.99986 6.00065 1.99986H15.0003C15.5526 1.99986 16.0003 2.44755 16.0003 2.99982V10.9995C16.0003 11.5518 15.5526 11.9995 15.0003 11.9995H14.0004V13.9994C14.0004 15.6562 12.6573 16.9993 11.0005 16.9993H8.15554zM8.88279 14.9994H11.0005C11.5527 14.9994 12.0004 14.5517 12.0004 13.9994V11.9995H9.97366L8.88279 14.9994zM6.00065 9.9996H8.57286H6.00065z" fill="#ffffff" ></path> </g> </svg>`,
+          label: "Room Management",
+          route: "#",
+          children: [
+            { label: "View Rooms", route: "/roomMapping/view" },
+            { label: "Add Room", route: "/roomMapping/add" },
           ],
         },
         {
