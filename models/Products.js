@@ -76,18 +76,6 @@ const productSchema = new mongoose.Schema({
               lengthTo: { type: Number, default: 0, required: false },
             },
           ],
-          customFields: [
-            {
-              fieldName: { type: String, required: false, default: "" },
-              isSubExpan: { type: Boolean, required: false, default: false },
-              lengthFrom: { type: Number, default: 0, required: false },
-              lengthTo: { type: Number, default: 0, required: false },
-              rangeFrom: { type: Number, default: 0, required: false },
-              rangeTo: { type: Number, default: 0, required: false },
-              validationType: { type: String, required: false, default: "" },
-              value: { type: String, default: "", required: false },
-            }
-          ],
           stepFields: {
             validationType: { type: String, required: false },
             rangeFrom: { type: Number, default: 0 },
