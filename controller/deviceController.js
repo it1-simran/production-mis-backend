@@ -1,6 +1,6 @@
 const deviceModel = require("../models/device");
 const deviceTestModel = require("../models/deviceTestModel");
-const processModel = require("../models/Process");
+const processModel = require("../models/process");
 const deviceTestRecords = require("../models/deviceTestModel");
 const planingAndScheduling = require("../models/planingAndSchedulingModel");
 const productModel = require("../models/Products");

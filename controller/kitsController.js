@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const kitsModel = require("../models/returnKitToStore");
 const InventoryModel = require("../models/inventoryManagement");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 
 module.exports = {
   createKitsEntry: async (req, res) => {

@@ -7,7 +7,7 @@ const RoomPlanModel = require("../models/roomPlan");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 module.exports = {
   create: async (req, res) => {
     try {

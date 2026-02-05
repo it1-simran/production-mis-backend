@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const InventoryModel = require("../models/inventoryManagement");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 
 module.exports = {
