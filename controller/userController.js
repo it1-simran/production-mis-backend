@@ -59,6 +59,7 @@ module.exports = {
         dateOfBirth,
         userType,
         skills,
+        mobileNo,
       } = req?.body;
 
       const salt = await bcrypt.genSalt(10);
@@ -73,6 +74,7 @@ module.exports = {
         dateOfBirth,
         userType,
         skills,
+        mobileNo,
       });
 
       await newUser.save();
@@ -179,6 +181,7 @@ module.exports = {
         dateOfBirth,
         userType,
         skills,
+        mobileNo,
       } = req.body;
 
       const updatedData = {
@@ -189,6 +192,7 @@ module.exports = {
         dateOfBirth,
         userType,
         skills,
+        mobileNo,
       };
       const updatedUser = await User.findByIdAndUpdate(id, updatedData, {
         new: true,
