@@ -18,6 +18,9 @@ module.exports = {
     try {
       const id = req.params.id;
       let data = {'status':req.body.status};
+      if (!req.body.processID) {
+        return res.status(400).json({ status: 400, message: "processID is required" });
+      }
       const processData = await ProcessModel.findOne({_id:req.body.processID});
       let updatedProcessData = {
         issuedKits : processData.issuedKits - parseInt(req.body.returnedKits),
