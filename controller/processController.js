@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
 const AsssignOperatorToPlanModel = require("../models/assignOperatorToPlan");
