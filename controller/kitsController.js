@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const kitsModel = require("../models/returnKitToStore");
 const InventoryModel = require("../models/inventoryManagement");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 
 module.exports = {
   createKitsEntry: async (req, res) => {
@@ -18,6 +18,9 @@ module.exports = {
     try {
       const id = req.params.id;
       let data = {'status':req.body.status};
+      if (!req.body.processID) {
+        return res.status(400).json({ status: 400, message: "processID is required" });
+      }
       const processData = await ProcessModel.findOne({_id:req.body.processID});
       let updatedProcessData = {
         issuedKits : processData.issuedKits - parseInt(req.body.returnedKits),

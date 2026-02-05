@@ -7,19 +7,35 @@ const RoomPlanModel = require("../models/roomPlan");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 module.exports = {
   create: async (req, res) => {
     try {
       const formatDateForMongoose = (dateString) => {
-        const [day, month, yearAndTime] = dateString.split("/");
-        const [year, time] = yearAndTime.split(" ");
-        const [hours, minutes, seconds] = time.split(":");
-        return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        if (!dateString) return undefined;
+        if (dateString instanceof Date) return dateString;
+        if (typeof dateString === "string" && dateString.includes("/")) {
+          const [day, month, yearAndTime] = dateString.split("/");
+          const [year, time] = yearAndTime.split(" ");
+          const [hours, minutes, seconds] = time.split(":");
+          return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        }
+        return new Date(dateString);
+      };
+      const safeParse = (val, fallback) => {
+        if (typeof val === "string") {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return fallback;
+          }
+        }
+        if (val === undefined || val === null) return fallback;
+        return val;
       };
       const data = req?.body;
       const planingId = req?.body?.selectedProcess;
-      data.ProcessShiftMappings = JSON.parse(data?.ProcessShiftMappings);
+      data.ProcessShiftMappings = safeParse(data?.ProcessShiftMappings, []);
       data.startDate = formatDateForMongoose(data?.startDate);
       data.estimatedEndDate = formatDateForMongoose(data?.estimatedEndDate);
       const newPlanAndScheduling = new PlaningAndSchedulingModel(data);
@@ -33,7 +49,7 @@ module.exports = {
         },
         { new: true }
       );
-      const assignOperator = JSON.parse(data?.assignedOperators);
+      const assignOperator = safeParse(data?.assignedOperators, []);
       let seatsDetails = {};
       if (assignOperator.length > 0) {
         const keys = Object.keys(assignOperator);
@@ -68,17 +84,30 @@ module.exports = {
   update: async (req, res) => {
     try {
       const formatDateForMongoose = (dateString) => {
-        const [day, month, yearAndTime] = dateString.split("/");
-        const [year, time] = yearAndTime.split(" ");
-        const [hours, minutes, seconds] = time.split(":");
-
-        return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        if (!dateString) return undefined;
+        if (dateString instanceof Date) return dateString;
+        if (typeof dateString === "string" && dateString.includes("/")) {
+          const [day, month, yearAndTime] = dateString.split("/");
+          const [year, time] = yearAndTime.split(" ");
+          const [hours, minutes, seconds] = time.split(":");
+          return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        }
+        return new Date(dateString);
       };
       const id = req.params.id;
       const updatedData = req.body;
-      updatedData.ProcessShiftMappings = JSON.parse(
-        updatedData.ProcessShiftMappings
-      );
+      const safeParse = (val, fallback) => {
+        if (typeof val === "string") {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return fallback;
+          }
+        }
+        if (val === undefined || val === null) return fallback;
+        return val;
+      };
+      updatedData.ProcessShiftMappings = safeParse(updatedData.ProcessShiftMappings, []);
       updatedData.startDate = formatDateForMongoose(updatedData.startDate);
       updatedData.estimatedEndDate = formatDateForMongoose(
         updatedData.estimatedEndDate
@@ -161,7 +190,18 @@ module.exports = {
     try {
       const { roomId, shiftId, startDate, expectedEndDate, shiftDataChange } =
         req.body;
-      let changedData = JSON.parse(shiftDataChange);
+      const safeParse = (val, fallback) => {
+        if (typeof val === "string") {
+          try {
+            return JSON.parse(val);
+          } catch {
+            return fallback;
+          }
+        }
+        if (val === undefined || val === null) return fallback;
+        return val;
+      };
+      let changedData = safeParse(shiftDataChange, {});
       if (!roomId || !shiftId || !startDate || !expectedEndDate) {
         return res.status(400).json({
           error:

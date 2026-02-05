@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const ProcessModel = require("../models/Process");
+const ProcessModel = require("../models/process");
 module.exports = {
   getProcesses: async (req, res) => {
     try {
