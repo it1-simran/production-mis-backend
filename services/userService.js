@@ -4,9 +4,21 @@ const bcrypt = require("bcrypt");
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 class UserService {
   async authenticate(data) {
-    const { email, password } = data;
+    const { email, password, employeeCode, mobileNo, identifier } = data;
+    const loginIdentifier = identifier || email || employeeCode || mobileNo;
+
     try {
-      const user = await User.findOne({ email });
+      if (!loginIdentifier) {
+        return { status: 400, success: false, message: "Please provide email, employee code, or phone number" };
+      }
+
+      const user = await User.findOne({
+        $or: [
+          { email: loginIdentifier },
+          { employeeCode: loginIdentifier },
+          { mobileNo: loginIdentifier },
+        ],
+      });
       if (!user) {
         return { status: 401, success: false, message: "Invalid credentials" };
       }
@@ -38,7 +50,7 @@ class UserService {
     }
   }
   async register(data) {
-    const { name, email, mobileNo, dateOfBirth, userType, department } = data;
+    const { name, email, mobileNo, employeeCode, dateOfBirth, userType, department } = data;
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
     const password = hashedPassword;
@@ -51,6 +63,7 @@ class UserService {
         name,
         email,
         mobileNo,
+        employeeCode,
         password,
         dateOfBirth,
         userType,

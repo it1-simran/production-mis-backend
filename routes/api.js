@@ -26,6 +26,7 @@ const kitsController = require('../controller/kitsController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
+const esimMasterController = require('../controller/esimMasterController');
 const device = require('../models/device');
 connectDB();
 router.get('/items', authController.getItems);
@@ -191,4 +192,6 @@ router.delete("/devices/remove-duplicates", async (req, res) => {
   }
 });
 
+router.post('/esim-master/bulk-create', authController.authenticateToken, esimMasterController.bulkCreate);
+router.get('/esim-master/view', authController.authenticateToken, esimMasterController.view);
 module.exports = router;
