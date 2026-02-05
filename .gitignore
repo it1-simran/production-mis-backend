@@ -33,3 +33,5 @@ Thumbs.db
 routes.zip
 dist/
 coverage/
+
+package-lock.json
