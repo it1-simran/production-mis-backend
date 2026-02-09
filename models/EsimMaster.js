@@ -5,6 +5,8 @@ const esimMasterSchema = new mongoose.Schema({
     esimMake: { type: String, required: false },
     profile1: { type: String, required: false },
     profile2: { type: String, required: false },
+    apnProfile1: { type: String, required: false },
+    apnProfile2: { type: String, required: false },
     // Additional fields for flexibility as per "etc"
     remarks: { type: String, required: false },
 

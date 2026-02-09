@@ -655,20 +655,31 @@ module.exports = {
         ? (process.stages[0]?.stageName || "")
         : "";
 
-      const lastRecord = await deviceTestRecords
-        .findOne({ deviceId: device._id })
-        .sort({ createdAt: -1 });
-      if (lastRecord) {
-        await deviceTestRecords.deleteOne({ _id: lastRecord._id });
-      }
+      await deviceTestRecords.deleteMany({
+        deviceId: device._id,
+        serialNo: incomingSerial,
+      });
 
+      const incomingStatus = req.body.status || "QC Resolved";
+      const isTRC = (incomingStatus || "").toUpperCase().includes("TRC") || !!req.body.trcRemarks;
+      let parsedTrcRemarks = undefined;
+      if (req.body.trcRemarks) {
+        try {
+          parsedTrcRemarks = typeof req.body.trcRemarks === "string"
+            ? JSON.parse(req.body.trcRemarks)
+            : req.body.trcRemarks;
+        } catch (e) {
+          parsedTrcRemarks = { parseError: true, raw: req.body.trcRemarks };
+        }
+      }
       const testRecordPayload = {
         deviceId: device._id,
         processId: device.processID,
         serialNo: device.serialNo,
-        stageName: "QC",
-        status: "QC Resolved",
-        assignedDeviceTo: "QC",
+        stageName: isTRC ? "TRC" : "QC",
+        status: incomingStatus,
+        assignedDeviceTo: isTRC ? "TRC" : "QC",
+        ...(isTRC ? { trcRemarks: parsedTrcRemarks ? [parsedTrcRemarks] : [] } : {}),
       };
 
       const testRecord = new deviceTestRecords(testRecordPayload);

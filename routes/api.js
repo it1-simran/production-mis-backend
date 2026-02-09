@@ -27,6 +27,8 @@ const OrderConfirmationController = require('../controller/orderConfirmationCont
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
 const esimMasterController = require('../controller/esimMasterController');
+const esimMakeController = require('../controller/esimMakeController');
+const esimProfileController = require('../controller/esimProfileController');
 const device = require('../models/device');
 connectDB();
 router.get('/items', authController.getItems);
@@ -192,6 +194,30 @@ router.delete("/devices/remove-duplicates", async (req, res) => {
   }
 });
 
+const esimApnController = require('../controller/esimApnController');
+
 router.post('/esim-master/bulk-create', authController.authenticateToken, esimMasterController.bulkCreate);
+router.post('/esim-master/create', authController.authenticateToken, esimMasterController.create);
 router.get('/esim-master/view', authController.authenticateToken, esimMasterController.view);
+router.put('/esim-master/update/:id', authController.authenticateToken, esimMasterController.update);
+router.delete('/esim-master/delete/:id', authController.authenticateToken, esimMasterController.delete);
+router.post('/esim-master/bulk-delete', authController.authenticateToken, esimMasterController.bulkDelete);
+router.get('/esim-master/ccid/:ccid', authController.authenticateToken, esimMasterController.getByCcid);
+
+router.post('/esim-make/create', authController.authenticateToken, esimMakeController.create);
+router.get('/esim-make/view', authController.authenticateToken, esimMakeController.view);
+router.put('/esim-make/update/:id', authController.authenticateToken, esimMakeController.update);
+router.delete('/esim-make/delete/:id', authController.authenticateToken, esimMakeController.delete);
+
+router.post('/esim-profile/create', authController.authenticateToken, esimProfileController.create);
+router.get('/esim-profile/view', authController.authenticateToken, esimProfileController.view);
+router.put('/esim-profile/update/:id', authController.authenticateToken, esimProfileController.update);
+router.delete('/esim-profile/delete/:id', authController.authenticateToken, esimProfileController.delete);
+
+router.post('/esim-apn/create', authController.authenticateToken, esimApnController.create);
+router.get('/esim-apn/view', authController.authenticateToken, esimApnController.view);
+router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
+router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
+router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
+
 module.exports = router;
