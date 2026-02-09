@@ -8,6 +8,7 @@ const deviceTestSchema = new mongoose.Schema({
   seatNumber:{type:String,required:false},
   stageName: { type: String, required: false },
   status: { type: String, required: false },
+  trcRemarks: { type: [mongoose.Schema.Types.Mixed], required: false, default: [] },
   logs: {
     type: [
       {

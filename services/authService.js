@@ -7,9 +7,9 @@ class AuthService {
 
   // Method to create JWT token
   createToken(user) {
-    return jwt.sign({ id: user.id, username: user.username }, this.secretKey, { expiresIn: '1m' });
+    return jwt.sign({ id: user.id, username: user.username }, this.secretKey, { expiresIn: '24h' });
   }
- verifyToken(token) {
+  verifyToken(token) {
     return new Promise((resolve, reject) => {
       jwt.verify(token, this.secretKey, (err, decoded) => {
         if (err) {
