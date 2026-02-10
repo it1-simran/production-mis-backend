@@ -116,6 +116,7 @@ module.exports = {
             cartonQuantity: "$inventoryProcess.cartonQuantity",
             status: "$inventoryProcess.status",
             productName: "$productDetails.name",
+            fgToStore: 1,
             issuedKits: 1,
             issuedCartons: 1,
             createdAt: 1,
