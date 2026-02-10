@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 module.exports = {
   view: async (req, res) => {
     try {
-      const holidays = await holidayModel.find({}, { holidayDate: 1, name: 1 }).lean().exec();
+      const holidays = await holidayModel.find({}, { holidayDate: 1, holidayName: 1 }).lean().exec();
       return res.status(200).json({
         status: 200,
         message: "Holidays fetched successfully!",

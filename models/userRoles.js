@@ -7,8 +7,9 @@ const RoleSchema = new mongoose.Schema({
   ppc: { type: Boolean, default: false },
   qc: { type: Boolean, default: false },
   trc: { type: Boolean, default: false },
-  store:{type: Boolean, default: false},
-  production_manager:{type:Boolean,default:false}
+  store: { type: Boolean, default: false },
+  production_manager: { type: Boolean, default: false },
+  enggineering: { type: Boolean, default: false }
 }, { _id: false });
 
 const UserRolesSchema = new mongoose.Schema({
