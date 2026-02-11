@@ -9,7 +9,7 @@ const RoleSchema = new mongoose.Schema({
   trc: { type: Boolean, default: false },
   store: { type: Boolean, default: false },
   production_manager: { type: Boolean, default: false },
-  enggineering: { type: Boolean, default: false }
+  engineering: { type: Boolean, default: false }
 }, { _id: false });
 
 const UserRolesSchema = new mongoose.Schema({
