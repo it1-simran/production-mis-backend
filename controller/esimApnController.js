@@ -89,6 +89,27 @@ module.exports = {
             });
         }
     },
+    viewAPNById: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const apn = await EsimApn.find({ apnName: id });
+            if (!apn) {
+                return res.status(404).json({ status: 404, message: "Record not found" });
+            }
+            return res.status(200).json({
+                status: 200,
+                message: "ESIM APN record fetched successfully",
+                data: apn,
+            });
+        } catch (error) {
+            console.error("Error in ESIM APN by ID view:", error);
+            return res.status(500).json({
+                status: 500,
+                message: "Server error",
+                error: error.message,
+            });
+        }
+    },
     update: async (req, res) => {
         try {
             const { id } = req.params;

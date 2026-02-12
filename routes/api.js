@@ -211,11 +211,13 @@ router.delete('/esim-make/delete/:id', authController.authenticateToken, esimMak
 
 router.post('/esim-profile/create', authController.authenticateToken, esimProfileController.create);
 router.get('/esim-profile/view', authController.authenticateToken, esimProfileController.view);
+router.get('/esim-profile/view/:id', authController.authenticateToken, esimProfileController.esimProfileById);
 router.put('/esim-profile/update/:id', authController.authenticateToken, esimProfileController.update);
 router.delete('/esim-profile/delete/:id', authController.authenticateToken, esimProfileController.delete);
 
 router.post('/esim-apn/create', authController.authenticateToken, esimApnController.create);
 router.get('/esim-apn/view', authController.authenticateToken, esimApnController.view);
+router.get('/esim-apn/view/:id', authController.authenticateToken, esimApnController.viewAPNById);
 router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
 router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
