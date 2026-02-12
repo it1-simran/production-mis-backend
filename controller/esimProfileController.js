@@ -40,6 +40,27 @@ module.exports = {
             });
         }
     },
+    esimProfileById: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const profile = await EsimProfile.find({ profileId: id });
+            if (!profile) {
+                return res.status(404).json({ status: 404, message: "Record not found" });
+            }
+            return res.status(200).json({
+                status: 200,
+                message: "ESIM Profile record fetched successfully",
+                data: profile,
+            });
+        } catch (error) {
+            console.error("Error in ESIM Profile by ID view:", error);
+            return res.status(500).json({
+                status: 500,
+                message: "Server error",
+                error: error.message,
+            });
+        }
+    },
     update: async (req, res) => {
         try {
             const { id } = req.params;
