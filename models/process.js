@@ -7,14 +7,14 @@ const processSchema = new mongoose.Schema({
     ref: "products",
     required: true,
   },
-  orderConfirmationNo: { type: String, required: true },
+  orderConfirmationNo: { type: String, required: false },
   processID: { type: String, required: true },
   quantity: { type: String, required: true },
   issuedKits: { type: Number, required: false, default: 0 },
   issuedCartons: { type: Number, default: 0 },
   consumedKits: { type: Number, default: 0 },
   consumedCartons: { type: Number, default: 0 },
-  descripition: { type: String, required: true },
+  descripition: { type: String, required: false },
   fgToStore: { type: Number, required: false, default: 0 },
   stages: [
     {
