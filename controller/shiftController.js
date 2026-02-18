@@ -4,15 +4,31 @@ const ShiftModel = require("../models/shiftManagement");
 module.exports = {
   create: async (req, res) => {
     try {
-      const { name, intervals, weekDays,descripition } = req.body;
+      const { name, intervals, weekDays, descripition } = req.body;
+      const startTime = req?.body?.startTime;
+      const endTime = req?.body?.endTime;
+
       if (!name || !weekDays) {
         return res.status(400).json({
           status: 400,
           message: "All fields are required: name, weekDays.",
         });
       }
+
+      // Check for existing shift with the same timeline
+      const existingShift = await ShiftModel.findOne({ startTime, endTime });
+      if (existingShift) {
+        return res.status(400).json({
+          status: 400,
+          message: `A shift with this timeline (${startTime} - ${endTime}) already exists: ${existingShift.name}`,
+        });
+      }
+
       const data = {
         name,
+        startTime: req?.body?.startTime,
+        endTime: req?.body?.endTime,
+        totalBreakTime: req?.body?.totalBreakTime,
         intervals,
         weekDays,
         descripition
@@ -109,17 +125,33 @@ module.exports = {
   updateshift: async (req, res) => {
     try {
       const id = req.params.id;
-      if (!mongoose.isValidObjectId(id)) { 
+      const startTime = req?.body?.startTime;
+      const endTime = req?.body?.endTime;
+
+      if (!mongoose.isValidObjectId(id)) {
         return res
           .status(400)
           .json({ status: 400, message: "Invalid ID format" });
       }
+
+      // Check for existing shift with the same timeline (excluding self)
+      const existingShift = await ShiftModel.findOne({
+        startTime,
+        endTime,
+        _id: { $ne: id }
+      });
+      if (existingShift) {
+        return res.status(400).json({
+          status: 400,
+          message: `Another shift with this timeline (${startTime} - ${endTime}) already exists: ${existingShift.name}`,
+        });
+      }
       const updatedData = {
         name: req?.body?.name,
-        startTime:req?.body?.startTime,
-        endTime:req?.body?.endTime,
-        descripition:req?.body?.descripition,
-        totalBreakTime:req?.body?.totalBreakTime,
+        startTime: req?.body?.startTime,
+        endTime: req?.body?.endTime,
+        descripition: req?.body?.descripition,
+        totalBreakTime: req?.body?.totalBreakTime,
         intervals: req?.body?.intervals,
         weekDays: req?.body?.weekDays,
       };

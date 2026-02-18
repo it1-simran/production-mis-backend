@@ -143,6 +143,8 @@ router.get('/production-manager/processStatics/get', authController.authenticate
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
 router.post('/skill-management/create', authController.authenticateToken, skillManagementController.create);
 router.get('/skill-management/get', authController.authenticateToken, skillManagementController.getSkills);
+router.delete('/skill-management/delete/:id', authController.authenticateToken, skillManagementController.delete);
+router.post('/skill-management/delete/multiple', authController.authenticateToken, skillManagementController.deleteMultiple);
 router.put('/process/updateQuantity/:id', authController.authenticateToken, processController.updateMoreQuantity);
 router.put('/process/updateMarkAsCompleted/:id', authController.authenticateToken, processController.updateMarkasCompletedProcess);
 router.post('/production/returnKitsToStore', authController.authenticateToken, kitsController.createKitsEntry);
@@ -155,8 +157,10 @@ router.put('/jig/updateStatus/:id', authController.authenticateToken, jigControl
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, processController.updateIssuedKitsToLine);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
-router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view);
+router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);
+router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, OrderConfirmationController.delete);
+router.post('/process/orderConfirmation/delete-multiple', authController.authenticateToken, OrderConfirmationController.deleteMultiple);
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);

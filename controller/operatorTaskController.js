@@ -48,14 +48,14 @@ module.exports = {
     try {
       const userId = req.params.id;
       console.log("userId", userId);
-      const task  = await assignedOperatorsToPlanModel.findOne({'userId': userId});
+      const task = await assignedOperatorsToPlanModel.findOne({ 'userId': userId });
       console.log("task ==>", task);
       return res.status(200).json({ status: 200, task });
-    } catch (error){
-      return res.status(500).json({status: 500, error: error.message});
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
-   getTaskByUserID: async (req, res) => {
+  getTaskByUserID: async (req, res) => {
     try {
       const userId = req.params.id;
       const currentDate = moment.utc().startOf("day").toISOString();
@@ -126,19 +126,19 @@ module.exports = {
             "planDetails.roomName": 1,
             "planDetails.seatDetails": 1,
             status: "$processDetails.status",
-            kitRecievedConfirmationId:"$assignKitsToLine._id",
-            kitRecievedSeatDetails:"$assignKitsToLine.seatDetails",
+            kitRecievedConfirmationId: "$assignKitsToLine._id",
+            kitRecievedSeatDetails: "$assignKitsToLine.seatDetails",
             kitRecievedConfirmationStatus: "$assignKitsToLine.status",
             issuedKitsStatus: "$assignKitsToLine.issuedKitsStatus",
-            assignedKitsToOperator:"$assignKitsToLine.issuedKits",
-            requiredKits:"$processDetails.issuedKits"
+            assignedKitsToOperator: "$assignKitsToLine.issuedKits",
+            requiredKits: "$processDetails.issuedKits"
           },
         },
       ]);
 
       if (!task.length) {
-        return res.status(404).json({
-          status: 404,
+        return res.status(200).json({
+          status: 200,
           message: "No tasks found for the given user and date.",
         });
       }
