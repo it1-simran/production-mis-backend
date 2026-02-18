@@ -2,8 +2,9 @@ const mongoose = require("mongoose");
 const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
-const AsssignOperatorToPlanModel = require("../models/assignOperatorToPlan");
-const AsssignKitsToLineModel = require("../models/assignKitsToLine");
+const AssignOperatorToPlanModel = require("../models/assignOperatorToPlan");
+const AssignJigToPlanModel = require("../models/assignJigToPlan");
+const AssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 module.exports = {
@@ -117,9 +118,9 @@ module.exports = {
         return res.status(404).json({ message: "Process not found" });
       }
       await Promise.all([
-        PlaningAndSchedulingModel.findOneAndDelete({ selectedProcess: id }),
-        AssignOperatorPlansModel.findOneAndDelete({ processId: id }),
-        AssignJigPlansModel.findOneAndDelete({ processId: id }),
+        PlaningAndSchedulingModel.deleteMany({ selectedProcess: id }),
+        AssignOperatorToPlanModel.deleteMany({ processId: id }),
+        AssignJigToPlanModel.deleteMany({ processId: id }),
       ]);
 
       return res.status(200).json({
@@ -195,6 +196,44 @@ module.exports = {
     try {
       const id = req.params.id;
       const data = req?.body;
+
+      const oldProcess = await ProcessModel.findById(id);
+      if (!oldProcess) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+
+      let newStages = JSON.parse(data?.stages || "[]");
+      let newCommonStages = JSON.parse(data?.commonStages || "[]");
+
+      // Preserving operator/jig assignments for existing stages during cloning if they match by name
+      if (data?.isCloning === "true") {
+        newStages = newStages.map((ns) => {
+          const matchingOld = oldProcess.stages.find(
+            (os) => os.stageName === ns.stageName
+          );
+          if (matchingOld) {
+            return {
+              ...ns,
+              managedBy: matchingOld.managedBy || ns.managedBy,
+              jigId: matchingOld.jigId || ns.jigId,
+            };
+          }
+          return ns;
+        });
+        newCommonStages = newCommonStages.map((ncs) => {
+          const matchingOld = oldProcess.commonStages.find(
+            (ocs) => ocs.stageName === ncs.stageName
+          );
+          if (matchingOld) {
+            return {
+              ...ncs,
+              managedBy: matchingOld.managedBy || ncs.managedBy,
+            };
+          }
+          return ncs;
+        });
+      }
+
       const updatedData = {
         name: data?.name,
         selectedProduct: data?.selectedProduct,
@@ -202,9 +241,10 @@ module.exports = {
         processID: data?.processID,
         quantity: data?.quantity,
         descripition: data?.descripition,
-        stages: JSON.parse(data?.stages),
-        commonStages: JSON.parse(data?.commonStages),
+        stages: newStages,
+        commonStages: newCommonStages,
       };
+
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
         id,
         updatedData,
@@ -213,15 +253,98 @@ module.exports = {
           runValidators: true,
         }
       );
+
       if (!updatedProcess) {
-        return res.status(404).json({ message: "Process not found" });
+        return res.status(404).json({ message: "Process not found after update" });
       }
+
+      // Surgical cleanup of orphan assignments in plans
+      const activeStageNames = new Set(newStages.map((s) => s.stageName));
+      const activeCommonStageNames = new Set(
+        newCommonStages.map((s) => s.stageName)
+      );
+
+      try {
+        const plans = await PlaningAndSchedulingModel.find({
+          selectedProcess: id,
+        });
+
+        for (const plan of plans) {
+          let assignedStages = JSON.parse(plan.assignedStages || "{}");
+          let assignedOperators = JSON.parse(plan.assignedOperators || "{}");
+          let assignedJigs = JSON.parse(plan.assignedJigs || "{}");
+          let modified = false;
+
+          for (const key in assignedStages) {
+            const stageName = assignedStages[key];
+            if (!activeStageNames.has(stageName)) {
+              // This stage is removed!
+              const [row, seat] = key.split("-");
+
+              // Free operators - we don't need to manually update status if we delete mapping
+              // but we can update to "Free" if there's any other logic depending on it.
+              // Here we just delete the mapping records so they disappear from task lists.
+              await AssignOperatorToPlanModel.deleteMany({
+                processId: id,
+                "seatDetails.rowNumber": row,
+                "seatDetails.seatNumber": seat,
+              });
+              await AssignJigToPlanModel.deleteMany({
+                processId: id,
+                "seatDetails.rowNumber": row,
+                "seatDetails.seatNumber": seat,
+              });
+
+              // Remove from plan JSON blobs
+              delete assignedStages[key];
+              delete assignedOperators[key];
+              delete assignedJigs[key];
+              modified = true;
+            }
+          }
+
+          // Cleanup for custom/common stages
+          let assignedCustomStages = JSON.parse(plan.assignedCustomStages || "[]");
+          let assignedCustomStagesOp = JSON.parse(plan.assignedCustomStagesOp || "[]");
+          let filteredCustomStages = [];
+          let filteredCustomStagesOp = [];
+          let customModified = false;
+
+          for (let i = 0; i < assignedCustomStages.length; i++) {
+            const stageName = assignedCustomStages[i];
+            if (activeCommonStageNames.has(stageName)) {
+              filteredCustomStages.push(stageName);
+              filteredCustomStagesOp.push(assignedCustomStagesOp[i]);
+            } else {
+              // Removed common stage
+              await AssignOperatorToPlanModel.deleteMany({
+                processId: id,
+                stageType: stageName,
+              });
+              customModified = true;
+            }
+          }
+
+          if (modified || customModified) {
+            plan.assignedStages = JSON.stringify(assignedStages);
+            plan.assignedOperators = JSON.stringify(assignedOperators);
+            plan.assignedJigs = JSON.stringify(assignedJigs);
+            plan.assignedCustomStages = JSON.stringify(filteredCustomStages);
+            plan.assignedCustomStagesOp = JSON.stringify(filteredCustomStagesOp);
+            await plan.save();
+          }
+        }
+      } catch (cleanupError) {
+        console.error("Error during surgical cloning cleanup:", cleanupError);
+      }
+
       return res.status(200).json({
         status: 200,
         message: "Process updated successfully!!",
-        shift: updatedProcess,
+        data: updatedProcess,
       });
     } catch (error) {
+      console.error("Error updating process:", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
@@ -249,7 +372,7 @@ module.exports = {
           .status(400)
           .json({ status: 400, message: "Process ID is required" });
       }
-      let assignedOperatorsToPlan = await AsssignOperatorToPlanModel.find({
+      let assignedOperatorsToPlan = await AssignOperatorToPlanModel.find({
         processId: id,
         status: "Occupied",
       });
@@ -257,7 +380,7 @@ module.exports = {
         assignedOperatorsToPlan.map(async (value, index) => {
           let operatorData = { status: "Free" };
           const updatedPlan =
-            await AsssignOperatorToPlanModel.findByIdAndUpdate(
+            await AssignOperatorToPlanModel.findByIdAndUpdate(
               value._id,
               operatorData,
               {
@@ -435,10 +558,10 @@ module.exports = {
       let userId = req.params.id;
       let status = req.body.status;
       let updateAssignedOperator;
-      let operatorData = await AsssignOperatorToPlanModel.findOne({ userId });
+      let operatorData = await AssignOperatorToPlanModel.findOne({ userId });
       if (operatorData && Object.keys(operatorData).length > 0) {
         updateAssignedOperator =
-          await AsssignOperatorToPlanModel.findByIdAndUpdate(
+          await AssignOperatorToPlanModel.findByIdAndUpdate(
             operatorData._id,
             { status },
             { new: true, runValidators: true }
@@ -484,7 +607,7 @@ module.exports = {
         setDefaultsOnInsert: true,
       };
 
-      const updatedEntry = await AsssignKitsToLineModel.findOneAndUpdate(
+      const updatedEntry = await AssignKitsToLineModel.findOneAndUpdate(
         condition,
         updateData,
         options
@@ -522,7 +645,7 @@ module.exports = {
       let processData = {
         status: req.body.processStatus,
       };
-      const updateStatus = await AsssignKitsToLineModel.findByIdAndUpdate(
+      const updateStatus = await AssignKitsToLineModel.findByIdAndUpdate(
         id,
         data,
         {

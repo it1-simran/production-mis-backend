@@ -40,7 +40,7 @@ module.exports = {
           route: "/production-manager/remaining-kit",
         },
         {
-          icon: `<svg fill="#ffffff" width="64px" height="64px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7L12 2L21 7L12 12L3 7Z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/><path d="M3 7V17L12 22L21 17V7" stroke="#ffffff" stroke-width="2"
+          icon: `<svg fill="#ffffff" width="18px" height="19px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7L12 2L21 7L12 12L3 7Z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/><path d="M3 7V17L12 22L21 17V7" stroke="#ffffff" stroke-width="2"
           stroke-linejoin="round"/><path d="M12 12V22" stroke="#ffffff" stroke-width="2"/></svg>`,
           label: "OC Management",
           route: "/oc-management/view",

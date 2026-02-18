@@ -24,8 +24,8 @@ module.exports = {
       return res.status(201).json({
         status: 200,
         message: skillFieldId
-        ? "Skill Field Updated Successfully!!"
-        : "Skill Field Created Successfully!!",
+          ? "Skill Field Updated Successfully!!"
+          : "Skill Field Created Successfully!!",
         savedSkillField,
       });
     } catch (error) {
@@ -50,6 +50,50 @@ module.exports = {
       return res.status(500).json({
         status: 500,
         message: "An error occurred while Fetching the Skills.",
+        error: error.message,
+      });
+    }
+  },
+  delete: async (req, res) => {
+    try {
+      let id = req.params.id;
+      let skill = await SkillModel.findByIdAndDelete(id);
+      if (!skill) {
+        return res.status(404).json({ message: "Skill not Found" });
+      }
+      res.status(200).json({
+        message: "Skill Deleted Successfully!!",
+        skill,
+      });
+    } catch (error) {
+      console.error("Error deleting skill:", error);
+      res.status(500).json({
+        message: "An error occurred while Deleting the Skill!!",
+        error: error.message,
+      });
+    }
+  },
+  deleteMultiple: async (req, res) => {
+    try {
+      const ids = req.body.deleteIds;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({
+          message: "Invalid request, ids must be an array of strings",
+        });
+      }
+      const result = await SkillModel.deleteMany({
+        _id: { $in: ids },
+      });
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ message: "No skills found to delete" });
+      }
+      return res.status(200).json({
+        message: `${result.deletedCount} Skill(s) deleted successfully`,
+      });
+    } catch (error) {
+      console.error("Error deleting multiple skills:", error);
+      res.status(500).json({
+        message: "An error occurred while Deleting the Skills!!",
         error: error.message,
       });
     }

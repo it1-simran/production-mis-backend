@@ -94,4 +94,41 @@ module.exports = {
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
+  delete: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const deletedOrder = await OrderConfirmationNumberModel.findByIdAndDelete(id);
+
+      if (!deletedOrder) {
+        return res.status(404).json({ message: "Order Confirmation Number not found" });
+      }
+
+      return res.status(200).json({
+        message: "Order Confirmation Number deleted successfully",
+        orderConfirmation: deletedOrder,
+      });
+    } catch (error) {
+      console.error("Error deleting OC:", error);
+      return res.status(500).json({ error: error.message });
+    }
+  },
+  deleteMultiple: async (req, res) => {
+    try {
+      const { deleteIds } = req.body;
+      if (!Array.isArray(deleteIds) || deleteIds.length === 0) {
+        return res.status(400).json({ message: "Invalid request, ids must be an array" });
+      }
+
+      const result = await OrderConfirmationNumberModel.deleteMany({
+        _id: { $in: deleteIds },
+      });
+
+      return res.status(200).json({
+        message: `${result.deletedCount} Order Confirmation(s) deleted successfully`,
+      });
+    } catch (error) {
+      console.error("Error deleting multiple OCs:", error);
+      return res.status(500).json({ error: error.message });
+    }
+  }
 };
