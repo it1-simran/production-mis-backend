@@ -1,5 +1,4 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
 const dotenv = require('dotenv');
@@ -13,8 +12,6 @@ const app = express();
 app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*'
 })); // Enable CORS
-app.use(bodyParser.json()); // Parse JSON request bodies
-app.use(bodyParser.urlencoded({ extended: true })); // Parse URL-encoded request bodies
 app.use(morgan('dev')); // HTTP request logger
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
