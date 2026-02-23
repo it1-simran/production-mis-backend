@@ -276,8 +276,12 @@ module.exports = {
           let modified = false;
 
           for (const key in assignedStages) {
-            const stageName = assignedStages[key];
-            if (!activeStageNames.has(stageName)) {
+            const stagesOnSeat = assignedStages[key];
+            const isStillActive = Array.isArray(stagesOnSeat)
+              ? stagesOnSeat.some((s) => activeStageNames.has(s.name))
+              : activeStageNames.has(stagesOnSeat);
+
+            if (!isStillActive) {
               // This stage is removed!
               const [row, seat] = key.split("-");
 
