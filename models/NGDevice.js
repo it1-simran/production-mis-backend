@@ -3,12 +3,12 @@ const mongoose = require("mongoose");
 const NGDeviceSchema = new mongoose.Schema({
   processId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "processes",
+    ref: "process",
     required: true,
   },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "users",
+    ref: "User",
     required: true,
   },
   department: { type: String, enum: ["QC", "TRC"], required: true },

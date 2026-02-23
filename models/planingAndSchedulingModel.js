@@ -18,7 +18,7 @@ const operatorSchema = new mongoose.Schema({
 });
 const planingAndSchedulingSchema = new mongoose.Schema({
   processName: { type: String, required: false, default: "" },
-  selectedProcess: { type: mongoose.Schema.Types.ObjectId, ref: "processes" },
+  selectedProcess: { type: mongoose.Schema.Types.ObjectId, ref: "process" },
   selectedRoom: { type: mongoose.Schema.Types.ObjectId, ref: "roomplans" },
   selectedShift: { type: mongoose.Schema.Types.ObjectId, ref: "shifts" },
   issuedKits: { type: String, required: false, default: "" },
@@ -35,8 +35,8 @@ const planingAndSchedulingSchema = new mongoose.Schema({
   startDate: { type: Date, required: true },
   assignedJigs: { type: String, required: false },
   assignedOperators: { type: String, required: false },
-  assignedCustomStages : { type: String, required: false},
-  assignedCustomStagesOp : { type: String, required: false },
+  assignedCustomStages: { type: String, required: false },
+  assignedCustomStagesOp: { type: String, required: false },
   assignedStages: { type: String, required: true },
   isDrafted: { type: Number, required: true },
   totalUPHA: { type: String, required: false },
@@ -57,7 +57,7 @@ const planingAndSchedulingSchema = new mongoose.Schema({
   downTime: {
     from: { type: Date, required: false, default: null },
     to: { type: Date, required: false, default: null },
-    downTimeType:{type:String,required:false,default:""},
+    downTimeType: { type: String, required: false, default: "" },
     description: { type: String, required: false, trim: true, default: "" },
   },
 });

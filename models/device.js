@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const deviceSchemas = new mongoose.Schema({
   productType: { type: mongoose.Schema.Types.ObjectId, ref: "products" },
-  processID: { type:mongoose.Schema.Types.ObjectId, ref: "processes"},
+  processID: { type: mongoose.Schema.Types.ObjectId, ref: "process" },
   serialNo: { type: String, required: true },
   imeiNo: { type: String, required: false, default: "" },
   customFields: { type: Object, required: false, default: {} },
@@ -14,7 +14,7 @@ const deviceSchemas = new mongoose.Schema({
 });
 
 // Middleware to parse customFields if it's a string
-deviceSchemas.pre('save', function(next) {
+deviceSchemas.pre('save', function (next) {
   if (typeof this.customFields === 'string') {
     try {
       this.customFields = JSON.parse(this.customFields);
@@ -26,7 +26,7 @@ deviceSchemas.pre('save', function(next) {
 });
 
 // Middleware for findByIdAndUpdate
-deviceSchemas.pre('findByIdAndUpdate', function(next) {
+deviceSchemas.pre('findByIdAndUpdate', function (next) {
   const update = this.getUpdate();
   if (update && typeof update.$set?.customFields === 'string') {
     try {

@@ -7,6 +7,7 @@ const productModel = require("../models/Products");
 const inventoryModel = require("../models/inventoryManagement");
 const imeiModel = require("../models/imeiModel");
 const NGDevice = require("../models/NGDevice");
+const User = require("../models/User");
 const mongoose = require("mongoose");
 
 module.exports = {
@@ -249,8 +250,15 @@ module.exports = {
           message: "Invalid JSON format in planing data.",
         });
       }
-      if (!Array.isArray(planing.assignedCustomStagesOp)) {
-        assignedCustomStagesOp = JSON.parse(planing.assignedCustomStagesOp);
+      let assignedCustomStagesOp = [];
+      if (planing.assignedCustomStagesOp) {
+        try {
+          assignedCustomStagesOp = Array.isArray(planing.assignedCustomStagesOp)
+            ? planing.assignedCustomStagesOp
+            : JSON.parse(planing.assignedCustomStagesOp);
+        } catch (err) {
+          assignedCustomStagesOp = [];
+        }
       }
       let matchingIndices = Object.keys(assignedOperator).filter((key) =>
         assignedOperator[key].some(
@@ -518,7 +526,11 @@ module.exports = {
         $lte: endOfDay,
       };
 
-      const deviceTestRecord = await deviceTestRecords.find(query);
+      const deviceTestRecord = await deviceTestRecords.find(query)
+        .populate("operatorId", "name employeeCode")
+        .populate("productId", "name")
+        .populate("planId", "processName")
+        .sort({ createdAt: -1 });
 
       if (deviceTestRecord.length === 0) {
         return res.status(404).json({
@@ -543,7 +555,12 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
-      let deviceTestHistory = await deviceTestRecords.find({ deviceId: id });
+      let deviceTestHistory = await deviceTestRecords.find({ deviceId: id })
+        .populate("operatorId", "name employeeCode")
+        .populate("productId", "name")
+        .populate("planId", "processName")
+        .sort({ createdAt: -1 });
+
       if (deviceTestHistory.length === 0) {
         return res.status(200).json({
           status: 200,
@@ -563,23 +580,42 @@ module.exports = {
       });
     }
   },
+
+  getOverallProcessByOperatorId: async (req, res) => {
+    try {
+      const { planId, operatorId } = req.params;
+      const devices = await deviceTestRecords.find({ planId, operatorId })
+        .populate("operatorId", "name employeeCode")
+        .populate("productId", "name")
+        .populate("planId", "processName");
+
+      if (devices.length === 0) {
+        return res.status(404).json({
+          status: 404,
+          message: "No devices found for the given plan and operator.",
+        });
+      }
+      res.status(200).json({
+        status: 200,
+        message: "Overall process retrieved successfully!",
+        data: devices,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "An error occurred while retrieving the process.",
+        error: error.message,
+      });
+    }
+  },
   updateStageBySerialNo: async (req, res) => {
     try {
       let serialNo = req.params.serialNo || req.body.serialNo;
       let updates = req.body;
-      // let data = req.body.customFields;
-      // console.log("updates ===>", updates);
-      // console.log("data ===>", serialNo);
-
-      // return false;
-
-      // Find device by serialNo first
       const device = await deviceModel.findOne({ serialNo: serialNo });
       if (!device) {
         return res.status(404).json({ message: "Device with serial number not found" });
       }
-
-      // Update the device by its ID
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,
         { $set: updates },
@@ -703,29 +739,6 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
-  getOverallProcessByOperatorId: async (req, res) => {
-    try {
-      const { planId, operatorId } = req.params;
-      const devices = await deviceTestRecords.find({ planId, operatorId });
-      if (devices.length === 0) {
-        return res.status(404).json({
-          status: 404,
-          message: "No devices found for the given plan and operator.",
-        });
-      }
-      res.status(200).json({
-        status: 200,
-        message: "Overall process retrieved successfully!",
-        data: devices,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        status: 500,
-        message: "An error occurred while retrieving the process.",
-        error: error.message,
-      });
-    }
-  },
   getDeviceTestHistoryByOperatorId: async (req, res) => {
     try {
       const id = req.params.id;
@@ -750,6 +763,9 @@ module.exports = {
 
       const deviceTestRecord = await deviceTestRecords
         .find(query)
+        .populate("operatorId", "name employeeCode")
+        .populate("productId", "name")
+        .populate("planId", "processName")
         .sort({ createdAt: -1 });
 
       if (deviceTestRecord.length === 0) {

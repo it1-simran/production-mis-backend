@@ -1,11 +1,11 @@
 const mongoose = require("mongoose");
 
 const deviceTestSchema = new mongoose.Schema({
-  deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "device" },
-  processId: {type:mongoose.Schema.Types.ObjectId, ref:"processes"},
-  operatorId: {type:mongoose.Schema.Types.ObjectId, ref:"users"},
+  deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "devices" },
+  processId: { type: mongoose.Schema.Types.ObjectId, ref: "process" },
+  operatorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   serialNo: { type: String, required: false },
-  seatNumber:{type:String,required:false},
+  seatNumber: { type: String, required: false },
   stageName: { type: String, required: false },
   status: { type: String, required: false },
   trcRemarks: { type: [mongoose.Schema.Types.Mixed], required: false, default: [] },
@@ -22,8 +22,13 @@ const deviceTestSchema = new mongoose.Schema({
     required: false,
     default: []
   },
-  assignedDeviceTo: {type:String,required: false },
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: "products" },
+  planId: { type: mongoose.Schema.Types.ObjectId, ref: "PlaningAndScheduling" },
+  assignedDeviceTo: { type: String, required: false },
   timeConsumed: { type: String, required: false },
+  totalBreakTime: { type: String, required: false },
+  startTime: { type: Date, required: false },
+  endTime: { type: Date, required: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
