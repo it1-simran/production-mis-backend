@@ -92,6 +92,10 @@ module.exports = {
               label: "View Process Inventory",
               route: "/inventory/viewProcess",
             },
+            {
+              label: "FG to Store",
+              route: "/inventory/fgToStore",
+            },
           ],
         },
         {

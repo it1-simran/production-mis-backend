@@ -8,14 +8,15 @@ const cartonManagementSchema = new mongoose.Schema(
       ref: "processes",
       required: true,
     },
-    devices: [{type: mongoose.Schema.Types.ObjectId,ref: "devices"}],
+    devices: [{ type: mongoose.Schema.Types.ObjectId, ref: "devices" }],
     cartonSize: {
       width: { type: String, required: false, default: "" },
       height: { type: String, required: false, default: "" },
     },
     maxCapacity: { type: String, required: false, default: "" },
     status: { type: String, required: false, default: "" },
-    cartonStatus: {type:String, required:false, default:""},
+    isStickerVerified: { type: Boolean, required: false, default: false },
+    cartonStatus: { type: String, required: false, default: "" },
     weightCarton: { type: String, required: false, default: "" },
   },
   { timestamps: true }

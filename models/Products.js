@@ -9,6 +9,9 @@ const productSchema = new mongoose.Schema({
       requiredSkill: { type: String, required: true },
       cycleTime: { type: String, required: true },
       upha: { type: String, required: true },
+      // Stage-level search type (e.g. "Through Serial" / "Through Jig Stages")
+      searchType: { type: String, required: false, default: "" },
+      jigStageFields: { type: Array, default: [], required: false },
       videoLinks: { type: Array, default: [], required: false },
       sopFile: { type: String, default: "" },
       subSteps: [
