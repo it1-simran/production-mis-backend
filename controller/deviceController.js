@@ -23,13 +23,17 @@ module.exports = {
       const enableZero = req.body.enableZero;
       const lastSerialNo = req.body.lastSerialNo;
       const noOfZeroRequired = req.body.noOfZeroRequired;
+      const startFrom = req.body.startFrom;
       const serials = generateSerials(
         lastSerialNo,
         prefix,
         parseInt(noOfSerialRequired),
         suffix,
         enableZero,
-        noOfZeroRequired
+        noOfZeroRequired,
+        1,
+        1,
+        parseInt(startFrom)
       );
       const savedDevices = [];
 
@@ -57,9 +61,13 @@ module.exports = {
   getLastEntryBasedOnPrefixAndSuffix: async (req, res) => {
     try {
       const data = req.query;
+      const escapeRegex = (string) => string.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
+      const escapedPrefix = escapeRegex(data.prefix || "");
+      const escapedSuffix = escapeRegex(data.suffix || "");
+
       const lastEntry = await deviceModel
         .findOne({
-          serialNo: { $regex: `^${data.prefix}.*${data.suffix}$` },
+          serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` },
         })
         .sort({ createdAt: -1 })
         .exec();
@@ -67,6 +75,19 @@ module.exports = {
         status: 200,
         message: "Last Entry Fetched Successfully",
         data: lastEntry,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getDeviceCountByProcessId: async (req, res) => {
+    try {
+      const { processId } = req.params;
+      const count = await deviceModel.countDocuments({ processID: processId });
+      return res.status(200).json({
+        status: 200,
+        message: "Device Count Fetched Successfully",
+        count: count,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -608,6 +629,95 @@ module.exports = {
       });
     }
   },
+  searchByJigFields: async (req, res) => {
+    try {
+      const { jigFields, processId } = req.body;
+      if (!jigFields || typeof jigFields !== 'object') {
+        return res.status(400).json({ status: 400, message: "Invalid jigFields" });
+      }
+
+      // Convert all jigField values to strings for comparison
+      const searchCriteria = {};
+      for (const [k, v] of Object.entries(jigFields)) {
+        if (v !== undefined && v !== null && v !== "") {
+          searchCriteria[k] = String(v).trim();
+        }
+      }
+
+      if (Object.keys(searchCriteria).length === 0) {
+        return res.status(400).json({ status: 400, message: "No search values provided" });
+      }
+
+      // We fetch all devices for this process and filter in JS
+      // This is because searching across all keys in the nested customFields object is difficult in plain MongoDB queries 
+      // without knowing the stage names (which are the first-level keys in customFields).
+      const devices = await deviceModel.find({ processID: processId });
+
+      const matchingDevices = devices.filter(device => {
+        let customFields = device.customFields;
+
+        if (typeof customFields === 'string') {
+          try {
+            customFields = JSON.parse(customFields);
+          } catch (e) {
+            customFields = {};
+          }
+        }
+
+        for (const [key, value] of Object.entries(searchCriteria)) {
+          const searchVal = String(value).trim();
+          const searchKeyLower = key.toLowerCase();
+
+          if (searchKeyLower.includes("imei") && String(device.imeiNo).trim() === searchVal) return true;
+          if (searchKeyLower.includes("serial") && String(device.serialNo).trim() === searchVal) return true;
+
+          if (customFields && typeof customFields === 'object') {
+            if (String(customFields[key]).trim() === searchVal) return true;
+            for (const cfName in customFields) {
+              if (cfName.toLowerCase() === searchKeyLower && String(customFields[cfName]).trim() === searchVal) {
+                return true;
+              }
+            }
+
+            for (const stageName in customFields) {
+              const stageData = customFields[stageName];
+              if (stageData && typeof stageData === 'object') {
+                if (String(stageData[key]).trim() === searchVal) return true;
+                for (const fieldName in stageData) {
+                  if (fieldName.toLowerCase() === searchKeyLower && String(stageData[fieldName]).trim() === searchVal) {
+                    return true;
+                  }
+                }
+              }
+            }
+          }
+        }
+        return false;
+      });
+
+      if (matchingDevices.length === 0) {
+        return res.status(404).json({
+          status: 404,
+          message: "Device not found with these JIG parameters"
+        });
+      }
+
+      // if (matchingDevices.length > 1) {
+      //   return res.status(409).json({
+      //     status: 409,
+      //     message: "Duplicate entries of device found"
+      //   });
+      // }
+
+      return res.status(200).json({
+        status: 200,
+        data: matchingDevices[0]
+      });
+    } catch (error) {
+      console.error("Error in searchByJigFields:", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   updateStageBySerialNo: async (req, res) => {
     try {
       let serialNo = req.params.serialNo || req.body.serialNo;
@@ -616,6 +726,32 @@ module.exports = {
       if (!device) {
         return res.status(404).json({ message: "Device with serial number not found" });
       }
+
+      if (updates.customFields) {
+        let incomingCustomFields = updates.customFields;
+        if (typeof incomingCustomFields === 'string') {
+          try {
+            incomingCustomFields = JSON.parse(incomingCustomFields);
+          } catch (e) {
+            incomingCustomFields = {};
+          }
+        }
+
+        let currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
+        let existingCustomFields = device.customFields || {};
+
+        if (typeof existingCustomFields !== 'object' || Array.isArray(existingCustomFields)) {
+          existingCustomFields = {};
+        }
+
+        existingCustomFields[currentStageName] = {
+          ...(existingCustomFields[currentStageName] || {}),
+          ...incomingCustomFields
+        };
+
+        updates.customFields = existingCustomFields;
+      }
+
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,
         { $set: updates },
@@ -640,6 +776,36 @@ module.exports = {
     try {
       let deviceId = req.params.deviceId;
       let updates = req.body;
+      const device = await deviceModel.findById(deviceId);
+      if (!device) {
+        return res.status(404).json({ message: "Device not found" });
+      }
+
+      if (updates.customFields) {
+        let incomingCustomFields = updates.customFields;
+        if (typeof incomingCustomFields === 'string') {
+          try {
+            incomingCustomFields = JSON.parse(incomingCustomFields);
+          } catch (e) {
+            incomingCustomFields = {};
+          }
+        }
+
+        let currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
+        let existingCustomFields = device.customFields || {};
+
+        if (typeof existingCustomFields !== 'object' || Array.isArray(existingCustomFields)) {
+          existingCustomFields = {};
+        }
+
+        existingCustomFields[currentStageName] = {
+          ...(existingCustomFields[currentStageName] || {}),
+          ...incomingCustomFields
+        };
+
+        updates.customFields = existingCustomFields;
+      }
+
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         deviceId,
         { $set: updates },
@@ -814,15 +980,22 @@ function generateSerials(
   enableZero,
   noOfZeroRequired,
   stepBy = 1,
-  repeatTimes = 1
+  repeatTimes = 1,
+  startFrom = null
 ) {
   let start = 1;
-  if (lastSerialNo) {
-    start += parseInt(lastSerialNo.split("-")[1]);
-    noOfSerialRequired += start;
+  if (startFrom !== null && !isNaN(startFrom)) {
+    start = startFrom;
+  } else if (lastSerialNo) {
+    const match = lastSerialNo.match(/\d+/g);
+    if (match) {
+      start = parseInt(match[match.length - 1]) + 1;
+    }
   }
+
+  const end = start + noOfSerialRequired;
   const serials = [];
-  for (let i = start; i <= noOfSerialRequired; i += stepBy) {
+  for (let i = start; i < end; i += stepBy) {
     const paddedNumber = enableZero
       ? String(i).padStart(noOfZeroRequired, "0")
       : i;

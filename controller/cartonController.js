@@ -60,6 +60,28 @@ module.exports = {
       });
     }
   },
+  verifySticker: async (req, res) => {
+    try {
+      const { cartonSerial } = req.body;
+      if (!cartonSerial) {
+        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const updatedCarton = await cartonModel.findOneAndUpdate(
+        { cartonSerial },
+        { isStickerVerified: true },
+        { new: true }
+      );
+
+      if (!updatedCarton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      return res.status(200).json({ status: 200, message: "Sticker verified successfully.", carton: updatedCarton });
+    } catch (error) {
+      return res.status(500).json({ status: 500, message: "Error verifying sticker.", error: error.message });
+    }
+  },
   getCartonByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
@@ -106,6 +128,7 @@ module.exports = {
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
             status: { $first: "$status" },
+            isStickerVerified: { $first: "$isStickerVerified" },
             weightCarton: { $first: "$weightCarton" },
             createdAt: { $first: "$createdAt" },
             updatedAt: { $first: "$updatedAt" },
@@ -401,26 +424,93 @@ module.exports = {
     }
   },
 
+  verifySticker: async (req, res) => {
+    try {
+      const { cartonSerial } = req.body;
+      if (!cartonSerial) {
+        return res
+          .status(400)
+          .json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const updatedCarton = await cartonModel.findOneAndUpdate(
+        { cartonSerial },
+        { isStickerVerified: true },
+        { new: true }
+      );
+
+      if (!updatedCarton) {
+        return res
+          .status(404)
+          .json({ status: 404, message: "Carton not found." });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Carton verified successfully.",
+        carton: updatedCarton,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Error verifying carton.",
+        error: error.message,
+      });
+    }
+  },
   shiftToPDI: async (req, res) => {
     try {
       const { cartons } = req.body;
 
-      if (!cartons || cartons.length === 0) {
+      if (!cartons || (Array.isArray(cartons) && cartons.length === 0)) {
         return res
           .status(400)
           .json({ success: false, message: "No cartons provided" });
       }
 
+      // Convert to array if it's a single string (from FormData)
+      const cartonArray = Array.isArray(cartons) ? cartons : [cartons];
+
+      // Verification check: ensure all cartons are verified
+      const unverifiedCartons = await cartonModel.find({
+        cartonSerial: { $in: cartonArray },
+        isStickerVerified: { $ne: true },
+      });
+
+      if (unverifiedCartons.length > 0) {
+        const unverifiedSerials = unverifiedCartons.map((c) => c.cartonSerial);
+        return res.status(400).json({
+          success: false,
+          message:
+            "Some cartons are not verified. Please verify all cartons before shifting to PDI.",
+          unverifiedCartons: unverifiedSerials,
+        });
+      }
+
       // Update all cartons whose serials match
       const result = await cartonModel.updateMany(
-        { cartonSerial: { $in: cartons } }, // filter
+        { cartonSerial: { $in: cartonArray } }, // filter
         { $set: { cartonStatus: "PDI" } } // update
+      );
+
+      // Also update devices in those cartons
+      const affectedCartons = await cartonModel.find({
+        cartonSerial: { $in: cartonArray },
+      });
+      const allDeviceIds = affectedCartons.reduce(
+        (acc, curr) => acc.concat(curr.devices),
+        []
+      );
+
+      await deviceModel.updateMany(
+        { _id: { $in: allDeviceIds } },
+        { $set: { currentStage: "PDI" } }
       );
 
       return res.status(200).json({
         success: true,
         shifted: result.modifiedCount,
-        message: "Cartons shifted to PDI successfully",
+        message: "Cartons and devices shifted to PDI successfully",
       });
     } catch (error) {
       console.error("Error in shiftToPDI:", error);

@@ -5,6 +5,9 @@ const deviceTestSchema = new mongoose.Schema({
   processId: { type: mongoose.Schema.Types.ObjectId, ref: "process" },
   operatorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   serialNo: { type: String, required: false },
+  // How the device was searched/identified at test time
+  // e.g. "Through Serial" or "Through Jig Stages"
+  searchType: { type: String, required: false, default: "" },
   seatNumber: { type: String, required: false },
   stageName: { type: String, required: false },
   status: { type: String, required: false },

@@ -13,6 +13,7 @@ const processController = require('../controller/processController');
 const planningAndSchedulingController = require('../controller/planningAndSchedulingController');
 const holidayController = require('../controller/holidayController');
 const assignedOperatorsToPlan = require('../controller/operatorTaskController');
+const operatorWorkController = require('../controller/operatorWorkController');
 const deviceController = require(`../controller/deviceController`);
 const connectDB = require('../config/db');
 const RoomPlan = require('../models/roomPlan');
@@ -108,9 +109,48 @@ router.get('/process/logs/getLogsByProcessID/:id', authController.authenticateTo
 router.post('/assignPlanToOperator/create', authController.authenticateToken, assignedOperatorsToPlan.create);
 router.get(`/assignPlanToOperator/view/:id`, authController.authenticateToken, assignedOperatorsToPlan.getTaskByUserID);
 router.get(`/assignPlanToOperator/get/:id`, authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskByUserID);
+
+// Operator work tracking (session + breaks + event logs)
+router.post(
+  "/operator-work/sessions/start",
+  authController.authenticateToken,
+  operatorWorkController.startSession
+);
+router.get(
+  "/operator-work/sessions/active",
+  authController.authenticateToken,
+  operatorWorkController.getActiveSession
+);
+router.get(
+  "/operator-work/sessions/:sessionId",
+  authController.authenticateToken,
+  operatorWorkController.getSessionById
+);
+router.post(
+  "/operator-work/sessions/:sessionId/stop",
+  authController.authenticateToken,
+  operatorWorkController.stopSession
+);
+router.post(
+  "/operator-work/sessions/:sessionId/breaks/start",
+  authController.authenticateToken,
+  operatorWorkController.startBreak
+);
+router.post(
+  "/operator-work/sessions/:sessionId/breaks/end",
+  authController.authenticateToken,
+  operatorWorkController.endBreak
+);
+router.post(
+  "/operator-work/sessions/:sessionId/events",
+  authController.authenticateToken,
+  operatorWorkController.logEvent
+);
+
 router.post('/devices/create', authController.authenticateToken, deviceController.create);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
+router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
@@ -118,6 +158,7 @@ router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateT
 router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, deviceController.getDeviceTestHistoryByDeviceId);
 router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, deviceController.updateStageByDeviceId);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, deviceController.updateStageBySerialNo);
+router.post('/devices/searchByJigFields', authController.authenticateToken, deviceController.searchByJigFields);
 router.post('/devices/markAsResolved', authController.authenticateToken, deviceController.markAsResolved);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
@@ -165,6 +206,7 @@ router.put('/process/addDownTime/:id', authController.authenticateToken, plannin
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
+router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);

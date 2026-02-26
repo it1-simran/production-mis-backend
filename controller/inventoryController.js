@@ -95,7 +95,7 @@ module.exports = {
             as: "inventoryProcess",
           },
         },
-        { $unwind: "$inventoryProcess" },
+        { $unwind: { path: "$inventoryProcess", preserveNullAndEmptyArrays: true } },
         {
           $lookup: {
             from: "products",
@@ -112,9 +112,9 @@ module.exports = {
             processID: 1,
             orderConfirmationNo: 1,
             processQuantity: "$quantity",
-            inventoryQuantity: "$inventoryProcess.quantity",
-            cartonQuantity: "$inventoryProcess.cartonQuantity",
-            status: "$inventoryProcess.status",
+            inventoryQuantity: { $ifNull: ["$inventoryProcess.quantity", 0] },
+            cartonQuantity: { $ifNull: ["$inventoryProcess.cartonQuantity", 0] },
+            inventoryStatus: "$inventoryProcess.status",
             productName: "$productDetails.name",
             fgToStore: 1,
             issuedKits: 1,
@@ -130,6 +130,7 @@ module.exports = {
       const processInventory = data.filter(
         (item) =>
           item?.status === "Waiting_Kits_allocation" ||
+          item?.status === "Waiting_Kits_approval" ||
           item?.status === "active" ||
           item?.kitStatus === "partially_issued"
       );
@@ -196,34 +197,41 @@ module.exports = {
     try {
       const id = req?.body?.process;
       const process = await ProcessModel.findById(req.body.process);
-      const Inventory = await InventoryModel.findOne({
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      let Inventory = await InventoryModel.findOne({
         productType: process?.selectedProduct,
       });
+
+      if (!Inventory) {
+        Inventory = new InventoryModel({
+          productName: process.productName || "Unknown",
+          productType: process.selectedProduct,
+          quantity: 0,
+          cartonQuantity: 0,
+          status: "Out of Stock",
+        });
+        await Inventory.save();
+      }
+
+      const issueQty = parseInt(req?.body?.issueCartonProcess) || 0;
       const updateIssueCarton = {
-        quantity: Inventory?.quantity - parseInt(req?.body?.issueCartonProcess),
+        quantity: (Inventory?.quantity || 0) - issueQty,
         updatedAt: new Date(),
       };
+
       const updatedData = {
-        issuedCartons:
-          process?.issuedCartons + parseInt(req?.body?.issueCartonProcess),
+        issuedCartons: (process?.issuedCartons || 0) + issueQty,
         updatedAt: new Date(),
       };
-      const updatedIssuedCarton = await InventoryModel.findByIdAndUpdate(
-        Inventory._id,
-        updateIssueCarton,
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
-      const updatedProcess = await ProcessModel.findByIdAndUpdate(
-        id,
-        updatedData,
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
+
+      await InventoryModel.findByIdAndUpdate(Inventory._id, updateIssueCarton);
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(id, updatedData, {
+        new: true,
+        runValidators: true,
+      });
       return res.status(200).json({
         status: 200,
         status_msg: "Carton Updated Sucessfully!!",
@@ -237,35 +245,43 @@ module.exports = {
     try {
       const id = req?.body?.process;
       const process = await ProcessModel.findById(req.body.process);
-      const Inventory = await InventoryModel.findOne({
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      let Inventory = await InventoryModel.findOne({
         productType: process?.selectedProduct,
       });
+
+      if (!Inventory) {
+        Inventory = new InventoryModel({
+          productName: process.productName || "Unknown",
+          productType: process.selectedProduct,
+          quantity: 0,
+          cartonQuantity: 0,
+          status: "Out of Stock",
+        });
+        await Inventory.save();
+      }
+
+      const kitQty = parseInt(req?.body?.issuedKits) || 0;
       const updateIssueKit = {
-        quantity: Inventory?.quantity - parseInt(req?.body?.issuedKits),
+        quantity: (Inventory?.quantity || 0) - kitQty,
         updatedAt: new Date(),
       };
+
       const updatedData = {
-        issuedKits: process.issuedKits + parseInt(req?.body?.issuedKits),
+        issuedKits: (process.issuedKits || 0) + kitQty,
         kitStatus: req?.body?.kitStatus,
         status: req?.body?.status,
         updatedAt: new Date(),
       };
-      const updatedIssuedKit = await InventoryModel.findByIdAndUpdate(
-        Inventory._id,
-        updateIssueKit,
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
-      const updatedProcess = await ProcessModel.findByIdAndUpdate(
-        id,
-        updatedData,
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
+
+      await InventoryModel.findByIdAndUpdate(Inventory._id, updateIssueKit);
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(id, updatedData, {
+        new: true,
+        runValidators: true,
+      });
       return res.status(200).json({
         status: 200,
         status_msg: "Updated Process Sucessfully!!",
