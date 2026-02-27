@@ -327,17 +327,19 @@ module.exports = {
               }
             }
           } else {
+            // NG flow: remove one from current stage WIP and mark NG count
+            if (assignedStages[currentIndex][0].totalUPHA > 0) {
+              assignedStages[currentIndex][0].totalUPHA -= 1;
+            }
             assignedStages[currentIndex][0].ngDevice += 1;
-            data.assignedDeviceTo = req.body.assignedDeviceTo;
-            if (
-              data.assignedDeviceTo === "assignedDeviceTo" ||
-              data.assignedDeviceTo === "QC"
-            ) {
+
+            data.assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
+            if (data.assignedDeviceTo === "QC" || data.assignedDeviceTo === "TRC") {
               try {
                 const ngPayload = {
                   processId: planing.selectedProcess || data.processId || null,
                   userId: data.operatorId || data.userId || null,
-                  department: data.assignedDeviceTo === "QC" ? "QC" : "TRC",
+                  department: data.assignedDeviceTo,
                   serialNo:
                     data.serialNo ||
                     data.serialNoValue ||
@@ -363,7 +365,7 @@ module.exports = {
                 console.error("Error creating NGDevice record:", ngErr);
               }
             } else {
-              // Move device to previous stage
+              // Move device back to assigned stage (previous stage selected from UI)
               try {
                 const serial =
                   data.serialNo ||
@@ -383,46 +385,42 @@ module.exports = {
                 }
 
                 if (deviceToUpdate) {
-                  // determine previous stage key by sorting the assignedStages keys
-                  const keys = Object.keys(assignedStages).sort((a, b) => {
-                    const [a1, a2] = a.split("-").map(Number);
-                    const [b1, b2] = b.split("-").map(Number);
-                    return a1 - b1 || a2 - b2;
-                  });
+                  const targetStageName = data.assignedDeviceTo;
+                  if (targetStageName) {
+                    deviceToUpdate.currentStage = targetStageName;
+                    deviceToUpdate.status = "Rework";
+                    await deviceToUpdate.save();
 
-                  const curIdxStr = currentIndex.toString();
-                  const pos = keys.indexOf(curIdxStr);
-
-                  if (pos > 0) {
-                    const prevKey = keys[pos - 1];
-                    const prevStageName =
-                      assignedStages[prevKey] && assignedStages[prevKey][0]
-                        ? assignedStages[prevKey][0].name
-                        : null;
-
-                    if (prevStageName) {
-                      deviceToUpdate.currentStage = prevStageName;
-                      await deviceToUpdate.save();
-
-                      // update counters for previous stage so planing data stays consistent
-                      if (
-                        assignedStages[prevKey] &&
-                        assignedStages[prevKey][0]
-                      ) {
-                        assignedStages[prevKey][0].totalUPHA =
-                          (assignedStages[prevKey][0].totalUPHA || 0) + 1;
+                    // increment WIP count for the target stage seat in plan (if found)
+                    const targetKey = Object.keys(assignedStages).find((k) => {
+                      const arr = Array.isArray(assignedStages[k])
+                        ? assignedStages[k]
+                        : [assignedStages[k]];
+                      return arr.some(
+                        (s) =>
+                          String(s?.name || s?.stageName || "").trim() ===
+                          targetStageName
+                      );
+                    });
+                    if (targetKey) {
+                      const arr = Array.isArray(assignedStages[targetKey])
+                        ? assignedStages[targetKey]
+                        : [assignedStages[targetKey]];
+                      const idx = arr.findIndex(
+                        (s) =>
+                          String(s?.name || s?.stageName || "").trim() ===
+                          targetStageName
+                      );
+                      if (idx !== -1) {
+                        arr[idx].totalUPHA = (arr[idx].totalUPHA || 0) + 1;
+                        assignedStages[targetKey] = arr;
                       }
                     } else {
                       console.warn(
-                        "Previous stage name not found for key",
-                        prevKey
+                        "Target stage not found in assignedStages for rework",
+                        { targetStageName }
                       );
                     }
-                  } else {
-                    console.warn(
-                      "No previous stage available for current index",
-                      currentIndex
-                    );
                   }
                 } else {
                   console.warn("Device not found to move to previous stage", {

@@ -11,7 +11,17 @@ const productSchema = new mongoose.Schema({
       upha: { type: String, required: true },
       // Stage-level search type (e.g. "Through Serial" / "Through Jig Stages")
       searchType: { type: String, required: false, default: "" },
-      jigStageFields: { type: Array, default: [], required: false },
+      jigStageFields: [
+        {
+          jigName: { type: String, required: false, default: "" },
+          validationType: { type: String, required: false, default: "value" },
+          rangeFrom: { type: Number, default: 0, required: false },
+          rangeTo: { type: Number, default: 0, required: false },
+          value: { type: String, default: "", required: false },
+          lengthFrom: { type: Number, default: 0, required: false },
+          lengthTo: { type: Number, default: 0, required: false },
+        },
+      ],
       videoLinks: { type: Array, default: [], required: false },
       sopFile: { type: String, default: "" },
       subSteps: [

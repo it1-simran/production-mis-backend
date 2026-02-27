@@ -19,7 +19,7 @@ module.exports = {
         stageType: data.stageType,
         ProcessShiftMappings: ProcessShiftMappings,
         status: data.status,
-        startDate: moment(data.startDate, "YY/MM/DD HH:mm:ss").toDate(),
+        startDate: moment(data.startDate, "DD/MM/YY HH:mm:ss").toDate(),
       };
       const checkEntryExist = await assignedOperatorsToPlanModel.findOne({
         processId: data.processId,
