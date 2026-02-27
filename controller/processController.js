@@ -676,7 +676,9 @@ module.exports = {
       let processId = req.params.id;
       const deviceTestRecords = await DeviceTestRecordModel.find({
         processId: processId,
-      });
+      })
+        .populate("operatorId", "name employeeCode")
+        .sort({ createdAt: -1 });
       return res.status(200).json({
         status: 200,
         message: "Device Record Test Fetched SuccessFully !!",
