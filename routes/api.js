@@ -42,7 +42,7 @@ router.post('/login', authController.login);
 router.post('/logout', authController.logout);
 router.post('/register', authController.register);
 router.post('/add/product', authController.authenticateToken, productController.create);
-router.put('/product/update/:id', productController.update);
+router.put('/product/update/:id', authController.authenticateToken, productController.update);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
@@ -146,8 +146,17 @@ router.post(
   authController.authenticateToken,
   operatorWorkController.logEvent
 );
+router.get(
+  "/operator-work/operator/:operatorId/sessions",
+  authController.authenticateToken,
+  operatorWorkController.getSessionsByOperator
+);
 
-router.post('/devices/create', authController.authenticateToken, deviceController.create);
+router.get(
+  "/operator-work/sessions/:sessionId/work-details",
+  authController.authenticateToken,
+  operatorWorkController.getSessionWorkDetails
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
@@ -205,6 +214,7 @@ router.post('/process/orderConfirmation/delete-multiple', authController.authent
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
+router.get('/planing/downtime-reasons', authController.authenticateToken, planningAndSchedulingController.getDowntimeReasons);
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
@@ -215,7 +225,7 @@ router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonCon
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
-router.delete("/devices/remove-duplicates", async (req, res) => {
+router.delete("/devices/remove-duplicates", authController.authenticateToken, async (req, res) => {
   try {
     const duplicates = await device.aggregate([
       {

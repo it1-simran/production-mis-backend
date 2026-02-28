@@ -241,26 +241,6 @@ module.exports = {
           $match: {
             selectedRoom: new mongoose.Types.ObjectId(roomId),
             isDrafted: 0,
-            $or: [
-              {
-                startDate: {
-                  $gte: new Date(parsedStartDate),
-                  $lte: new Date(parsedEndDate),
-                },
-              },
-              {
-                estimatedEndDate: {
-                  $gte: new Date(parsedStartDate),
-                  $lte: new Date(parsedEndDate),
-                },
-              },
-              {
-                $and: [
-                  { startDate: { $lte: new Date(parsedStartDate) } },
-                  { estimatedEndDate: { $gte: new Date(parsedEndDate) } },
-                ],
-              },
-            ],
           },
         },
         {
@@ -282,6 +262,27 @@ module.exports = {
             "processDetails.status": {
               $nin: ["completed", "waiting_schedule"],
             },
+            $or: [
+              {
+                startDate: {
+                  $gte: new Date(parsedStartDate),
+                  $lte: new Date(parsedEndDate),
+                },
+              },
+              {
+                estimatedEndDate: {
+                  $gte: new Date(parsedStartDate),
+                  $lte: new Date(parsedEndDate),
+                },
+              },
+              {
+                $and: [
+                  { startDate: { $lte: new Date(parsedStartDate) } },
+                  { estimatedEndDate: { $gte: new Date(parsedEndDate) } },
+                ],
+              },
+              { "processDetails.status": "active" }, // Catch-all for active processes
+            ],
           },
         },
       ];
@@ -347,12 +348,30 @@ module.exports = {
           0
         ) || 0;
 
-      // ✅ Fetch plans
-      const plans = await PlaningAndSchedulingModel.find({
-        selectedRoom: new mongoose.Types.ObjectId(roomId),
-        selectedShift: new mongoose.Types.ObjectId(shiftId),
-        isDrafted: 0,
-      }).lean();
+      // ✅ Fetch plans with process status
+      const plans = await PlaningAndSchedulingModel.aggregate([
+        {
+          $match: {
+            selectedRoom: new mongoose.Types.ObjectId(roomId),
+            selectedShift: new mongoose.Types.ObjectId(shiftId),
+            isDrafted: 0,
+          },
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "selectedProcess",
+            foreignField: "_id",
+            as: "processDetails",
+          },
+        },
+        { $unwind: "$processDetails" },
+        {
+          $match: {
+            "processDetails.status": { $nin: ["completed", "waiting_schedule"] },
+          },
+        },
+      ]);
 
       if (!plans || plans.length === 0) {
         // ✅ Return empty seat availability
@@ -367,7 +386,12 @@ module.exports = {
       const seatAvailability = {};
       for (const plan of plans) {
         const planStartDate = moment(plan.startDate).startOf("day");
-        const planEndDate = moment(plan.estimatedEndDate).endOf("day");
+        let planEndDate = moment(plan.estimatedEndDate).endOf("day");
+
+        // If the process is still active, consider it occupying seats until today at least
+        if (plan.processDetails?.status === "active" && planEndDate.isBefore(moment())) {
+          planEndDate = moment().endOf("day");
+        }
 
         let currentDateInRange = planStartDate.clone();
         while (currentDateInRange.isSameOrBefore(planEndDate)) {
@@ -619,6 +643,7 @@ module.exports = {
               "$assignKitsToLinesDetails.issuedKitsStatus",
             assignedCustomStages: 1,
             assignedCustomStagesOp: 1,
+            processStatus: "$processDetails.status",
             startTime: "$shiftDetails.startTime",
             processStatus: "$processDetails.status",
             processQuantity: "$processDetails.quantity",
@@ -735,12 +760,19 @@ module.exports = {
       console.log("Received ID:", id);
       console.log("Selected Process:", selectedProcess);
       console.log("DownTime:", downTime);
+      const downtimeData = JSON.parse(downTime);
 
       const processData = {
         status: "down_time_hold",
       };
       const planingData = {
-        downTime: JSON.parse(downTime),
+        downTime: {
+          from: downtimeData.downTimeFrom,
+          to: downtimeData.downTimeTo,
+          description: downtimeData.downTimeDesc,
+          downTimeType: downtimeData.downTimeDesc
+        },
+        status: "down_time_hold",
       };
       const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(
         id,
@@ -781,9 +813,21 @@ module.exports = {
       const processData = {
         status: req.body.status,
       };
+
+      const isResuming = req.body.status === "active";
+
       const planingData = {
-        downTime: {},
+        status: req.body.status,
       };
+
+      if (isResuming) {
+        planingData.downTime = {
+          from: null,
+          to: null,
+          downTimeType: "",
+          description: ""
+        };
+      }
       const planing = await PlaningAndSchedulingModel.findByIdAndUpdate(
         id,
         planingData,
@@ -891,6 +935,23 @@ module.exports = {
     try {
     } catch (error) {
       console.error(" Api Error :", error.message);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getDowntimeReasons: async (req, res) => {
+    try {
+      const reasons = [
+        "Machine Breakdown",
+        "Power Failure",
+        "Material Shortage",
+        "Quality Issue",
+        "Scheduled Maintenance",
+        "Operator Unavailable",
+        "System Update",
+        "Other"
+      ];
+      return res.status(200).json({ status: 200, reasons });
+    } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
