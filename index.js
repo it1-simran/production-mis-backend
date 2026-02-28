@@ -10,7 +10,7 @@ dotenv.config({ path: path.join(__dirname, envFile) });
 
 const app = express();
 
-app.use(helmet());
+// app.use(helmet()); 
 app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*'
 })); // Enable CORS
