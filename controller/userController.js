@@ -9,12 +9,10 @@ module.exports = {
         return res.status(400).json({ error: "User ID is required" });
       }
       const user = await User.findById(userId);
-      const saltRounds = 10;
-      const hashedPassword = await bcrypt.hash(user.password, saltRounds);
-      user.password = hashedPassword;
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
+      user.password = undefined; // Do not send password to the client
       return res
         .status(200)
         .json({ status: 200, status_msg: "User Fetched Sucessfully!!", user });
@@ -78,6 +76,7 @@ module.exports = {
       });
 
       await newUser.save();
+      newUser.password = undefined;
       return res.status(200).json({
         status: 200,
         message: "User created successfully",
@@ -118,7 +117,7 @@ module.exports = {
   },
   getUsers: async (req, res) => {
     try {
-      const users = await User.find({ userType: { $ne: "admin" } });
+      const users = await User.find({ userType: { $ne: "admin" } }).select("-password");
       return res.status(200).json({
         status: 200,
         status_msg: "Users Fetched Sucessfully!!",
@@ -202,6 +201,7 @@ module.exports = {
       if (!updatedUser) {
         return res.status(404).json({ message: "User not found" });
       }
+      updatedUser.password = undefined;
       return res.status(200).json({
         status: 200,
         message: "User updated successfully",
@@ -218,7 +218,7 @@ module.exports = {
   updateOperatorSkillSet: async (req, res) => {
     try {
       const id = req.params.id;
-      const updatedData = {skills: req.body.skills.split(",")};
+      const updatedData = { skills: req.body.skills.split(",") };
       const updatedUserSkill = await User.findByIdAndUpdate(id, updatedData, {
         new: true,
         runValidators: true,

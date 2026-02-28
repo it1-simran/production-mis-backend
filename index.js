@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const dotenv = require('dotenv');
 const morgan = require('morgan');
@@ -9,6 +10,7 @@ dotenv.config({ path: path.join(__dirname, envFile) });
 
 const app = express();
 
+app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*'
 })); // Enable CORS

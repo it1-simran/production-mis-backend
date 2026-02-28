@@ -34,6 +34,7 @@ class UserService {
         expiresIn: "24h",
       });
 
+      user.password = undefined;
       return {
         status: 200,
         success: true,
@@ -70,6 +71,7 @@ class UserService {
         department,
       });
       const savedUser = await newUser.save();
+      savedUser.password = undefined;
       return { message: "User registered successfully", user: savedUser };
     } catch (error) {
       throw new Error(error.message || "Error registering user");

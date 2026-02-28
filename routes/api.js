@@ -42,7 +42,7 @@ router.post('/login', authController.login);
 router.post('/logout', authController.logout);
 router.post('/register', authController.register);
 router.post('/add/product', authController.authenticateToken, productController.create);
-router.put('/product/update/:id', productController.update);
+router.put('/product/update/:id', authController.authenticateToken, productController.update);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
@@ -225,7 +225,7 @@ router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonCon
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
-router.delete("/devices/remove-duplicates", async (req, res) => {
+router.delete("/devices/remove-duplicates", authController.authenticateToken, async (req, res) => {
   try {
     const duplicates = await device.aggregate([
       {
