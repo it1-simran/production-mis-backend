@@ -19,7 +19,7 @@
   "homepage": "https://github.com/it1-simran/production-mis-backend#readme",
   "description": "",
   "dependencies": {
-    "bcrypt": "^6.0.0",
+    "bcrypt": "^5.1.1",
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "cross-env": "^10.1.0",
