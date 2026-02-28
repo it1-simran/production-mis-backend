@@ -300,15 +300,19 @@ module.exports = {
         let lastProductStage = productStages[productStages.length - 1];
         let lastStage = mergedStages[mergedStages.length - 1];
         let nextIndex = getNextIndex(assignedStages, currentIndex);
-        if (assignedStages[currentIndex] && assignedStages[currentIndex][0]) {
+        if (assignedStages[currentIndex]) {
+          const seatStages = assignedStages[currentIndex];
+          const stageIdx = seatStages.findIndex(s => (s.name || s.stageName) === (data.stageName || currentStage));
+          const targetStageIdx = stageIdx !== -1 ? stageIdx : 0;
+
           if (data.status === "Pass") {
-            if (assignedStages[currentIndex][0].totalUPHA > 0) {
-              assignedStages[currentIndex][0].totalUPHA -= 1;
+            if (seatStages[targetStageIdx].totalUPHA > 0) {
+              seatStages[targetStageIdx].totalUPHA -= 1;
             }
-            assignedStages[currentIndex][0].passedDevice += 1;
+            seatStages[targetStageIdx].passedDevice = (seatStages[targetStageIdx].passedDevice || 0) + 1;
+
             if (currentStage === lastProductStage) {
               if (commonStages.length > 0) {
-                //assignedStages[currentIndex][0].totalUPHA -= 1;
                 const customStageData = {
                   name: commonStages[0],
                   totalUPHA: 1,
@@ -328,10 +332,10 @@ module.exports = {
             }
           } else {
             // NG flow: remove one from current stage WIP and mark NG count
-            if (assignedStages[currentIndex][0].totalUPHA > 0) {
-              assignedStages[currentIndex][0].totalUPHA -= 1;
+            if (seatStages[targetStageIdx].totalUPHA > 0) {
+              seatStages[targetStageIdx].totalUPHA -= 1;
             }
-            assignedStages[currentIndex][0].ngDevice += 1;
+            seatStages[targetStageIdx].ngDevice = (seatStages[targetStageIdx].ngDevice || 0) + 1;
 
             data.assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
             if (data.assignedDeviceTo === "QC" || data.assignedDeviceTo === "TRC") {

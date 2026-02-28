@@ -86,6 +86,15 @@ module.exports = {
           $unwind: "$processDetails",
         },
         {
+          $match: {
+            "processDetails.status": { $ne: "completed" },
+          },
+        }, {
+          $match: {
+            "processDetails.status": { $ne: "completed" },
+          },
+        },
+        {
           $lookup: {
             from: "assignkitstolines",
             localField: "processId",

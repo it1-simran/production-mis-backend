@@ -146,8 +146,17 @@ router.post(
   authController.authenticateToken,
   operatorWorkController.logEvent
 );
+router.get(
+  "/operator-work/operator/:operatorId/sessions",
+  authController.authenticateToken,
+  operatorWorkController.getSessionsByOperator
+);
 
-router.post('/devices/create', authController.authenticateToken, deviceController.create);
+router.get(
+  "/operator-work/sessions/:sessionId/work-details",
+  authController.authenticateToken,
+  operatorWorkController.getSessionWorkDetails
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
@@ -205,6 +214,7 @@ router.post('/process/orderConfirmation/delete-multiple', authController.authent
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
+router.get('/planing/downtime-reasons', authController.authenticateToken, planningAndSchedulingController.getDowntimeReasons);
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);

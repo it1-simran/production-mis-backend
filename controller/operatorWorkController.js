@@ -4,6 +4,7 @@ const moment = require("moment-timezone");
 const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const OperatorWorkSession = require("../models/operatorWorkSession");
 const OperatorWorkEvent = require("../models/operatorWorkEvent");
+const DeviceTestRecord = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 
@@ -405,6 +406,125 @@ module.exports = {
 
       await event.save();
       return res.status(201).json({ status: 201, message: "Event captured", eventId: event._id });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  getSessionsByOperator: async (req, res) => {
+    try {
+      const { operatorId } = req.params;
+      const { startDate, endDate } = req.query;
+
+      if (!operatorId || !isValidObjectId(operatorId)) {
+        return res.status(400).json({ status: 400, message: "Invalid operatorId" });
+      }
+
+      const query = {
+        operatorId: new mongoose.Types.ObjectId(operatorId),
+      };
+
+      if (startDate || endDate) {
+        query.startedAt = {};
+        if (startDate) {
+          query.startedAt.$gte = moment.tz(startDate, TZ).startOf("day").toDate();
+        }
+        if (endDate) {
+          query.startedAt.$lte = moment.tz(endDate, TZ).endOf("day").toDate();
+        }
+      }
+
+      const sessions = await OperatorWorkSession.find(query)
+        .populate("processId", "name")
+        .sort({ startedAt: -1 })
+        .lean();
+
+      const processedSessions = sessions.map((s) => {
+        const endedAt = s.endedAt || (s.status === "active" ? new Date() : s.updatedAt);
+        const breakTotalMs = computeBreakTotalMs(s.breaks, endedAt);
+        const totalDurationMs = Math.max(0, new Date(endedAt).getTime() - new Date(s.startedAt).getTime());
+        const workTotalMs = Math.max(0, totalDurationMs - breakTotalMs);
+
+        return {
+          ...s,
+          breakTotalMs,
+          workTotalMs,
+          totalDurationMs,
+        };
+      });
+
+      return res.status(200).json({
+        status: 200,
+        sessions: processedSessions,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  getSessionWorkDetails: async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+
+      if (!sessionId || !isValidObjectId(sessionId)) {
+        return res.status(400).json({ status: 400, message: "Invalid sessionId" });
+      }
+
+      const session = await OperatorWorkSession.findById(sessionId).lean();
+      if (!session) {
+        return res.status(404).json({ status: 404, message: "Session not found" });
+      }
+
+      // Query records matching this session's parameters
+      // We prioritize exact planId matching if session has it
+      const recordQuery = {
+        operatorId: session.operatorId,
+        processId: session.processId,
+      };
+
+      if (session.planId) {
+        recordQuery.planId = session.planId;
+      } else {
+        // Fallback to time range if no planId (less common but safer)
+        recordQuery.createdAt = { $gte: session.startedAt };
+        if (session.endedAt) {
+          recordQuery.createdAt.$lte = session.endedAt;
+        }
+      }
+
+      const stats = await DeviceTestRecord.aggregate([
+        { $match: recordQuery },
+        {
+          $group: {
+            _id: {
+              stage: "$stageName",
+              seat: "$seatNumber",
+            },
+            passCount: {
+              $sum: { $cond: [{ $eq: ["$status", "Pass"] }, 1, 0] },
+            },
+            ngCount: {
+              $sum: { $cond: [{ $eq: ["$status", "NG"] }, 1, 0] },
+            },
+            lastRecordAt: { $max: "$createdAt" },
+          },
+        },
+        { $sort: { lastRecordAt: -1 } },
+        {
+          $project: {
+            _id: 0,
+            stage: "$_id.stage",
+            seat: "$_id.seat",
+            passCount: 1,
+            ngCount: 1,
+          },
+        },
+      ]);
+
+      return res.status(200).json({
+        status: 200,
+        details: stats,
+      });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
