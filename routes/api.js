@@ -215,6 +215,10 @@ router.put('/process/addDownTime/:id', authController.authenticateToken, plannin
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
 router.get('/planing/downtime-reasons', authController.authenticateToken, planningAndSchedulingController.getDowntimeReasons);
+
+router.get('/cartons/full', authController.authenticateToken, cartonController.getFullCartons);
+router.post('/carton/updatePrinting', authController.authenticateToken, cartonController.updatePrinting);
+router.put('/carton/updateWeight', authController.authenticateToken, CartonController.updateWeight);
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);

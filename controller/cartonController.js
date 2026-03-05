@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const processLogModel = require("../models/ProcessLogs");
 const cartonModel = require("../models/cartonManagement");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/process");
@@ -67,6 +68,16 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Carton serial is required." });
       }
 
+
+      const carton = await cartonModel.findOne({ cartonSerial });
+      if (carton) {
+        await processLogModel.create({
+          action: "PRINT_STICKER",
+          processId: carton.processId,
+          userId: req.user.id,
+          description: `Sticker printed for carton ${cartonSerial}`
+        });
+      }
       const updatedCarton = await cartonModel.findOneAndUpdate(
         { cartonSerial },
         { isStickerVerified: true },
@@ -488,6 +499,16 @@ module.exports = {
       }
 
       // Update all cartons whose serials match
+
+      const firstCarton = await cartonModel.findOne({ cartonSerial: { $in: cartonArray } });
+      if (firstCarton) {
+        await processLogModel.create({
+          action: "SHIFT_CARTON",
+          processId: firstCarton.processId,
+          userId: req.user.id,
+          description: `Shifted ${cartonArray.length} cartons to PDI: ${cartonArray.join(", ")}`
+        });
+      }
       const result = await cartonModel.updateMany(
         { cartonSerial: { $in: cartonArray } }, // filter
         { $set: { cartonStatus: "PDI" } } // update
@@ -671,6 +692,88 @@ module.exports = {
       res
         .status(500)
         .json({ success: false, error: "Server error: " + error.message });
+    }
+  },
+
+  getFullCartons: async (req, res) => {
+    try {
+      const cartons = await cartonModel.find({
+        status: "full",
+        cartonStatus: ""
+      }).populate({
+        path: 'processId',
+        select: 'name processID'
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: cartons
+      });
+    } catch (error) {
+      console.error("Error fetching full cartons:", error);
+      return res.status(500).json({ success: false, error: "Server error" });
+    }
+  },
+
+  updatePrinting: async (req, res) => {
+    try {
+      const { cartonSerial } = req.body;
+      if (!cartonSerial) {
+        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const updatedCarton = await cartonModel.findOneAndUpdate(
+        { cartonSerial },
+        { isStickerPrinted: true },
+        { new: true }
+      );
+
+      if (!updatedCarton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Carton print status updated successfully.",
+        carton: updatedCarton,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Error updating print status.",
+        error: error.message,
+      });
+    }
+  },
+
+  updateWeight: async (req, res) => {
+    try {
+      const { cartonSerial, weight } = req.body;
+      if (!cartonSerial || weight === undefined) {
+        return res.status(400).json({ status: 400, message: "Carton serial and weight are required." });
+      }
+
+      const updatedCarton = await cartonModel.findOneAndUpdate(
+        { cartonSerial },
+        { weightCarton: weight },
+        { new: true }
+      );
+
+      if (!updatedCarton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Carton weight updated successfully.",
+        carton: updatedCarton,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Error updating carton weight.",
+        error: error.message,
+      });
     }
   },
 };

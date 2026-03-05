@@ -5,7 +5,7 @@ const ProcessLogSchema = new Schema({
   action: {
     type: String,
     required: true,
-    enum: ["CREATE","UPDATE","PLANING_CREATED","PROCESS_EXTENDED","PLANING_UPDATED","SHIFT_CHANGE","HOLD","ASSIGN","ASSIGN_JIG","PROCESS_COMPLETED"],
+    enum: ["CREATE","UPDATE","PLANING_CREATED","PROCESS_EXTENDED","PLANING_UPDATED","SHIFT_CHANGE","HOLD","ASSIGN","ASSIGN_JIG","PROCESS_COMPLETED", "PRINT_STICKER", "VERIFY_STICKER", "SHIFT_CARTON"],
   },
   processId: {
     type: mongoose.Schema.Types.ObjectId,

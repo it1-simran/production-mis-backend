@@ -36,6 +36,14 @@ const deviceTestSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Performance indexes for common query patterns
+deviceTestSchema.index({ operatorId: 1, createdAt: -1 });
+deviceTestSchema.index({ deviceId: 1, createdAt: -1 });
+deviceTestSchema.index({ planId: 1, operatorId: 1 });
+deviceTestSchema.index({ processId: 1, createdAt: -1 });
+deviceTestSchema.index({ serialNo: 1 });
+deviceTestSchema.index({ createdAt: -1 });
+
 const deviceTest = mongoose.model("deviceTestRecords", deviceTestSchema);
 
 module.exports = deviceTest;

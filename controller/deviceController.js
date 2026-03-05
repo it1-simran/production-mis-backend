@@ -504,11 +504,37 @@ module.exports = {
   },
   getOverallDeviceTestEntry: async (req, res) => {
     try {
-      const DeviceTestEntry = await deviceTestRecords.find();
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = pageRaw || limitRaw;
+      let DeviceTestEntry;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [entries, total] = await Promise.all([
+          deviceTestRecords
+            .find({}, null, { sort: { createdAt: -1 } })
+            .select("-logs")
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          deviceTestRecords.countDocuments(),
+        ]);
+        DeviceTestEntry = entries;
+        meta = { page, limit, total };
+      } else {
+        DeviceTestEntry = await deviceTestRecords
+          .find({}, null, { sort: { createdAt: -1 } })
+          .select("-logs")
+          .lean();
+      }
       return res.status(200).json({
         status: 200,
         status_msg: "Device Test Entry Fetched Sucessfully!!",
         DeviceTestEntry,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({
@@ -549,11 +575,13 @@ module.exports = {
         $lte: endOfDay,
       };
 
-      const deviceTestRecord = await deviceTestRecords.find(query)
+      const deviceTestRecord = await deviceTestRecords
+        .find(query, null, { sort: { createdAt: -1 } })
+        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
-        .sort({ createdAt: -1 });
+        .lean();
 
       if (deviceTestRecord.length === 0) {
         return res.status(404).json({
@@ -578,11 +606,13 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
-      let deviceTestHistory = await deviceTestRecords.find({ deviceId: id })
+      let deviceTestHistory = await deviceTestRecords
+        .find({ deviceId: id }, null, { sort: { createdAt: -1 } })
+        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
-        .sort({ createdAt: -1 });
+        .lean();
 
       if (deviceTestHistory.length === 0) {
         return res.status(200).json({
@@ -607,10 +637,13 @@ module.exports = {
   getOverallProcessByOperatorId: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
-      const devices = await deviceTestRecords.find({ planId, operatorId })
+      const devices = await deviceTestRecords
+        .find({ planId, operatorId })
+        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
-        .populate("planId", "processName");
+        .populate("planId", "processName")
+        .lean();
 
       if (devices.length === 0) {
         return res.status(404).json({
