@@ -674,15 +674,37 @@ module.exports = {
   getDeviceTestRecordsByProcessId: async (req, res) => {
     try {
       let processId = req.params.id;
-      const deviceTestRecords = await DeviceTestRecordModel.find({
-        processId: processId,
-      })
-        .populate("operatorId", "name employeeCode")
-        .sort({ createdAt: -1 });
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = pageRaw || limitRaw;
+      let deviceTestRecords;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [entries, total] = await Promise.all([
+          DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
+            .select("-logs")
+            .populate("operatorId", "name employeeCode")
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          DeviceTestRecordModel.countDocuments({ processId }),
+        ]);
+        deviceTestRecords = entries;
+        meta = { page, limit, total };
+      } else {
+        deviceTestRecords = await DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
+          .select("-logs")
+          .populate("operatorId", "name employeeCode")
+          .lean();
+      }
       return res.status(200).json({
         status: 200,
         message: "Device Record Test Fetched SuccessFully !!",
         deviceTestRecords,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

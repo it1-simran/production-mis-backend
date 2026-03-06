@@ -16,6 +16,7 @@ const cartonManagementSchema = new mongoose.Schema(
     maxCapacity: { type: String, required: false, default: "" },
     status: { type: String, required: false, default: "" },
     isStickerVerified: { type: Boolean, required: false, default: false },
+    isStickerPrinted: { type: Boolean, required: false, default: false },
     cartonStatus: { type: String, required: false, default: "" },
     weightCarton: { type: String, required: false, default: "" },
   },
