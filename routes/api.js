@@ -160,6 +160,7 @@ router.get(
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
+router.post('/devices/create', authController.authenticateToken, deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
