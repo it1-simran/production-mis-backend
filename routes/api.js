@@ -227,6 +227,7 @@ router.get("/cartons/:processId/partial", authController.authenticateToken, Cart
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
+router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
