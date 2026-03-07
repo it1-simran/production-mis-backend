@@ -685,7 +685,6 @@ module.exports = {
         const skip = (page - 1) * limit;
         const [entries, total] = await Promise.all([
           DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
-            .select("-logs")
             .populate("operatorId", "name employeeCode")
             .skip(skip)
             .limit(limit)
@@ -696,7 +695,6 @@ module.exports = {
         meta = { page, limit, total };
       } else {
         deviceTestRecords = await DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
-          .select("-logs")
           .populate("operatorId", "name employeeCode")
           .lean();
       }
