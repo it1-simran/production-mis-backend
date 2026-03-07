@@ -158,6 +158,7 @@ router.get(
   operatorWorkController.getSessionWorkDetails
 );
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
+router.get('/device/get/:id', authController.authenticateToken, deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
 router.post('/devices/create', authController.authenticateToken, deviceController.create);

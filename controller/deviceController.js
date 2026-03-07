@@ -516,7 +516,8 @@ module.exports = {
         const [entries, total] = await Promise.all([
           deviceTestRecords
             .find({}, null, { sort: { createdAt: -1 } })
-            .select("-logs")
+            .populate("deviceId")
+            .populate("processId")
             .skip(skip)
             .limit(limit)
             .lean(),
@@ -527,7 +528,8 @@ module.exports = {
       } else {
         DeviceTestEntry = await deviceTestRecords
           .find({}, null, { sort: { createdAt: -1 } })
-          .select("-logs")
+          .populate("deviceId")
+          .populate("processId")
           .lean();
       }
       return res.status(200).json({
@@ -577,7 +579,6 @@ module.exports = {
 
       const deviceTestRecord = await deviceTestRecords
         .find(query, null, { sort: { createdAt: -1 } })
-        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
@@ -606,13 +607,17 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
+      console.log(`DEBUG: Fetching history for Device ${id}`);
       let deviceTestHistory = await deviceTestRecords
         .find({ deviceId: id }, null, { sort: { createdAt: -1 } })
-        .select("-logs")
+        .populate("deviceId")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
         .lean();
+
+      console.log(`DEBUG: Found ${deviceTestHistory.length} records. Item 0 logs count:`,
+        deviceTestHistory[0]?.logs?.length || 0);
 
       if (deviceTestHistory.length === 0) {
         return res.status(200).json({
@@ -639,7 +644,6 @@ module.exports = {
       const { planId, operatorId } = req.params;
       const devices = await deviceTestRecords
         .find({ planId, operatorId })
-        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
@@ -986,6 +990,32 @@ module.exports = {
         status: 500,
         error: error.message,
       });
+    }
+  },
+
+  getDeviceById: async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid deviceId" });
+      }
+      const device = await deviceModel
+        .findById(id)
+        .populate("productType", "name")
+        .populate("processID", "processName pid processID")
+        .lean();
+
+      if (!device) {
+        return res.status(404).json({ status: 404, message: "Device not found" });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device fetched successfully",
+        data: device
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
 };
