@@ -776,4 +776,55 @@ module.exports = {
       });
     }
   },
+
+  getStorePortalCartons: async (req, res) => {
+    try {
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            cartonStatus: { $in: ["FG_TO_STORE", "STOCKED"] },
+          },
+        },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "processId",
+            foreignField: "_id",
+            as: "processInfo",
+          },
+        },
+        { $unwind: "$processInfo" },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "deviceDetails",
+          },
+        },
+        {
+          $project: {
+            cartonSerial: 1,
+            processName: "$processInfo.name",
+            processID: "$processInfo.processID",
+            status: "$cartonStatus",
+            createdAt: 1,
+            updatedAt: 1,
+            maxCapacity: 1,
+            deviceCount: { $size: "$devices" },
+            devices: "$deviceDetails",
+          },
+        },
+        { $sort: { createdAt: -1 } }
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        data: cartons,
+      });
+    } catch (error) {
+      console.error("Error in getStorePortalCartons:", error);
+      res.status(500).json({ success: false, error: "Server error: " + error.message });
+    }
+  },
 };

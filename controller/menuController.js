@@ -161,6 +161,11 @@ module.exports = {
           label: "NG Devices",
           route: "/ng-devices",
         },
+        {
+          icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 7L12 2L21 7L12 12L3 7Z" fill="#ffffff" fill-opacity="0.1"/></svg>`,
+          label: "Store Portal",
+          route: "/store-portal",
+        },
       ];
       const menu = new Menu({ menus: data });
       const savedMenu = await menu.save();
