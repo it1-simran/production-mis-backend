@@ -12,8 +12,8 @@ const processSchema = new mongoose.Schema({
   quantity: { type: String, required: true },
   issuedKits: { type: Number, required: false, default: 0 },
   issuedCartons: { type: Number, default: 0 },
-  consumedKits: { type: Number, default: 0 },
-  consumedCartons: { type: Number, default: 0 },
+  consumedKits: { type: Number, required: false, default: 0 },
+  consumedCartons: { type: Number, required: false, default: 0 },
   descripition: { type: String, required: false },
   fgToStore: { type: Number, required: false, default: 0 },
   stages: [
@@ -43,6 +43,7 @@ const processSchema = new mongoose.Schema({
         stepType: { type: String, required: false, enum: ["manual", "jig"] },
         ngTimeout: { type: Number, required: false, default: 0 },
         isPrinterEnable: { type: Boolean, required: false, default: false },
+        disabled: { type: Boolean, default: false },
         isCheckboxNGStatus: {
           type: Boolean,
           required: false,
