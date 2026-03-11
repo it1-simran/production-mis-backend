@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  status: { type: String, enum: ["draft", "active"], default: "active" },
   stages: [
     {
       stageName: { type: String, required: true },

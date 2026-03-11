@@ -43,6 +43,7 @@ router.post('/logout', authController.logout);
 router.post('/register', authController.register);
 router.post('/add/product', authController.authenticateToken, productController.create);
 router.put('/product/update/:id', authController.authenticateToken, productController.update);
+router.put('/product/activate/:id', authController.authenticateToken, productController.activate);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);

@@ -5,43 +5,53 @@ const InventoryModel = require("../models/inventoryManagement");
 
 const Carton = require('../models/cartonManagement');
 module.exports = {
-  create: async (req, res) => {
+    create: async (req, res) => {
     try {
       const name = req.body.name;
-      const stages = JSON.parse(req.body.Products);
-      const commonStages = JSON.parse(req.body.commonStages);
-      if (!name || !stages || !stages.length) {
+      const stages = JSON.parse(req.body.Products || "[]");
+      const commonStages = JSON.parse(req.body.commonStages || "[]");
+      const bodyStatus = String(req.body.status || req.body.productStatus || "").toLowerCase();
+      const isDraft = String(req.body.isDraft || "").toLowerCase() === "true" || bodyStatus === "draft";
+
+      if (!name || (!isDraft && (!stages || !stages.length))) {
         return res.status(400).json({
           status: 400,
           message: "Product Name and Products are required",
         });
       }
 
-      for (let stage of stages) {
-        const { subSteps } = stage;
-        for (let subStep of subSteps) {
-          const stepType = subStep.stepType;
-          if (stepType === "manual") {
-            subStep.jigFields = [];
-            if (!subStep.stepFields) {
-              return res.status(400).json({
-                status: 400,
-                message: "Substeps are required for manual Product type.",
-              });
+      if (!isDraft) {
+        for (let stage of stages) {
+          const { subSteps } = stage;
+          for (let subStep of subSteps) {
+            const stepType = subStep.stepType;
+            if (stepType === "manual") {
+              subStep.jigFields = [];
+              if (!subStep.stepFields) {
+                return res.status(400).json({
+                  status: 400,
+                  message: "Substeps are required for manual Product type.",
+                });
+              }
+            } else if (stepType === "jig") {
+              subStep.stepFields = {};
             }
-          } else if (stepType === "jig") {
-            subStep.stepFields = {};
           }
         }
       }
 
-      const newProduct = new Product({ name, stages,commonStages });
+      const newProduct = new Product({
+        name,
+        stages,
+        commonStages,
+        status: isDraft ? "draft" : "active",
+      });
 
       const savedProduct = await newProduct.save();
-      if(savedProduct) {
+      if (savedProduct && savedProduct.status !== "draft") {
         const InventoryData = {
-          "productName": name,
-          "productType": savedProduct._id,
+          productName: name,
+          productType: savedProduct._id,
         };
         const newInventoryModel = new InventoryModel(InventoryData);
         await newInventoryModel.save();
@@ -68,12 +78,13 @@ module.exports = {
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
-  delete: async (req, res) => {
+    delete: async (req, res) => {
     try {
       const product = await Product.findByIdAndDelete(req.params.id);
       if (!product) {
         return res.status(404).json({ message: "Product not found" });
       }
+      await InventoryModel.deleteMany({ productType: product._id });
       res
         .status(200)
         .json({ message: "Product deleted successfully", product });
@@ -161,6 +172,34 @@ module.exports = {
         .json({ status: 500, message: "Internal Server Error", error });
     }
   },
+  activate: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const product = await Product.findById(id);
+      if (!product) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+
+      if (String(product.status || "active").toLowerCase() !== "active") {
+        product.status = "active";
+        await product.save();
+      }
+
+      await InventoryModel.findOneAndUpdate(
+        { productType: product._id },
+        { $setOnInsert: { productName: product.name, productType: product._id } },
+        { upsert: true, new: true }
+      );
+
+      return res.status(200).json({
+        status: 200,
+        message: "Product activated successfully",
+        product,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   deleteMultiple: async (req, res) => {
     try {
       const ids = req.body.deleteIds;
@@ -178,6 +217,7 @@ module.exports = {
       });
 
       const result = await Product.deleteMany({ _id: { $in: objectIds } });
+      await InventoryModel.deleteMany({ productType: { $in: objectIds } });
       if (result.deletedCount === 0) {
         return res.status(404).json({ message: "No items found to delete" });
       }
