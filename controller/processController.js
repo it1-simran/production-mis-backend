@@ -109,7 +109,7 @@ module.exports = {
         .json({ message: "Server error", error: error.message });
     }
   },
-  delete: async (req, res) => {
+    delete: async (req, res) => {
     try {
       const { id } = req.params;
       const deletedProcess = await ProcessModel.findByIdAndDelete(id);
@@ -119,6 +119,8 @@ module.exports = {
       }
       await Promise.all([
         PlaningAndSchedulingModel.deleteMany({ selectedProcess: id }),
+        AssignOperatorToPlanModel.updateMany({ processId: id }, { status: "Free" }),
+        AssignJigToPlanModel.updateMany({ processId: id }, { status: "Free" }),
         AssignOperatorToPlanModel.deleteMany({ processId: id }),
         AssignJigToPlanModel.deleteMany({ processId: id }),
       ]);
@@ -154,7 +156,7 @@ module.exports = {
   //     return res.status(500).json({ status: 500, error: error.message });
   //   }
   // },
-  deleteProcessMultiple: async (req, res) => {
+    deleteProcessMultiple: async (req, res) => {
     try {
       const ids = req.body.deleteIds;
       if (!Array.isArray(ids) || ids.length === 0) {
@@ -169,6 +171,15 @@ module.exports = {
           throw new Error(`Invalid ObjectId: ${id}`);
         }
       });
+
+      await Promise.all([
+        PlaningAndSchedulingModel.deleteMany({ selectedProcess: { $in: objectIds } }),
+        AssignOperatorToPlanModel.updateMany({ processId: { $in: objectIds } }, { status: "Free" }),
+        AssignJigToPlanModel.updateMany({ processId: { $in: objectIds } }, { status: "Free" }),
+        AssignOperatorToPlanModel.deleteMany({ processId: { $in: objectIds } }),
+        AssignJigToPlanModel.deleteMany({ processId: { $in: objectIds } }),
+      ]);
+
       const result = await ProcessModel.deleteMany({ _id: { $in: objectIds } });
       if (result.deletedCount === 0) {
         return res.status(404).json({ message: "No items found to delete" });
