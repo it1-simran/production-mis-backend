@@ -24,6 +24,7 @@ const processSchema = new mongoose.Schema({
       cycleTime: { type: String, required: true },
       videoLinks: { type: Array, default: [], required: false },
       upha: { type: String, required: true },
+      description: { type: String, required: false },
       searchType: { type: String, required: false, default: "" },
       jigStageFields: [
         {
