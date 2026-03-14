@@ -286,6 +286,43 @@ module.exports = {
           (operator) => operator._id === data.operatorId
         )
       );
+      const assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
+      const isQcOrTrc = assignedDeviceTo === "QC" || assignedDeviceTo === "TRC";
+
+      // If assigning directly to QC/TRC and operator isn't in assignedOperators,
+      // allow the record to be created without seat-based plan updates.
+      if (matchingIndices.length === 0 && isQcOrTrc) {
+        try {
+          const ngPayload = {
+            processId: planing.selectedProcess || data.processId || null,
+            userId: data.operatorId || data.userId || null,
+            department: assignedDeviceTo,
+            serialNo:
+              data.serialNo ||
+              data.serialNoValue ||
+              data.deviceSerial ||
+              "",
+            ngStage: data.stageName || data.ngStage || "",
+          };
+          if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
+            const ngRecord = new NGDevice(ngPayload);
+            await ngRecord.save();
+          }
+        } catch (ngErr) {
+          console.error("Error creating NGDevice record:", ngErr);
+        }
+
+        const deviceTestRecord = new deviceTestRecords({
+          ...data,
+          assignedDeviceTo,
+        });
+        const savedDeviceTestRecord = await deviceTestRecord.save();
+        return res.status(200).json({
+          status: 200,
+          message: "Device Test Entry added successfully",
+          data: savedDeviceTestRecord,
+        });
+      }
       if (matchingIndices.length > 0) {
         let currentIndex = matchingIndices[0];
         let currentStage = assignedStages[currentIndex][0]?.name;
@@ -853,6 +890,34 @@ module.exports = {
       if (!updatedDevice) {
         return res.status(404).json({ message: "Device not found" });
       }
+
+      // If TRC/QC resolved and stage is explicitly set, prune device history
+      if (updates.currentStage && updates.status && String(updates.status).toLowerCase().includes("resolved")) {
+        try {
+          const process = await processModel.findById(device.processID);
+          if (process) {
+            const stages = Array.isArray(process.stages) ? process.stages : [];
+            const commonStages = Array.isArray(process.commonStages) ? process.commonStages : [];
+            const mergedStages = [
+              ...stages.map((s) => s.stageName || s.name).filter(Boolean),
+              ...commonStages.map((s) => s.stageName || s.name).filter(Boolean),
+            ];
+            const targetStage = String(updates.currentStage).trim();
+            const targetIndex = mergedStages.findIndex(
+              (s) => String(s).trim() === targetStage,
+            );
+            if (targetIndex !== -1) {
+              const stagesToDelete = mergedStages.slice(targetIndex);
+              await deviceTestRecords.deleteMany({
+                deviceId: device._id,
+                stageName: { $in: stagesToDelete },
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to prune device test history:", e);
+        }
+      }
       res.status(200).json({
         status: 200,
         message: "Device updated successfully",
@@ -896,10 +961,13 @@ module.exports = {
         ? (process.stages[0]?.stageName || "")
         : "";
 
-      await deviceTestRecords.deleteMany({
-        deviceId: device._id,
-        serialNo: incomingSerial,
-      });
+      const selectedStage = req.body.currentStage || req.body.nextStage || req.body.selectedStage || "";
+      if (!selectedStage) {
+        await deviceTestRecords.deleteMany({
+          deviceId: device._id,
+          serialNo: incomingSerial,
+        });
+      }
 
       const incomingStatus = req.body.status || "QC Resolved";
       const isTRC = (incomingStatus || "").toUpperCase().includes("TRC") || !!req.body.trcRemarks;
@@ -926,9 +994,10 @@ module.exports = {
       const testRecord = new deviceTestRecords(testRecordPayload);
       const savedRecord = await testRecord.save();
 
+      const nextStage = selectedStage || firstStageName;
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,
-        { $set: { status: "", currentStage: firstStageName } },
+        { $set: { status: incomingStatus || "", currentStage: nextStage } },
         { new: true, runValidators: true }
       );
 
