@@ -55,6 +55,7 @@ const processSchema = new mongoose.Schema({
           packagingType: { type: String, required: false, default: "" },
           cartonWidth: { type: Number, required: false, default: 0 },
           cartonHeight: { type: Number, required: false, default: 0 },
+          cartonDepth: { type: Number, required: false, default: 0 },
           maxCapacity: { type: Number, required: false, default: 0 },
           cartonWeight: { type: Number, required: false, default: 0 },
         },

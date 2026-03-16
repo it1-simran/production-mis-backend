@@ -9,9 +9,18 @@ const cartonManagementSchema = new mongoose.Schema(
       required: true,
     },
     devices: [{ type: mongoose.Schema.Types.ObjectId, ref: "devices" }],
+    packagingData: {
+      packagingType: { type: String, required: false, default: "" },
+      cartonWidth: { type: Number, required: false, default: 0 },
+      cartonHeight: { type: Number, required: false, default: 0 },
+      cartonDepth: { type: Number, required: false, default: 0 },
+      maxCapacity: { type: Number, required: false, default: 0 },
+      cartonWeight: { type: Number, required: false, default: 0 },
+    },
     cartonSize: {
       width: { type: String, required: false, default: "" },
       height: { type: String, required: false, default: "" },
+      depth: { type: String, required: false, default: "" },
     },
     maxCapacity: { type: String, required: false, default: "" },
     status: { type: String, required: false, default: "" },
@@ -19,6 +28,7 @@ const cartonManagementSchema = new mongoose.Schema(
     isStickerPrinted: { type: Boolean, required: false, default: false },
     cartonStatus: { type: String, required: false, default: "" },
     weightCarton: { type: String, required: false, default: "" },
+    isLooseCarton: { type: Boolean, required: false, default: false },
   },
   { timestamps: true }
 );
