@@ -234,4 +234,60 @@ module.exports = {
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
+  getUserRegistrationTrends: async (req, res) => {
+    try {
+      const days = Math.max(parseInt(req.query.days, 10) || 30, 1);
+      const start = new Date();
+      start.setDate(start.getDate() - (days - 1));
+      start.setHours(0, 0, 0, 0);
+
+      const trend = await User.aggregate([
+        { $match: { createdAt: { $gte: start } } },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      const countsByDay = trend.reduce((acc, item) => {
+        acc[item._id] = item.count;
+        return acc;
+      }, {});
+
+      const categories = [];
+      const data = [];
+      for (let i = 0; i < days; i += 1) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        categories.push(key);
+        data.push(countsByDay[key] || 0);
+      }
+
+      const roleDistribution = await User.aggregate([
+        { $match: { userType: { $ne: "admin" } } },
+        { $group: { _id: "$userType", count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]);
+
+      return res.status(200).json({
+        status: 200,
+        message: "User registration trends fetched successfully",
+        categories,
+        series: [{ name: "Registrations", data }],
+        roleDistribution: roleDistribution.map((r) => ({
+          role: r._id || "Unknown",
+          count: r.count,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching user registration trends:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  },
 };

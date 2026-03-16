@@ -68,6 +68,7 @@ router.get('/user/view', authController.authenticateToken, userController.getUse
 router.delete('/user/delete/:id', authController.authenticateToken, userController.deleteUser);
 router.post('/user/delete/multiple', authController.authenticateToken, userController.deleteUserMultiple);
 router.put('/user/update/:id', authController.authenticateToken, userController.updateUser);
+router.get('/analytics/users/registration-trends', authController.authenticateToken, userController.getUserRegistrationTrends);
 router.post('/user-roles/create', authController.authenticateToken, userRolesController.create);
 router.get('/user-roles/view', authController.authenticateToken, userRolesController.view);
 router.delete('/user-roles/delete/:id', authController.authenticateToken, userRolesController.deleteUserRole);
@@ -184,6 +185,8 @@ router.post('/devices/createIMEI', authController.authenticateToken, deviceContr
 router.get('/devices/viewIMEI', authController.authenticateToken, deviceController.viewIMEI);
 router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, deviceController.deleteIMEI);
 router.post('/devices/deleteIMEI/multiple', authController.authenticateToken, deviceController.deleteMultipleIMEI);
+router.get('/analytics/device-test/trends', authController.authenticateToken, deviceController.getDeviceTestTrends);
+router.get('/analytics/device-test/ng-reasons', authController.authenticateToken, deviceController.getNGReasonDistribution);
 router.get('/inventory/view', authController.authenticateToken, inventoryController.view);
 router.put('/inventory/update/:id', authController.authenticateToken, inventoryController.updateInventoryQuantity);
 router.get('/inventory/process/get', authController.authenticateToken, inventoryController.getProcessInventory);
@@ -191,10 +194,12 @@ router.get('/inventory/dashboard', authController.authenticateToken, inventoryCo
 router.get('/inventory/getProcessByProduct/:id', authController.authenticateToken, inventoryController.getProcessByProductID);
 router.put('/inventory/process/updateIssueKit', authController.authenticateToken, inventoryController.updateIssueKit);
 router.put('/inventory/process/updateIssueCarton', authController.authenticateToken, inventoryController.updateCarton);
+router.get('/analytics/inventory/stock-trends', authController.authenticateToken, inventoryController.getInventoryTrends);
 router.get('/production-manger/process/get', authController.authenticateToken, productionManagerController.getProcesses);
 router.get('/production-manger/getRemainingKit', authController.authenticateToken, productionManagerController.getRemainingKitFromCompletedProcess);
 router.put('/production-manager/process/updateProductionStatus', authController.authenticateToken, productionManagerController.updateProductionStatus);
 router.get('/production-manager/processStatics/get', authController.authenticateToken, productionManagerController.processStatics);
+router.get('/analytics/production/completion-trends', authController.authenticateToken, productionManagerController.getProcessCompletionAnalytics);
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
 router.post('/skill-management/create', authController.authenticateToken, skillManagementController.create);
 router.get('/skill-management/get', authController.authenticateToken, skillManagementController.getSkills);

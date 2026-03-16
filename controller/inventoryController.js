@@ -241,6 +241,87 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  getInventoryTrends: async (req, res) => {
+    try {
+      const days = Math.max(parseInt(req.query.days, 10) || 14, 1);
+      const threshold = Math.max(parseInt(req.query.threshold, 10) || 10, 0);
+      const start = new Date();
+      start.setDate(start.getDate() - (days - 1));
+      start.setHours(0, 0, 0, 0);
+
+      const movement = await InventoryModel.aggregate([
+        { $match: { updatedAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$updatedAt" } },
+            kits: { $sum: "$quantity" },
+            cartons: { $sum: "$cartonQuantity" },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      const movementMap = movement.reduce((acc, row) => {
+        acc[row._id] = { kits: row.kits, cartons: row.cartons };
+        return acc;
+      }, {});
+
+      const categories = [];
+      const kitsData = [];
+      const cartonsData = [];
+      for (let i = 0; i < days; i += 1) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        categories.push(key);
+        kitsData.push(movementMap[key]?.kits || 0);
+        cartonsData.push(movementMap[key]?.cartons || 0);
+      }
+
+      const stockOverview = await InventoryModel.aggregate([
+        {
+          $group: {
+            _id: "$productName",
+            kits: { $sum: "$quantity" },
+            cartons: { $sum: "$cartonQuantity" },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      const lowStock = await InventoryModel.find({
+        quantity: { $lte: threshold },
+      })
+        .select("productName quantity cartonQuantity status")
+        .lean();
+
+      return res.status(200).json({
+        status: 200,
+        message: "Inventory trends fetched successfully",
+        movement: {
+          categories,
+          series: [
+            { name: "Kits", data: kitsData },
+            { name: "Cartons", data: cartonsData },
+          ],
+        },
+        stockOverview: {
+          categories: stockOverview.map((r) => r._id || "Unknown"),
+          series: [
+            { name: "Kits", data: stockOverview.map((r) => r.kits || 0) },
+            { name: "Cartons", data: stockOverview.map((r) => r.cartons || 0) },
+          ],
+        },
+        alerts: {
+          lowStockCount: lowStock.length,
+          items: lowStock,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching inventory trends:", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   updateIssueKit: async (req, res) => {
     try {
       const id = req?.body?.process;
