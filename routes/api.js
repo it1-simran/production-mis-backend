@@ -162,6 +162,7 @@ router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenti
 router.get('/device/get/:id', authController.authenticateToken, deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
+router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
@@ -172,6 +173,7 @@ router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToke
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, deviceController.searchByJigFields);
 router.post('/devices/markAsResolved', authController.authenticateToken, deviceController.markAsResolved);
+router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
 router.post('/sticker/fields/create', authController.authenticateToken, stickerController.createStickerField);
@@ -225,9 +227,11 @@ router.put('/carton/updateWeight', authController.authenticateToken, CartonContr
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
+router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
+router.put('/carton/close-loose', authController.authenticateToken, cartonController.closeLooseCarton);
 router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);

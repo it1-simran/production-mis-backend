@@ -93,6 +93,34 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  getNGDevicesByProcessId: async (req, res) => {
+    try {
+      const { processId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid processId",
+        });
+      }
+
+      const ngDevices = await deviceTestRecords
+        .find({
+          processId: new mongoose.Types.ObjectId(processId),
+          status: { $regex: /^NG$/i },
+        })
+        .populate("deviceId")
+        .populate("processId")
+        .lean();
+
+      return res.status(200).json({
+        status: 200,
+        message: "NG devices fetched successfully",
+        data: ngDevices,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   createIMEI: async (req, res) => {
     try {
       const data = req.body;
@@ -1082,6 +1110,86 @@ module.exports = {
         status: 200,
         message: "Device fetched successfully",
         data: device
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  seedStageHistory: async (req, res) => {
+    try {
+      const { processId, serials, stages, stageOperatorMap } = req.body || {};
+
+      if (!processId || !mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Valid processId is required" });
+      }
+      if (!Array.isArray(serials) || serials.length === 0) {
+        return res.status(400).json({ status: 400, message: "serials must be a non-empty array" });
+      }
+      if (!Array.isArray(stages) || stages.length === 0) {
+        return res.status(400).json({ status: 400, message: "stages must be a non-empty array" });
+      }
+      if (!stageOperatorMap || typeof stageOperatorMap !== "object") {
+        return res.status(400).json({ status: 400, message: "stageOperatorMap is required" });
+      }
+
+      const requester = await User.findById(req.user.id).lean();
+      if (!requester || String(requester.userType || "").toLowerCase() !== "admin") {
+        return res.status(403).json({ status: 403, message: "Only admin can seed stage history" });
+      }
+
+      const devices = await deviceModel.find({
+        serialNo: { $in: serials },
+        processID: processId,
+      });
+
+      if (!devices || devices.length === 0) {
+        return res.status(404).json({ status: 404, message: "No matching devices found" });
+      }
+
+      await deviceModel.updateMany(
+        { _id: { $in: devices.map((d) => d._id) } },
+        { $set: { currentStage: "Packaging", status: "Pass", updatedAt: new Date() } }
+      );
+
+      await deviceTestRecords.deleteMany({
+        processId: new mongoose.Types.ObjectId(processId),
+        serialNo: { $in: serials },
+        stageName: { $in: stages },
+      });
+
+      const now = new Date();
+      const testRecords = [];
+      devices.forEach((device) => {
+        stages.forEach((stageName, idx) => {
+          const operatorId = stageOperatorMap[stageName];
+          if (!operatorId || !mongoose.Types.ObjectId.isValid(operatorId)) {
+            throw new Error(`Missing/invalid operatorId for stage: ${stageName}`);
+          }
+          testRecords.push({
+            deviceId: device._id,
+            processId: new mongoose.Types.ObjectId(processId),
+            operatorId: new mongoose.Types.ObjectId(operatorId),
+            serialNo: device.serialNo,
+            stageName,
+            status: "Pass",
+            assignedDeviceTo: "Operator",
+            timeConsumed: "00:01:00",
+            startTime: new Date(now.getTime() + idx * 60000),
+            endTime: new Date(now.getTime() + (idx + 1) * 60000),
+            logs: [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        });
+      });
+
+      const insertResult = await deviceTestRecords.insertMany(testRecords);
+
+      return res.status(200).json({
+        status: 200,
+        message: "Stage history seeded successfully",
+        devicesUpdated: devices.length,
+        recordsInserted: insertResult.length,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

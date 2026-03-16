@@ -41,6 +41,11 @@ module.exports = {
         processId,
         devices,
         packagingData,
+        cartonSize: {
+          width: packagingData?.cartonWidth ? String(packagingData.cartonWidth) : "",
+          height: packagingData?.cartonHeight ? String(packagingData.cartonHeight) : "",
+          depth: packagingData?.cartonDepth ? String(packagingData.cartonDepth) : "",
+        },
         maxCapacity: packagingData.maxCapacity,
         status:
           devices.length >= packagingData.maxCapacity ? "full" : "partial",
@@ -140,6 +145,7 @@ module.exports = {
             maxCapacity: { $first: "$maxCapacity" },
             status: { $first: "$status" },
             isStickerVerified: { $first: "$isStickerVerified" },
+            isLooseCarton: { $first: "$isLooseCarton" },
             weightCarton: { $first: "$weightCarton" },
             createdAt: { $first: "$createdAt" },
             updatedAt: { $first: "$updatedAt" },
@@ -213,6 +219,7 @@ module.exports = {
             updatedAt: { $first: "$updatedAt" },
             __v: { $first: "$__v" },
             cartonStatus: { $first: "$cartonStatus" },
+            isLooseCarton: { $first: "$isLooseCarton" },
             devices: { $push: "$devices" },
           },
         },
@@ -278,6 +285,7 @@ module.exports = {
             updatedAt: { $first: "$updatedAt" },
             __v: { $first: "$__v" },
             cartonStatus: { $first: "$cartonStatus" },
+            isLooseCarton: { $first: "$isLooseCarton" },
             devices: { $push: "$devices" },
           },
         },
@@ -390,6 +398,28 @@ module.exports = {
       res.status(200).json(carton);
     } catch (error) {
       console.error("Error fetching carton:", error);
+      res.status(500).json({ error: "Server error" });
+    }
+  },
+  getOpenCartonsByProcessId: async (req, res) => {
+    try {
+      const { processId } = req.params;
+      const cartons = await cartonModel
+        .find({
+          processId: processId,
+          status: { $in: ["empty", "partial"] },
+          cartonStatus: { $in: [""] },
+        })
+        .populate("devices")
+        .lean();
+
+      if (!cartons || cartons.length === 0) {
+        return res.status(404).json({ message: "No open cartons found." });
+      }
+
+      return res.status(200).json(cartons);
+    } catch (error) {
+      console.error("Error fetching open cartons:", error);
       res.status(500).json({ error: "Server error" });
     }
   },
@@ -825,6 +855,43 @@ module.exports = {
     } catch (error) {
       console.error("Error in getStorePortalCartons:", error);
       res.status(500).json({ success: false, error: "Server error: " + error.message });
+    }
+  },
+
+  closeLooseCarton: async (req, res) => {
+    try {
+      const { cartonSerial } = req.body;
+      if (!cartonSerial) {
+        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const carton = await cartonModel.findOne({ cartonSerial });
+
+      if (!carton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      if (carton.status === "full") {
+        return res.status(400).json({ status: 400, message: "Carton is already full." });
+      }
+
+      // Mark the partial carton as full and flag it as a loose carton
+      carton.status = "full";
+      carton.isLooseCarton = true;
+      await carton.save();
+
+      return res.status(200).json({
+        status: 200,
+        message: "Loose carton closed successfully. It is now marked as full.",
+        carton,
+      });
+    } catch (error) {
+      console.error("Error in closeLooseCarton:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Error closing loose carton.",
+        error: error.message,
+      });
     }
   },
 };
