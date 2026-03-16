@@ -227,4 +227,78 @@ module.exports = {
         });
     }
   },
+  getProcessCompletionAnalytics: async (req, res) => {
+    try {
+      const days = Math.max(parseInt(req.query.days, 10) || 14, 1);
+      const start = new Date();
+      start.setDate(start.getDate() - (days - 1));
+      start.setHours(0, 0, 0, 0);
+
+      const daily = await ProcessModel.aggregate([
+        { $match: { createdAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            total: { $sum: 1 },
+            completed: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "completed"] }, 1, 0],
+              },
+            },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      const map = daily.reduce((acc, row) => {
+        acc[row._id] = row;
+        return acc;
+      }, {});
+
+      const categories = [];
+      const completionRate = [];
+      for (let i = 0; i < days; i += 1) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        categories.push(key);
+        const row = map[key];
+        const rate = row && row.total > 0 ? (row.completed / row.total) * 100 : 0;
+        completionRate.push(Number(rate.toFixed(2)));
+      }
+
+      const totals = await ProcessModel.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            completed: {
+              $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] },
+            },
+          },
+        },
+      ]);
+      const total = totals[0]?.total || 0;
+      const completed = totals[0]?.completed || 0;
+      const overallRate = total > 0 ? (completed / total) * 100 : 0;
+
+      return res.status(200).json({
+        status: 200,
+        message: "Process completion analytics fetched successfully",
+        categories,
+        series: [{ name: "Completion Rate (%)", data: completionRate }],
+        overall: {
+          total,
+          completed,
+          rate: Number(overallRate.toFixed(2)),
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "An error occurred while fetching completion analytics",
+        error: error.message,
+      });
+    }
+  },
 };

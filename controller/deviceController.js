@@ -733,6 +733,116 @@ module.exports = {
       });
     }
   },
+  getDeviceTestTrends: async (req, res) => {
+    try {
+      const interval = (req.query.interval || "day").toLowerCase();
+      const days = Math.max(parseInt(req.query.days, 10) || 7, 1);
+      const hours = Math.max(parseInt(req.query.hours, 10) || 24, 1);
+      const { operatorId, processId } = req.query;
+
+      const match = {};
+      if (operatorId && mongoose.Types.ObjectId.isValid(operatorId)) {
+        match.operatorId = new mongoose.Types.ObjectId(operatorId);
+      }
+      if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+        match.processId = new mongoose.Types.ObjectId(processId);
+      }
+
+      let start;
+      let format;
+      if (interval === "hour") {
+        start = new Date();
+        start.setHours(start.getHours() - (hours - 1), 0, 0, 0);
+        format = "%Y-%m-%d %H:00";
+      } else {
+        start = new Date();
+        start.setDate(start.getDate() - (days - 1));
+        start.setHours(0, 0, 0, 0);
+        format = "%Y-%m-%d";
+      }
+      match.createdAt = { $gte: start };
+
+      const trend = await deviceTestRecords.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: {
+              bucket: { $dateToString: { format, date: "$createdAt" } },
+              status: { $toUpper: "$status" },
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { "_id.bucket": 1 } },
+      ]);
+
+      const buckets = {};
+      trend.forEach((row) => {
+        const key = row._id.bucket;
+        if (!buckets[key]) buckets[key] = { Pass: 0, NG: 0 };
+        if (row._id.status === "PASS") buckets[key].Pass = row.count;
+        if (row._id.status === "NG") buckets[key].NG = row.count;
+      });
+
+      const categories = [];
+      const passData = [];
+      const ngData = [];
+      if (interval === "hour") {
+        for (let i = 0; i < hours; i += 1) {
+          const d = new Date(start);
+          d.setHours(start.getHours() + i, 0, 0, 0);
+          const key = d.toISOString().slice(0, 13).replace("T", " ") + ":00";
+          categories.push(key);
+          passData.push(buckets[key]?.Pass || 0);
+          ngData.push(buckets[key]?.NG || 0);
+        }
+      } else {
+        for (let i = 0; i < days; i += 1) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const key = d.toISOString().slice(0, 10);
+          categories.push(key);
+          passData.push(buckets[key]?.Pass || 0);
+          ngData.push(buckets[key]?.NG || 0);
+        }
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device test trends fetched successfully",
+        categories,
+        series: [
+          { name: "Pass", data: passData },
+          { name: "NG", data: ngData },
+        ],
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getNGReasonDistribution: async (req, res) => {
+    try {
+      const days = Math.max(parseInt(req.query.days, 10) || 30, 1);
+      const start = new Date();
+      start.setDate(start.getDate() - (days - 1));
+      start.setHours(0, 0, 0, 0);
+
+      const dist = await NGDevice.aggregate([
+        { $match: { createdAt: { $gte: start } } },
+        { $group: { _id: "$ngStage", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]);
+
+      return res.status(200).json({
+        status: 200,
+        message: "NG distribution fetched successfully",
+        labels: dist.map((d) => d._id || "Unknown"),
+        series: dist.map((d) => d.count),
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   searchByJigFields: async (req, res) => {
     try {
       const { jigFields, processId } = req.body;
