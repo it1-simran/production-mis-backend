@@ -9,6 +9,7 @@ const imeiModel = require("../models/imeiModel");
 const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const DeviceAttempt = require("../models/deviceAttempt");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -585,6 +586,66 @@ module.exports = {
       });
     }
   },
+  registerDeviceAttempt: async (req, res) => {
+    try {
+      const { deviceId, serialNo, planId, processId, operatorId } = req.body || {};
+
+      if (!planId || !processId) {
+        return res.status(400).json({
+          status: 400,
+          message: "planId and processId are required",
+        });
+      }
+
+      let resolvedDeviceId = deviceId;
+      if (!resolvedDeviceId && serialNo) {
+        const query = { serialNo: String(serialNo).trim() };
+        if (processId) query.processID = processId;
+        const device = await deviceModel.findOne(query).lean();
+        if (!device?._id) {
+          return res.status(404).json({
+            status: 404,
+            message: "Device not found for provided serialNo",
+          });
+        }
+        resolvedDeviceId = device._id;
+      }
+
+      if (!resolvedDeviceId || !mongoose.Types.ObjectId.isValid(resolvedDeviceId)) {
+        return res.status(400).json({
+          status: 400,
+          message: "Valid deviceId or serialNo is required",
+        });
+      }
+
+      const attempt = await DeviceAttempt.findOneAndUpdate(
+        {
+          deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
+          planId: new mongoose.Types.ObjectId(planId),
+          processId: new mongoose.Types.ObjectId(processId),
+        },
+        {
+          $inc: { attemptCount: 1 },
+          $set: { lastAttemptAt: new Date() },
+          ...(operatorId ? { $setOnInsert: { operatorId } } : {}),
+        },
+        { new: true, upsert: true }
+      );
+
+      return res.status(200).json({
+        status: 200,
+        message: "Attempt registered",
+        attemptCount: attempt?.attemptCount || 0,
+        deviceId: attempt?.deviceId,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Error registering device attempt",
+        error: error.message,
+      });
+    }
+  },
   getOverallDeviceTestEntry: async (req, res) => {
     try {
       const pageRaw = req.query.page;
@@ -1150,7 +1211,7 @@ module.exports = {
       const testRecord = new deviceTestRecords(testRecordPayload);
       const savedRecord = await testRecord.save();
 
-      const nextStage = selectedStage || firstStageName;
+      const nextStage = selectedStage || device.currentStage || firstStageName;
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,
         { $set: { status: incomingStatus || "", currentStage: nextStage } },
