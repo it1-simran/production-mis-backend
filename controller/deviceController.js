@@ -10,6 +10,21 @@ const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
+function sanitizeKeys(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeKeys(item));
+  }
+  if (value && typeof value === "object") {
+    const next = {};
+    Object.keys(value).forEach((key) => {
+      const safeKey = String(key).replace(/\u0000/g, "");
+      next[safeKey] = sanitizeKeys(value[key]);
+    });
+    return next;
+  }
+  return value;
+}
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -257,6 +272,9 @@ module.exports = {
   createDeviceTestEntry: async (req, res) => {
     try {
       const data = req.body;
+      if (data && data.logs) {
+        data.logs = sanitizeKeys(data.logs);
+      }
       let planing;
       try {
         planing = await planingAndScheduling.findById(data.planId);
