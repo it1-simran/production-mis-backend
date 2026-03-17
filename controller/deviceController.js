@@ -1108,33 +1108,6 @@ module.exports = {
         return res.status(404).json({ message: "Device not found" });
       }
 
-      // If TRC/QC resolved and stage is explicitly set, prune device history
-      if (updates.currentStage && updates.status && String(updates.status).toLowerCase().includes("resolved")) {
-        try {
-          const process = await processModel.findById(device.processID);
-          if (process) {
-            const stages = Array.isArray(process.stages) ? process.stages : [];
-            const commonStages = Array.isArray(process.commonStages) ? process.commonStages : [];
-            const mergedStages = [
-              ...stages.map((s) => s.stageName || s.name).filter(Boolean),
-              ...commonStages.map((s) => s.stageName || s.name).filter(Boolean),
-            ];
-            const targetStage = String(updates.currentStage).trim();
-            const targetIndex = mergedStages.findIndex(
-              (s) => String(s).trim() === targetStage,
-            );
-            if (targetIndex !== -1) {
-              const stagesToDelete = mergedStages.slice(targetIndex);
-              await deviceTestRecords.deleteMany({
-                deviceId: device._id,
-                stageName: { $in: stagesToDelete },
-              });
-            }
-          }
-        } catch (e) {
-          console.warn("Failed to prune device test history:", e);
-        }
-      }
       res.status(200).json({
         status: 200,
         message: "Device updated successfully",
