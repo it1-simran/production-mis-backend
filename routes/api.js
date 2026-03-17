@@ -166,6 +166,7 @@ router.get('/devices/countByProcessId/:processId', authController.authenticateTo
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
+router.post('/device/attempts/register', authController.authenticateToken, deviceController.registerDeviceAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
@@ -200,6 +201,7 @@ router.get('/production-manger/getRemainingKit', authController.authenticateToke
 router.put('/production-manager/process/updateProductionStatus', authController.authenticateToken, productionManagerController.updateProductionStatus);
 router.get('/production-manager/processStatics/get', authController.authenticateToken, productionManagerController.processStatics);
 router.get('/analytics/production/completion-trends', authController.authenticateToken, productionManagerController.getProcessCompletionAnalytics);
+router.get('/analytics/mes/production-dashboard', authController.authenticateToken, productionManagerController.getMesProductionDashboard);
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
 router.post('/skill-management/create', authController.authenticateToken, skillManagementController.create);
 router.get('/skill-management/get', authController.authenticateToken, skillManagementController.getSkills);
@@ -296,3 +298,4 @@ router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnC
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
 
 module.exports = router;
+

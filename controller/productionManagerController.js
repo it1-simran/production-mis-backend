@@ -1,5 +1,9 @@
 const mongoose = require("mongoose");
 const ProcessModel = require("../models/process");
+const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
+const DeviceTestModel = require("../models/deviceTestModel");
+const RoomPlanModel = require("../models/roomPlan");
+const moment = require("moment-timezone");
 module.exports = {
   getProcesses: async (req, res) => {
     try {
@@ -163,7 +167,7 @@ module.exports = {
       const updateData = {
         status: ProductionStatus,
       };
- 
+
       if (existingProcess.kitStatus === "Waiting_Kits_allocation") {
         updateData.issuedKits = issuedKits;
       }
@@ -301,4 +305,275 @@ module.exports = {
       });
     }
   },
+  getMesProductionDashboard: async (req, res) => {
+    try {
+      const { processId, timezone } = req.query || {};
+      const tz = timezone || "UTC";
+
+      const startMoment = moment.tz(tz).startOf("day");
+      const endMoment = moment.tz(tz).endOf("day");
+
+      const startDate = startMoment.toDate();
+      const endDate = endMoment.toDate();
+      const startMs = startDate.getTime();
+      const endMs = endDate.getTime();
+
+      let plans = await PlaningAndSchedulingModel.find({}).lean();
+
+      const planInRange = (p) => {
+        const s = p?.startDate ? new Date(p.startDate).getTime() : null;
+        const e = p?.estimatedEndDate ? new Date(p.estimatedEndDate).getTime() : s;
+        if (!s && !e) return false;
+        return (s || 0) <= endMs && (e || s || 0) >= startMs;
+      };
+      plans = plans.filter((p) => planInRange(p));
+      if (processId) {
+        plans = plans.filter((p) => String(p?.selectedProcess || "") === String(processId));
+      }
+
+      const processesAll = await ProcessModel.find({ status: "active" }).lean();
+      let processes = processesAll;
+
+      const processIds = [
+        ...new Set(plans.map((p) => String(p?.selectedProcess || "")).filter(Boolean)),
+      ];
+      processes = processesAll.filter((p) => processIds.includes(String(p._id)));
+
+      const processMap = processes.reduce((acc, p) => {
+        acc[String(p._id)] = p;
+        return acc;
+      }, {});
+
+      const deviceTests = await DeviceTestModel.find({
+        processId: { $in: processIds },
+        createdAt: { $gte: startDate, $lte: endDate },
+      }).lean();
+
+      const seatStats = {};
+      deviceTests.forEach((r) => {
+        const seat = String(r?.seatNumber || "").trim();
+        if (!seat) return;
+        if (!seatStats[seat]) seatStats[seat] = { pass: 0, ng: 0 };
+        const status = String(r?.status || "").toUpperCase();
+        if (status === "PASS" || status === "COMPLETED") seatStats[seat].pass += 1;
+        if (status === "NG" || status === "FAIL") seatStats[seat].ng += 1;
+      });
+
+      const seatsMap = new Map();
+      plans.forEach((p) => {
+        let assigned = p?.assignedStages || "{}";
+        if (typeof assigned === "string") {
+          try {
+            assigned = JSON.parse(assigned || "{}");
+          } catch (e) {
+            assigned = {};
+          }
+        }
+        Object.keys(assigned || {}).forEach((seatKey) => {
+          if (seatsMap.has(seatKey)) return;
+          const stages = Array.isArray(assigned[seatKey]) ? assigned[seatKey] : [assigned[seatKey]];
+          const stage = stages[0] || {};
+          const parts = String(seatKey).split("-");
+          const rowNo = parts[0] || "";
+          const seatNo = parts.length > 1 ? parts[1] : seatKey;
+          const matchStats = seatStats[seatKey] || seatStats[seatNo] || { pass: 0, ng: 0 };
+          seatsMap.set(seatKey, {
+            seatKey,
+            rowNo,
+            seatNo,
+            stageName: stage?.name || stage?.stageName || "",
+            pass: matchStats.pass || 0,
+            ng: matchStats.ng || 0,
+            wipKits: Number(stage?.totalUPHA || 0) || 0,
+            totalUPHA: Number(stage?.upha || 0) || 0,
+          });
+        });
+      });
+      const seats = Array.from(seatsMap.values());
+      const stageStats = {};
+      deviceTests.forEach((r) => {
+        const stage = String(r?.stageName || "Unknown").trim() || "Unknown";
+        if (!stageStats[stage]) stageStats[stage] = { pass: 0, ng: 0, total: 0 };
+        const status = String(r?.status || "").toUpperCase();
+        stageStats[stage].total += 1;
+        if (status === "PASS" || status === "COMPLETED") stageStats[stage].pass += 1;
+        if (status === "NG" || status === "FAIL") stageStats[stage].ng += 1;
+      });
+
+      const stageTargets = {};
+      processes.forEach((p) => {
+        const qty = Number(p?.quantity || 0) || 0;
+        (p?.stages || []).forEach((s) => {
+          const name = String(s?.stageName || "Unknown").trim() || "Unknown";
+          stageTargets[name] = (stageTargets[name] || 0) + qty;
+        });
+      });
+
+      let ordersDueToday = 0;
+      let backlogDueToday = 0;
+      let completedToday = 0;
+
+      plans.forEach((p) => {
+        const due = p?.estimatedEndDate ? new Date(p.estimatedEndDate).getTime() : null;
+        const start = p?.startDate ? new Date(p.startDate).getTime() : null;
+        const status = String(p?.status || "").toLowerCase();
+        if (due && due >= startMs && due <= endMs) {
+          ordersDueToday += 1;
+          if (status !== "completed") backlogDueToday += 1;
+        }
+        if (
+          status === "completed" &&
+          ((due && due >= startMs && due <= endMs) || (start && start >= startMs && start <= endMs))
+        ) {
+          completedToday += 1;
+        }
+      });
+
+      let totalDowntimeSeconds = 0;
+      const downtimeByStage = {};
+
+      const computeOverlapSeconds = (from, to) => {
+        if (!from || !to) return 0;
+        const a = Math.max(new Date(from).getTime(), startMs);
+        const b = Math.min(new Date(to).getTime(), endMs);
+        return b > a ? Math.floor((b - a) / 1000) : 0;
+      };
+
+      plans.forEach((p) => {
+        const dt = p?.downTime || {};
+        const from = dt?.from || dt?.downTimeFrom || dt?.downTimefrom;
+        let to = dt?.to || dt?.downTimeTo || dt?.downTimeToDate;
+        if (!to && String(p?.status || "").toLowerCase() === "down_time_hold") {
+          to = endDate;
+        }
+        const overlap = computeOverlapSeconds(from, to);
+        if (overlap <= 0) return;
+        totalDowntimeSeconds += overlap;
+
+        const proc = processMap[String(p?.selectedProcess || "")];
+        const stages = proc?.stages || [];
+        const stageCount = stages.length || 0;
+        if (stageCount > 0) {
+          const perStage = Math.floor(overlap / stageCount);
+          stages.forEach((s) => {
+            const name = String(s?.stageName || "Unknown").trim() || "Unknown";
+            downtimeByStage[name] = (downtimeByStage[name] || 0) + perStage;
+          });
+        }
+      });
+
+      const stageOrder = [];
+      processes.forEach((p) => {
+        (p?.stages || []).forEach((s) => {
+          const name = String(s?.stageName || "Unknown").trim() || "Unknown";
+          if (name && !stageOrder.includes(name)) stageOrder.push(name);
+        });
+      });
+
+      const stageNames = Array.from(
+        new Set([...stageOrder, ...Object.keys(stageTargets), ...Object.keys(stageStats)])
+      );
+
+      const cells = stageNames.map((name) => ({
+        cellId: name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        complete: stageStats[name]?.pass || 0,
+        target: stageTargets[name] || 0,
+        defects: stageStats[name]?.ng || 0,
+      }));
+
+      const cellLoading = stageNames.map((name) => ({
+        cellId: name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        qtyRequired: stageTargets[name] || 0,
+      }));
+
+      const downtimeByCell = stageNames.map((name) => ({
+        cellId: name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        downtimeSeconds: downtimeByStage[name] || 0,
+      }));
+
+      const ordersByStatusMap = {};
+      plans.forEach((p) => {
+        const status = String(p?.status || "unknown");
+        ordersByStatusMap[status] = (ordersByStatusMap[status] || 0) + 1;
+      });
+      const ordersByStatus = Object.keys(ordersByStatusMap).map((status) => ({
+        status,
+        count: ordersByStatusMap[status],
+      }));
+
+      const processesList = processesAll.map((p) => ({
+        _id: p._id,
+        name: p.name,
+        processID: p.processID,
+      }));
+      const workInProgress = stageNames.map((name) => {
+        const target = stageTargets[name] || 0;
+        const done = (stageStats[name]?.pass || 0) + (stageStats[name]?.ng || 0);
+        return {
+          itemId: name.toLowerCase().replace(/\s+/g, "-"),
+          name,
+          qty: Math.max(target - done, 0),
+        };
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "MES production dashboard fetched successfully",
+        kpis: {
+          ordersDueToday,
+          backlogDueToday,
+          completedToday,
+          totalDowntimeSeconds,
+        },
+        processes: processesList,
+        seats,
+        cells,
+        charts: {
+          cellLoading,
+          downtimeByCell,
+          ordersByStatus,
+          workInProgress,
+        },
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "An error occurred while building MES production dashboard",
+        error: error.message,
+      });
+    }
+  },
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
