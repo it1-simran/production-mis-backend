@@ -719,4 +719,80 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  getLatestDeviceTestsByPlanId: async (req, res) => {
+    try {
+      const { planId } = req.params;
+      const { processId } = req.query || {};
+      if (!mongoose.Types.ObjectId.isValid(planId)) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid planId",
+        });
+      }
+      const match = { planId: new mongoose.Types.ObjectId(planId) };
+      if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+        match.processId = new mongoose.Types.ObjectId(processId);
+      }
+
+      const pipeline = [
+        { $match: match },
+        {
+          $addFields: {
+            deviceKey: {
+              $ifNull: [
+                { $toString: "$deviceId" },
+                { $ifNull: ["$serialNo", { $toString: "$_id" }] },
+              ],
+            },
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: {
+              planId: "$planId",
+              stageName: "$stageName",
+              deviceKey: "$deviceKey",
+            },
+            latest: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$latest" } },
+      ];
+
+      const latestRecords = await DeviceTestRecordModel.aggregate(pipeline);
+      const stageSummary = {};
+      const seatStageSummary = {};
+
+      latestRecords.forEach((record) => {
+        const stageName = String(record?.stageName || "").trim();
+        if (!stageName) return;
+        const status = String(record?.status || "").toUpperCase();
+        if (!stageSummary[stageName]) {
+          stageSummary[stageName] = { pass: 0, ng: 0, total: 0 };
+        }
+        if (status === "PASS" || status === "COMPLETED") stageSummary[stageName].pass += 1;
+        if (status === "NG" || status === "FAIL") stageSummary[stageName].ng += 1;
+        stageSummary[stageName].total += 1;
+
+        const seatKey = String(record?.seatNumber || "").trim();
+        if (seatKey) {
+          const key = `${seatKey}:${stageName}`;
+          if (!seatStageSummary[key]) seatStageSummary[key] = { pass: 0, ng: 0 };
+          if (status === "PASS" || status === "COMPLETED") seatStageSummary[key].pass += 1;
+          if (status === "NG" || status === "FAIL") seatStageSummary[key].ng += 1;
+        }
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Latest device tests fetched successfully",
+        deviceTestRecords: latestRecords,
+        stageSummary,
+        seatStageSummary,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
 };

@@ -219,6 +219,7 @@ router.put('/jig/updateStatus/:id', authController.authenticateToken, jigControl
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, processController.updateIssuedKitsToLine);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
+router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);
 router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);
 router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, OrderConfirmationController.delete);
