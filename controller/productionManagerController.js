@@ -349,8 +349,25 @@ module.exports = {
         createdAt: { $gte: startDate, $lte: endDate },
       }).lean();
 
+      const latestMap = new Map();
+      deviceTests.forEach((record) => {
+        const stageName = String(record?.stageName || "").trim();
+        if (!stageName) return;
+        const planKey = record?.planId ? String(record.planId) : "";
+        const deviceKey = record?.deviceId
+          ? String(record.deviceId)
+          : (record?.serialNo ? String(record.serialNo) : String(record._id));
+        if (!deviceKey) return;
+        const key = `${planKey}||${stageName}||${deviceKey}`;
+        const existing = latestMap.get(key);
+        if (!existing || new Date(record.createdAt) > new Date(existing.createdAt)) {
+          latestMap.set(key, record);
+        }
+      });
+      const latestRecords = Array.from(latestMap.values());
+
       const seatStats = {};
-      deviceTests.forEach((r) => {
+      latestRecords.forEach((r) => {
         const seat = String(r?.seatNumber || "").trim();
         if (!seat) return;
         if (!seatStats[seat]) seatStats[seat] = { pass: 0, ng: 0 };
@@ -391,7 +408,7 @@ module.exports = {
       });
       const seats = Array.from(seatsMap.values());
       const stageStats = {};
-      deviceTests.forEach((r) => {
+      latestRecords.forEach((r) => {
         const stage = String(r?.stageName || "Unknown").trim() || "Unknown";
         if (!stageStats[stage]) stageStats[stage] = { pass: 0, ng: 0, total: 0 };
         const status = String(r?.status || "").toUpperCase();
@@ -474,13 +491,30 @@ module.exports = {
         new Set([...stageOrder, ...Object.keys(stageTargets), ...Object.keys(stageStats)])
       );
 
-      const cells = stageNames.map((name) => ({
-        cellId: name.toLowerCase().replace(/\s+/g, "-"),
-        name,
-        complete: stageStats[name]?.pass || 0,
-        target: stageTargets[name] || 0,
-        defects: stageStats[name]?.ng || 0,
-      }));
+      const capCounts = (pass, ng, cap) => {
+        const p = pass || 0;
+        const n = ng || 0;
+        const c = cap || 0;
+        if (!c || c <= 0) return { pass: p, ng: n };
+        const total = p + n;
+        if (total <= c) return { pass: p, ng: n };
+        const cappedPass = Math.min(p, c);
+        const remaining = Math.max(c - cappedPass, 0);
+        const cappedNg = Math.min(n, remaining);
+        return { pass: cappedPass, ng: cappedNg };
+      };
+
+      const cells = stageNames.map((name) => {
+        const target = stageTargets[name] || 0;
+        const capped = capCounts(stageStats[name]?.pass || 0, stageStats[name]?.ng || 0, target);
+        return {
+          cellId: name.toLowerCase().replace(/\s+/g, "-"),
+          name,
+          complete: capped.pass,
+          target,
+          defects: capped.ng,
+        };
+      });
 
       const cellLoading = stageNames.map((name) => ({
         cellId: name.toLowerCase().replace(/\s+/g, "-"),
@@ -511,7 +545,8 @@ module.exports = {
       }));
       const workInProgress = stageNames.map((name) => {
         const target = stageTargets[name] || 0;
-        const done = (stageStats[name]?.pass || 0) + (stageStats[name]?.ng || 0);
+        const capped = capCounts(stageStats[name]?.pass || 0, stageStats[name]?.ng || 0, target);
+        const done = capped.pass + capped.ng;
         return {
           itemId: name.toLowerCase().replace(/\s+/g, "-"),
           name,
