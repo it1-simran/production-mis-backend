@@ -509,6 +509,23 @@ module.exports = {
                         { targetStageName }
                       );
                     }
+
+                    // Reset attempt count when device is moved back to a stage for rework
+                    try {
+                      const attemptFilter = { deviceId: deviceToUpdate._id };
+                      if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
+                        attemptFilter.planId = new mongoose.Types.ObjectId(data.planId);
+                      }
+                      if (data.processId && mongoose.Types.ObjectId.isValid(data.processId)) {
+                        attemptFilter.processId = new mongoose.Types.ObjectId(data.processId);
+                      }
+                      await DeviceAttempt.updateMany(
+                        attemptFilter,
+                        { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+                      );
+                    } catch (e) {
+                      console.warn("Failed to reset attempt count on rework:", e);
+                    }
                   }
                 } else {
                   console.warn("Device not found to move to previous stage", {
@@ -1108,6 +1125,18 @@ module.exports = {
         return res.status(404).json({ message: "Device not found" });
       }
 
+      // Reset attempt counts when a device is resolved via QC/TRC
+      if (updates.status && String(updates.status).toLowerCase().includes("resolved")) {
+        try {
+          await DeviceAttempt.updateMany(
+            { deviceId: device._id },
+            { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+          );
+        } catch (e) {
+          console.warn("Failed to reset attempt count on resolved update:", e);
+        }
+      }
+
       res.status(200).json({
         status: 200,
         message: "Device updated successfully",
@@ -1190,6 +1219,15 @@ module.exports = {
         { $set: { status: incomingStatus || "", currentStage: nextStage } },
         { new: true, runValidators: true }
       );
+
+      try {
+        await DeviceAttempt.updateMany(
+          { deviceId: device._id },
+          { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+        );
+      } catch (e) {
+        console.warn("Failed to reset attempt count on resolve:", e);
+      }
 
       return res.status(200).json({
         status: 200,
