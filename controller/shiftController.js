@@ -52,14 +52,14 @@ module.exports = {
   view: async (req, res) => {
     try {
       const Shifts = await ShiftModel.find();
-      console.log("Shifts ===:> ", Shifts);
+
       return res.status(200).json({
         status: 200,
         status_msg: "Shifts Fetched Sucessfully!!",
         Shifts,
       });
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res
         .status(500)
         .json({ message: "An error occurred while Creating the Shift!!" });
@@ -73,7 +73,7 @@ module.exports = {
       }
       res.status(200).json({ message: "Shift Deleted Successfully!!", Shifts });
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res.status(500).json({ message: "An error occurred while Deleting the Shift!!" });
     }
   },
@@ -101,7 +101,7 @@ module.exports = {
         message: `${result.deletedCount} Shift(s) deleted successfully`,
       });
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res
         .status(500)
         .json({ message: "An error occurred while Deleting the Shifts!!" });
@@ -116,7 +116,7 @@ module.exports = {
       }
       return res.status(200).json(shift);
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res
         .status(500)
         .json({ message: "An error occurred while Fetching the Shift!!" });

@@ -134,7 +134,7 @@ module.exports = {
         userType,
       });
     } catch (error) {
-        console.log("error ===> ", error);
+
       return res.status(500).json({ status: 500, error: error.message });
     }
   },

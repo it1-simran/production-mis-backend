@@ -67,7 +67,7 @@ module.exports = {
         stickerField,
       });
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res
         .status(500)
         .json({
@@ -101,7 +101,7 @@ module.exports = {
         message: `${result.deletedCount} Sticker Field(s) deleted successfully`,
       });
     } catch (error) {
-      console.log(error);
+      console.error(error);
       res.status(500).json({ message: "An error occurred while Deleting the Shifts!!" });
     }
   },

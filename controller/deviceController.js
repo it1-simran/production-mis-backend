@@ -70,7 +70,7 @@ module.exports = {
         data: savedDevices,
       });
     } catch (error) {
-      console.log("error ==>", error);
+      console.error("error ==>", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
@@ -768,7 +768,7 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
-      console.log(`DEBUG: Fetching history for Device ${id}`);
+
       let deviceTestHistory = await deviceTestRecords
         .find({ deviceId: id }, null, { sort: { createdAt: -1 } })
         .populate("deviceId")
@@ -777,8 +777,7 @@ module.exports = {
         .populate("planId", "processName")
         .lean();
 
-      console.log(`DEBUG: Found ${deviceTestHistory.length} records. Item 0 logs count:`,
-        deviceTestHistory[0]?.logs?.length || 0);
+
 
       if (deviceTestHistory.length === 0) {
         return res.status(200).json({

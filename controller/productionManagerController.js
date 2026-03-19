@@ -79,11 +79,7 @@ module.exports = {
           },
         },
       ]);
-      if (!Processes.length) {
-        console.log(
-          "No processes found or the lookup did not match any documents."
-        );
-      }
+
       return res.status(200).json({
         status: 200,
         message: "Processes Fetched Successfully!!",
@@ -222,7 +218,7 @@ module.exports = {
         //   },
         // },
       ]);
-      console.log("Process ==>", Process);
+
     } catch (error) {
       res
         .status(500)
