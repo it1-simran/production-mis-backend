@@ -236,11 +236,12 @@ router.post('/carton/createCarton', authController.authenticateToken, CartonCont
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
+// IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
+router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
 router.put('/carton/close-loose', authController.authenticateToken, cartonController.closeLooseCarton);
-router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
