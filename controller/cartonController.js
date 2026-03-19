@@ -811,8 +811,34 @@ module.exports = {
     try {
       const cartons = await cartonModel.aggregate([
         {
+          // Normalize "store status" across older/newer records:
+          // - Prefer cartonStatus when present, otherwise fallback to status
+          // - Compare case-insensitively
+          $addFields: {
+            storeStatus: {
+              $toUpper: {
+                $ifNull: [
+                  {
+                    $cond: [
+                      {
+                        $and: [
+                          { $ne: ["$cartonStatus", null] },
+                          { $ne: ["$cartonStatus", ""] },
+                        ],
+                      },
+                      "$cartonStatus",
+                      "$status",
+                    ],
+                  },
+                  "",
+                ],
+              },
+            },
+          },
+        },
+        {
           $match: {
-            cartonStatus: { $in: ["FG_TO_STORE", "STOCKED"] },
+            storeStatus: { $in: ["FG_TO_STORE", "STOCKED", "KEPT_IN_STORE"] },
           },
         },
         {
@@ -823,7 +849,8 @@ module.exports = {
             as: "processInfo",
           },
         },
-        { $unwind: "$processInfo" },
+        // Don't drop cartons if the process document is missing/mismatched.
+        { $unwind: { path: "$processInfo", preserveNullAndEmptyArrays: true } },
         {
           $lookup: {
             from: "devices",
@@ -834,10 +861,12 @@ module.exports = {
         },
         {
           $project: {
+            processId: 1,
             cartonSerial: 1,
-            processName: "$processInfo.name",
-            processID: "$processInfo.processID",
-            status: "$cartonStatus",
+            processName: { $ifNull: ["$processInfo.name", "Unknown Process"] },
+            processID: { $ifNull: ["$processInfo.processID", ""] },
+            // Provide a single normalized status field for UI.
+            status: "$storeStatus",
             createdAt: 1,
             updatedAt: 1,
             maxCapacity: 1,
