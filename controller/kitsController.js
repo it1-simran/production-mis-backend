@@ -26,7 +26,7 @@ module.exports = {
         issuedKits : processData.issuedKits - parseInt(req.body.returnedKits),
         issuedCartons:processData.issuedCartons - parseInt(req.body.returnedCarton),
       }
-      console.log("updatedProcessData ==>", updatedProcessData);
+
       const updatedProcess  = await ProcessModel.findByIdAndUpdate(req.body.processID,updatedProcessData,{new:true});
       const currentInventory = await InventoryModel.findOne({productType:req.body.selectedProduct});
       const inventoryData = {

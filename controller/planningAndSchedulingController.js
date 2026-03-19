@@ -297,7 +297,7 @@ module.exports = {
           shiftEndTime.isSameOrAfter(planStartTime.startOf("minute"))
         );
       });
-      console.log("filteredPlans ==>", filteredPlans);
+
       if (filteredPlans.length === 0) {
         return res.status(404).json({
           status: 404,
@@ -659,7 +659,7 @@ module.exports = {
           },
         },
       ]);
-      console.log("PlaningAndScheduling ===>", PlaningAndScheduling);
+
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
@@ -757,9 +757,7 @@ module.exports = {
       const id = req.params.id;
       const selectedProcess = req.body.selectedProcess;
       const downTime = req.body.downTime;
-      console.log("Received ID:", id);
-      console.log("Selected Process:", selectedProcess);
-      console.log("DownTime:", downTime);
+
       const downtimeData = JSON.parse(downTime);
 
       const processData = {

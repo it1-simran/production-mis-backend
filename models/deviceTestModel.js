@@ -28,6 +28,8 @@ const deviceTestSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "products" },
   planId: { type: mongoose.Schema.Types.ObjectId, ref: "PlaningAndScheduling" },
   assignedDeviceTo: { type: String, required: false },
+  // Free-form operator-provided description captured at NG time.
+  ngDescription: { type: String, required: false, default: "" },
   timeConsumed: { type: String, required: false },
   totalBreakTime: { type: String, required: false },
   startTime: { type: Date, required: false },

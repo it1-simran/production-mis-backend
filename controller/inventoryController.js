@@ -378,7 +378,7 @@ const calculateOverallInventoryAccuracy = async (physicalCounts) => {
   try {
     const inventories = await InventoryModel.find();
     if (inventories.length === 0) {
-      console.log("No inventory data found.");
+
       return 0;
     }
 
@@ -391,7 +391,7 @@ const calculateOverallInventoryAccuracy = async (physicalCounts) => {
       const physicalCount =
         physicalCounts[inventory.productType.toString()] || 0;
       if (systemRecordedCount === 0) {
-        console.log(`Skipping ${inventory.name} (No stock available)`);
+
         continue;
       }
       const accuracy = (physicalCount / systemRecordedCount) * 100;
@@ -399,7 +399,7 @@ const calculateOverallInventoryAccuracy = async (physicalCounts) => {
       itemCount++;
     }
     const overallAccuracy = itemCount > 0 ? totalAccuracy / itemCount : 0;
-    console.log(`Overall Inventory Accuracy: ${overallAccuracy.toFixed(2)}%`);
+
     return overallAccuracy.toFixed(2);
   } catch (error) {
     console.error(

@@ -380,7 +380,7 @@ module.exports = {
   updateMarkasCompletedProcess: async (req, res) => {
     try {
       const { id } = req.params;
-      console.log("Process ID:", id);
+
 
       if (!id) {
         return res
@@ -439,7 +439,7 @@ module.exports = {
   updateMoreQuantity: async (req, res) => {
     try {
       const id = req.params.id;
-      console.log("updatedQuantity", req.body.quantity);
+
       const planData = await ProcessModel.aggregate([
         {
           $match: { _id: new mongoose.Types.ObjectId(id) },
@@ -558,7 +558,7 @@ module.exports = {
       //     },
       //   },
       // ]);
-      console.log("users ==>", users);
+
       return res.status(200).json({
         status: 200,
         message: "VacantOperator found!!",

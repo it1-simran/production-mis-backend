@@ -47,9 +47,9 @@ module.exports = {
   getOperatorTaskByUserID: async (req, res) => {
     try {
       const userId = req.params.id;
-      console.log("userId", userId);
+
       const task = await assignedOperatorsToPlanModel.findOne({ 'userId': userId });
-      console.log("task ==>", task);
+
       return res.status(200).json({ status: 200, task });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

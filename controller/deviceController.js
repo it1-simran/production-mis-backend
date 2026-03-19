@@ -70,7 +70,7 @@ module.exports = {
         data: savedDevices,
       });
     } catch (error) {
-      console.log("error ==>", error);
+      console.error("error ==>", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
@@ -340,6 +340,7 @@ module.exports = {
       // allow the record to be created without seat-based plan updates.
       if (matchingIndices.length === 0 && isQcOrTrc) {
         try {
+          const notes = String(data.ngDescription || data?.logData?.description || "").trim();
           const ngPayload = {
             processId: planing.selectedProcess || data.processId || null,
             userId: data.operatorId || data.userId || null,
@@ -350,6 +351,7 @@ module.exports = {
               data.deviceSerial ||
               "",
             ngStage: data.stageName || data.ngStage || "",
+            ...(notes ? { notes } : {}),
           };
           if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
             const ngRecord = new NGDevice(ngPayload);
@@ -424,6 +426,7 @@ module.exports = {
             data.assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
             if (data.assignedDeviceTo === "QC" || data.assignedDeviceTo === "TRC") {
               try {
+                const notes = String(data.ngDescription || data?.logData?.description || "").trim();
                 const ngPayload = {
                   processId: planing.selectedProcess || data.processId || null,
                   userId: data.operatorId || data.userId || null,
@@ -434,6 +437,7 @@ module.exports = {
                     data.deviceSerial ||
                     "",
                   ngStage: currentStage || data.ngStage || "",
+                  ...(notes ? { notes } : {}),
                 };
                 // Only attempt to create when required identifiers are present
                 if (
@@ -768,7 +772,7 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
-      console.log(`DEBUG: Fetching history for Device ${id}`);
+
       let deviceTestHistory = await deviceTestRecords
         .find({ deviceId: id }, null, { sort: { createdAt: -1 } })
         .populate("deviceId")
@@ -777,8 +781,7 @@ module.exports = {
         .populate("planId", "processName")
         .lean();
 
-      console.log(`DEBUG: Found ${deviceTestHistory.length} records. Item 0 logs count:`,
-        deviceTestHistory[0]?.logs?.length || 0);
+
 
       if (deviceTestHistory.length === 0) {
         return res.status(200).json({
