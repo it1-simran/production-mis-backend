@@ -525,7 +525,7 @@ module.exports = {
                       }
                       await DeviceAttempt.updateMany(
                         attemptFilter,
-                        { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+                        { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
                       );
                     } catch (e) {
                       console.warn("Failed to reset attempt count on rework:", e);
@@ -609,7 +609,7 @@ module.exports = {
   },
   registerDeviceAttempt: async (req, res) => {
     try {
-      const { deviceId, serialNo, planId, processId, operatorId } = req.body || {};
+      const { deviceId, serialNo, planId, processId, operatorId, stageName } = req.body || {};
 
       if (!planId || !processId) {
         return res.status(400).json({
@@ -639,6 +639,11 @@ module.exports = {
         });
       }
 
+      const normalizedStageName = String(stageName || "").trim();
+      const stageKey = Buffer.from(
+        normalizedStageName.length > 0 ? normalizedStageName : "__default__"
+      ).toString("base64url");
+
       const attempt = await DeviceAttempt.findOneAndUpdate(
         {
           deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
@@ -646,18 +651,29 @@ module.exports = {
           processId: new mongoose.Types.ObjectId(processId),
         },
         {
-          $inc: { attemptCount: 1 },
-          $set: { lastAttemptAt: new Date() },
+          $inc: {
+            attemptCount: 1,
+            [`stageAttempts.${stageKey}`]: 1,
+          },
+          $set: { lastAttemptAt: new Date(), stageName: normalizedStageName },
           ...(operatorId ? { $setOnInsert: { operatorId } } : {}),
         },
         { new: true, upsert: true }
       );
 
+      const stageAttempts = attempt?.stageAttempts || {};
+      const stageAttemptCount =
+        typeof stageAttempts?.get === "function"
+          ? stageAttempts.get(stageKey) || 0
+          : stageAttempts?.[stageKey] || 0;
+
       return res.status(200).json({
         status: 200,
         message: "Attempt registered",
-        attemptCount: attempt?.attemptCount || 0,
+        attemptCount: stageAttemptCount,
+        totalAttemptCount: attempt?.attemptCount || 0,
         deviceId: attempt?.deviceId,
+        stageName: attempt?.stageName || "",
       });
     } catch (error) {
       return res.status(500).json({
@@ -1133,7 +1149,7 @@ module.exports = {
         try {
           await DeviceAttempt.updateMany(
             { deviceId: device._id },
-            { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+            { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
           );
         } catch (e) {
           console.warn("Failed to reset attempt count on resolved update:", e);
@@ -1226,7 +1242,7 @@ module.exports = {
       try {
         await DeviceAttempt.updateMany(
           { deviceId: device._id },
-          { $set: { attemptCount: 0, lastAttemptAt: new Date() } }
+          { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
         );
       } catch (e) {
         console.warn("Failed to reset attempt count on resolve:", e);
