@@ -368,7 +368,7 @@ module.exports = {
         const savedDeviceTestRecord = await deviceTestRecord.save();
         return res.status(200).json({
           status: 200,
-          message: "Device Test Entry added successfully",
+          message: "Device Pass Successfully",
           data: savedDeviceTestRecord,
         });
       }
@@ -591,7 +591,7 @@ module.exports = {
 
         return res.status(200).json({
           status: 200,
-          message: "Device Test Entry added successfully",
+          message: "Device Pass  successfully",
           data: savedDeviceTestRecord,
         });
       } else {
