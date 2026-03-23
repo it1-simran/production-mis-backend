@@ -9,6 +9,8 @@ const deviceSchemas = new mongoose.Schema({
   modelName: { type: String, required: false, default: "" },
   status: { type: String, required: false, default: "" },
   currentStage: { type: String, required: false, default: "" },
+  flowVersion: { type: Number, required: false, default: 1 },
+  flowStartedAt: { type: Date, required: false, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
@@ -37,6 +39,10 @@ deviceSchemas.pre('findByIdAndUpdate', function (next) {
   }
   next();
 });
+
+deviceSchemas.index({ serialNo: 1 });
+deviceSchemas.index({ processID: 1 });
+deviceSchemas.index({ serialNo: 1, processID: 1 });
 
 const device = mongoose.model("devices", deviceSchemas);
 module.exports = device;

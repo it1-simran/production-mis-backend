@@ -11,16 +11,20 @@ dotenv.config({ path: path.join(__dirname, envFile) });
 
 const app = express();
 
-app.use(helmet()); 
+app.use(helmet({
+  contentSecurityPolicy: false,
+})); 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*'
+  origin: '*'
 })); // Enable CORS
 app.use(compression());
 app.use(morgan('dev')); // HTTP request logger
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 // Serve uploaded images statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Example Route
 app.get('/', (req, res) => {
   res.send(`Production MIS Backend is running in ${process.env.NODE_ENV} mode`);
@@ -32,14 +36,24 @@ app.use('/api', apiRoutes);
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send({ error: 'Something went wrong!' });
+  console.error(">>> [GLOBAL ERROR]:", err.stack || err.message || err);
+  const status = err.statusCode || err.status || 500;
+  res.status(status).json({
+    status,
+    message: err.message || "Something went wrong!",
+    ...(process.env.NODE_ENV !== "production" ? { stack: err.stack } : {}),
+  });
 });
 
 // Define the port
 const PORT = process.env.PORT || 4000;
 
 // Start the server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server is running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
+
+// Set global timeout to 2 minutes (120000ms)
+server.timeout = 120000;
+server.keepAliveTimeout = 121000; // Keep slightly larger than timeout
+server.headersTimeout = 122000; // Keep slightly larger than keepAliveTimeout

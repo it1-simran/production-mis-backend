@@ -30,6 +30,11 @@ const deviceTestSchema = new mongoose.Schema({
   assignedDeviceTo: { type: String, required: false },
   // Free-form operator-provided description captured at NG time.
   ngDescription: { type: String, required: false, default: "" },
+  flowVersion: { type: Number, required: false, default: 1 },
+  flowBoundary: { type: Boolean, required: false, default: false },
+  flowType: { type: String, required: false, default: "stage" },
+  previousFlowVersion: { type: Number, required: false, default: null },
+  flowStartedAt: { type: Date, required: false, default: null },
   timeConsumed: { type: String, required: false },
   totalBreakTime: { type: String, required: false },
   startTime: { type: Date, required: false },
@@ -41,6 +46,7 @@ const deviceTestSchema = new mongoose.Schema({
 // Performance indexes for common query patterns
 deviceTestSchema.index({ operatorId: 1, createdAt: -1 });
 deviceTestSchema.index({ deviceId: 1, createdAt: -1 });
+deviceTestSchema.index({ deviceId: 1, flowVersion: 1, createdAt: -1 });
 deviceTestSchema.index({ planId: 1, operatorId: 1 });
 deviceTestSchema.index({ processId: 1, createdAt: -1 });
 deviceTestSchema.index({ serialNo: 1 });

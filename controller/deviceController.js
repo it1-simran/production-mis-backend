@@ -109,6 +109,65 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  getDevicesByProcessId: async (req, res) => {
+    try {
+      const { processId } = req.params;
+      const devices = await deviceModel
+        .find({ processID: processId }, null, { sort: { createdAt: -1 } })
+        .lean();
+
+      const deviceIds = devices.map((device) => device?._id).filter(Boolean);
+      const historyByDevice = new Map();
+
+      if (deviceIds.length > 0) {
+        const histories = await deviceTestRecords
+          .find({ deviceId: { $in: deviceIds } })
+          .sort({ createdAt: 1 })
+          .select("deviceId stageName status createdAt flowVersion flowBoundary flowType previousFlowVersion")
+          .lean();
+
+        histories.forEach((history) => {
+          const key = String(history?.deviceId || "");
+          if (!historyByDevice.has(key)) {
+            historyByDevice.set(key, []);
+          }
+          historyByDevice.get(key).push(history);
+        });
+      }
+
+      const devicesWithHistory = devices.map((device) => {
+        const allHistory = historyByDevice.get(String(device?._id)) || [];
+        const activeFlowVersion = Number(device?.flowVersion || 1);
+        const currentFlowHistory = allHistory.filter((history) => {
+          const recordFlowVersion = Number(history?.flowVersion || 1);
+          return recordFlowVersion === activeFlowVersion;
+        });
+
+        const stageHistory = (currentFlowHistory.length > 0 ? currentFlowHistory : allHistory).map((history) => ({
+          stageName: history?.stageName || "Unknown Stage",
+          status: history?.status || "N/A",
+          createdAt: history?.createdAt || null,
+          flowVersion: history?.flowVersion || 1,
+          flowBoundary: !!history?.flowBoundary,
+          flowType: history?.flowType || "stage",
+        }));
+
+        return {
+          ...device,
+          stageHistory,
+          hasStageHistory: stageHistory.length > 0,
+        };
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Devices fetched successfully",
+        data: devicesWithHistory,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   getNGDevicesByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
@@ -306,6 +365,21 @@ module.exports = {
           message: `Error fetching product data: ${err.message}`,
         });
       }
+      let flowDevice = null;
+      try {
+        if (data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)) {
+          flowDevice = await deviceModel.findById(data.deviceId).lean();
+        } else if (data.serialNo) {
+          flowDevice = await deviceModel.findOne({ serialNo: data.serialNo }).lean();
+        }
+      } catch (err) {
+        flowDevice = null;
+      }
+      data.flowVersion = Number(flowDevice?.flowVersion || 1);
+      data.flowStartedAt = flowDevice?.flowStartedAt || null;
+      data.flowBoundary = false;
+      data.flowType = data.flowType || "stage";
+      data.previousFlowVersion = null;
       let assignedStages = {};
       let assignedOperator = {};
 
@@ -1200,12 +1274,6 @@ module.exports = {
         : "";
 
       const selectedStage = req.body.currentStage || req.body.nextStage || req.body.selectedStage || "";
-      if (!selectedStage) {
-        await deviceTestRecords.deleteMany({
-          deviceId: device._id,
-          serialNo: incomingSerial,
-        });
-      }
 
       const incomingStatus = req.body.status || "QC Resolved";
       const isTRC = (incomingStatus || "").toUpperCase().includes("TRC") || !!req.body.trcRemarks;
@@ -1226,6 +1294,10 @@ module.exports = {
         stageName: isTRC ? "TRC" : "QC",
         status: incomingStatus,
         assignedDeviceTo: isTRC ? "TRC" : "QC",
+        flowVersion: Number(device.flowVersion || 1),
+        flowBoundary: false,
+        flowType: "resolve",
+        previousFlowVersion: null,
         ...(isTRC ? { trcRemarks: parsedTrcRemarks ? [parsedTrcRemarks] : [] } : {}),
       };
 
@@ -1367,7 +1439,15 @@ module.exports = {
 
       await deviceModel.updateMany(
         { _id: { $in: devices.map((d) => d._id) } },
-        { $set: { currentStage: "Packaging", status: "Pass", updatedAt: new Date() } }
+        {
+          $set: {
+            currentStage: "Packaging",
+            status: "Pass",
+            flowVersion: 1,
+            flowStartedAt: null,
+            updatedAt: new Date(),
+          },
+        }
       );
 
       await deviceTestRecords.deleteMany({
@@ -1392,6 +1472,10 @@ module.exports = {
             stageName,
             status: "Pass",
             assignedDeviceTo: "Operator",
+            flowVersion: 1,
+            flowBoundary: false,
+            flowType: "stage",
+            previousFlowVersion: null,
             timeConsumed: "00:01:00",
             startTime: new Date(now.getTime() + idx * 60000),
             endTime: new Date(now.getTime() + (idx + 1) * 60000),
