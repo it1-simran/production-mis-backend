@@ -3,26 +3,76 @@ const processLogModel = require("../models/ProcessLogs");
 const cartonModel = require("../models/cartonManagement");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/process");
+const productModel = require("../models/Products");
 const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
 // const ProcessModel = require("../models/process");
+
+const normalizeObjectIdList = (values = []) =>
+  values
+    .map((value) => {
+      if (!value) return null;
+      if (value instanceof mongoose.Types.ObjectId) return value;
+      if (mongoose.Types.ObjectId.isValid(String(value))) {
+        return new mongoose.Types.ObjectId(String(value));
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
+  const normalizedDeviceIds = normalizeObjectIdList(deviceIds);
+  if (normalizedDeviceIds.length === 0) return null;
+
+  const normalizedExcludeIds = normalizeObjectIdList(excludeCartonIds);
+  return cartonModel.findOne({
+    _id: { $nin: normalizedExcludeIds },
+    devices: { $in: normalizedDeviceIds },
+  });
+};
+
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
       const { processId, devices, packagingData } = req.body;
+      const deviceIds = Array.isArray(devices) ? devices : [];
+      if (deviceIds.length === 0) {
+        return res.status(400).json({
+          status: 400,
+          message: "At least one device is required.",
+        });
+      }
+
       let existingCarton = await cartonModel.findOne({
         processId,
         status: { $in: ["partial", "empty"] },
       });
       if (existingCarton) {
-        if (existingCarton.devices.includes(devices[0])) {
+        const existingDeviceSet = new Set(
+          Array.isArray(existingCarton.devices)
+            ? existingCarton.devices.map((deviceId) => String(deviceId))
+            : [],
+        );
+        const alreadyInThisCarton = deviceIds.some((deviceId) =>
+          existingDeviceSet.has(String(deviceId)),
+        );
+        if (alreadyInThisCarton) {
           return res.status(400).json({
             status: 400,
             message: "Device already exists in this carton.",
           });
         }
-        existingCarton.devices.push(devices[0]);
+
+        const conflict = await findCartonConflicts(deviceIds, [existingCarton._id]);
+        if (conflict) {
+          return res.status(409).json({
+            status: 409,
+            message: `Device already assigned to carton ${conflict.cartonSerial}.`,
+          });
+        }
+
+        existingCarton.devices.push(...deviceIds);
         if (existingCarton.devices.length >= existingCarton.maxCapacity) {
           existingCarton.status = "full";
         } else {
@@ -36,10 +86,18 @@ module.exports = {
         });
       }
 
+      const conflict = await findCartonConflicts(deviceIds);
+      if (conflict) {
+        return res.status(409).json({
+          status: 409,
+          message: `Device already assigned to carton ${conflict.cartonSerial}.`,
+        });
+      }
+
       const newCarton = new cartonModel({
         cartonSerial: `CARTON-${Date.now()}`,
         processId,
-        devices,
+        devices: deviceIds,
         packagingData,
         cartonSize: {
           width: packagingData?.cartonWidth ? String(packagingData.cartonWidth) : "",
@@ -387,7 +445,7 @@ module.exports = {
       const carton = await cartonModel
         .findOne({
           processId: processId,
-          status: { $in: ["empty", "partial"] },
+          status: "partial",
           cartonStatus: { $in: [""] },
         })
         .populate("devices");
@@ -407,7 +465,7 @@ module.exports = {
       const cartons = await cartonModel
         .find({
           processId: processId,
-          status: { $in: ["empty", "partial"] },
+          status: "partial",
           cartonStatus: { $in: [""] },
         })
         .populate("devices")
@@ -783,9 +841,60 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Carton serial and weight are required." });
       }
 
+      const carton = await cartonModel.findOne({ cartonSerial });
+      if (!carton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      const cartonStatus = String(carton.status || "").trim().toLowerCase();
+      if (cartonStatus !== "full") {
+        return res.status(400).json({
+          status: 400,
+          message: "Carton weight can only be verified for full cartons.",
+        });
+      }
+
+      const recordedWeight = Number(weight);
+      if (!Number.isFinite(recordedWeight) || recordedWeight <= 0) {
+        return res.status(400).json({
+          status: 400,
+          message: "Carton weight must be a valid positive number.",
+        });
+      }
+
+      const processDoc = await ProcessModel.findById(carton.processId).lean();
+      const productId = processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
+      let productDoc = null;
+      if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
+        productDoc = await productModel.findById(productId).lean();
+      }
+
+      const expectedWeight = Number(
+        carton?.packagingData?.cartonWeight ??
+        processDoc?.packagingData?.cartonWeight ??
+        productDoc?.packagingData?.cartonWeight ??
+        0,
+      );
+
+      if (!Number.isFinite(expectedWeight) || expectedWeight <= 0) {
+        return res.status(400).json({
+          status: 400,
+          message: "No carton weight specification found for this carton.",
+        });
+      }
+
+      const toleranceKg = 0.5;
+      const variance = Math.abs(recordedWeight - expectedWeight);
+      if (variance > toleranceKg) {
+        return res.status(400).json({
+          status: 400,
+          message: `Weight mismatch! Expected ${expectedWeight} KG, got ${recordedWeight} KG.`,
+        });
+      }
+
       const updatedCarton = await cartonModel.findOneAndUpdate(
         { cartonSerial },
-        { weightCarton: weight },
+        { weightCarton: recordedWeight },
         { new: true }
       );
 
@@ -889,7 +998,17 @@ module.exports = {
 
   closeLooseCarton: async (req, res) => {
     try {
-      const { cartonSerial } = req.body;
+      const {
+        cartonSerial,
+        action = "existing",
+        quantity,
+        packagingData = {},
+        cartonWidth,
+        cartonHeight,
+        cartonDepth,
+        cartonWeight,
+      } = req.body;
+
       if (!cartonSerial) {
         return res.status(400).json({ status: 400, message: "Carton serial is required." });
       }
@@ -900,13 +1019,139 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Carton not found." });
       }
 
-      if (carton.status === "full") {
-        return res.status(400).json({ status: 400, message: "Carton is already full." });
+      const currentStatus = String(carton.status || "").toLowerCase();
+      if (currentStatus !== "partial") {
+        return res.status(400).json({
+          status: 400,
+          message: "Only partial cartons can be closed as loose cartons.",
+        });
       }
 
-      // Mark the partial carton as full and flag it as a loose carton
+      if (carton.cartonStatus && String(carton.cartonStatus).trim() !== "") {
+        return res.status(400).json({
+          status: 400,
+          message: "This carton has already been processed.",
+        });
+      }
+
+      const sourceDevices = Array.isArray(carton.devices) ? carton.devices.filter(Boolean) : [];
+      const sourceQuantity = sourceDevices.length;
+
+      if (sourceQuantity === 0) {
+        return res.status(400).json({
+          status: 400,
+          message: "Partial carton has no devices to process.",
+        });
+      }
+
+      if (action === "assign-new") {
+        const resolvedQty = Number(quantity);
+        const resolvedWidth = Number(packagingData?.cartonWidth ?? cartonWidth);
+        const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
+        const resolvedDepth = Number(packagingData?.cartonDepth ?? cartonDepth);
+        const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
+
+        if (!Number.isInteger(resolvedQty) || resolvedQty <= 0) {
+          return res.status(400).json({
+            status: 400,
+            message: "Quantity must be a positive integer.",
+          });
+        }
+
+        if (resolvedQty > sourceQuantity) {
+          return res.status(400).json({
+            status: 400,
+            message: "Quantity cannot exceed the devices available in the partial carton.",
+          });
+        }
+
+        if (!resolvedWidth || resolvedWidth <= 0 || !resolvedHeight || resolvedHeight <= 0 || !resolvedDepth || resolvedDepth <= 0) {
+          return res.status(400).json({
+            status: 400,
+            message: "Carton dimensions must be greater than zero.",
+          });
+        }
+
+        if (!resolvedWeight || resolvedWeight <= 0) {
+          return res.status(400).json({
+            status: 400,
+            message: "Carton weight must be greater than zero.",
+          });
+        }
+
+        const movedDevices = sourceDevices.slice(0, resolvedQty);
+        const remainingDevices = sourceDevices.slice(resolvedQty);
+        const conflict = await findCartonConflicts(movedDevices, [carton._id]);
+        if (conflict) {
+          return res.status(409).json({
+            status: 409,
+            message: `Device already assigned to carton ${conflict.cartonSerial}.`,
+          });
+        }
+        const newCartonSerial = `CARTON-${Date.now()}`;
+        const newCarton = await cartonModel.create({
+          cartonSerial: newCartonSerial,
+          processId: carton.processId,
+          devices: movedDevices,
+          packagingData: {
+            ...packagingData,
+            cartonWidth: resolvedWidth,
+            cartonHeight: resolvedHeight,
+            cartonDepth: resolvedDepth,
+            cartonWeight: resolvedWeight,
+            maxCapacity: resolvedQty,
+          },
+          cartonSize: {
+            width: String(resolvedWidth),
+            height: String(resolvedHeight),
+            depth: String(resolvedDepth),
+          },
+          maxCapacity: String(resolvedQty),
+          status: "full",
+          cartonStatus: "",
+          weightCarton: String(resolvedWeight),
+          isLooseCarton: false,
+          looseCartonAction: "assign-new",
+          sourceCartonSerial: carton.cartonSerial,
+          reassignedQuantity: resolvedQty,
+          reassignedCartonSerial: newCartonSerial,
+        });
+
+        if (remainingDevices.length === 0) {
+          carton.status = "full";
+          carton.isLooseCarton = true;
+          carton.cartonStatus = "LOOSE_CLOSED";
+        } else {
+          carton.devices = remainingDevices;
+          carton.status = remainingDevices.length >= Number(carton.maxCapacity || remainingDevices.length)
+            ? "full"
+            : "partial";
+          carton.isLooseCarton = false;
+          carton.cartonStatus = "";
+        }
+        carton.looseCartonAction = "assign-new";
+        carton.sourceCartonSerial = carton.cartonSerial;
+        carton.reassignedCartonSerial = newCarton.cartonSerial;
+        carton.reassignedQuantity = resolvedQty;
+        carton.looseCartonClosedAt = new Date();
+        await carton.save();
+
+        return res.status(200).json({
+          status: 200,
+          message: "Loose carton reassigned successfully.",
+          carton,
+          newCarton,
+        });
+      }
+
+      // Existing carton path remains the same: close the partial carton as loose.
       carton.status = "full";
       carton.isLooseCarton = true;
+      carton.cartonStatus = "LOOSE_CLOSED";
+      carton.looseCartonAction = "existing";
+      carton.sourceCartonSerial = carton.cartonSerial;
+      carton.reassignedQuantity = sourceQuantity;
+      carton.looseCartonClosedAt = new Date();
       await carton.save();
 
       return res.status(200).json({

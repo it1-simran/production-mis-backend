@@ -38,16 +38,21 @@ module.exports = {
     });
   },
   authenticateToken: async (req, res, next) => {
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
-    if (!token) {
-      return res.status(401).json({ error: "No token provided" });
-    }
     try {
+      console.log(`>>> [AUTH_TRACE] authenticateToken started for ${req.method} ${req.url}`);
+      const authHeader = req.headers["authorization"];
+      const token = authHeader && authHeader.split(" ")[1];
+      if (!token) {
+        console.log(">>> [AUTH_TRACE] No token provided");
+        return res.status(401).json({ error: "No token provided" });
+      }
+      
       const user = await authService.verifyToken(token);
+      console.log(">>> [AUTH_TRACE] Token verified for", user?.id || user?._id || "unknown");
       req.user = user;
       next();
     } catch (error) {
+      console.error(">>> [AUTH_TRACE] Error verifying token:", error);
       return res.status(403).json({ error });
     }
   },

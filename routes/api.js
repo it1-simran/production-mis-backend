@@ -24,6 +24,7 @@ const inventory = require('../models/inventoryManagement');
 const productionManagerController = require('../controller/productionManagerController');
 const skillManagementController = require('../controller/skillController');
 const kitsController = require('../controller/kitsController');
+const kitTransferController = require('../controller/kitTransferController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
@@ -163,6 +164,7 @@ router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenti
 router.get('/device/get/:id', authController.authenticateToken, deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
+router.get('/devices/by-process/:processId', authController.authenticateToken, deviceController.getDevicesByProcessId);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, deviceController.createDeviceTestEntry);
@@ -220,6 +222,12 @@ router.put("/process/updateIssueKitsToLine", authController.authenticateToken, p
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
 router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);
+router.post("/kit-transfer/request", authController.authenticateToken, kitTransferController.createRequest);
+router.get("/kit-transfer/request", authController.authenticateToken, kitTransferController.listRequests);
+router.get("/kit-transfer/request/:id", authController.authenticateToken, kitTransferController.getRequestById);
+router.put("/kit-transfer/request/:id/approve", authController.authenticateToken, kitTransferController.approveRequest);
+router.put("/kit-transfer/request/:id/reject", authController.authenticateToken, kitTransferController.rejectRequest);
+
 router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);
 router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, OrderConfirmationController.delete);
