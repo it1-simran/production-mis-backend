@@ -29,6 +29,11 @@ const cartonManagementSchema = new mongoose.Schema(
     cartonStatus: { type: String, required: false, default: "" },
     weightCarton: { type: String, required: false, default: "" },
     isLooseCarton: { type: Boolean, required: false, default: false },
+    looseCartonAction: { type: String, required: false, default: "" },
+    sourceCartonSerial: { type: String, required: false, default: "" },
+    reassignedCartonSerial: { type: String, required: false, default: "" },
+    reassignedQuantity: { type: Number, required: false, default: 0 },
+    looseCartonClosedAt: { type: Date, required: false, default: null },
   },
   { timestamps: true }
 );

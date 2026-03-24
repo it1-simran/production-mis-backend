@@ -736,31 +736,77 @@ module.exports = {
 
       const pipeline = [
         { $match: match },
+        { $sort: { createdAt: -1 } },
         {
-          $addFields: {
+          $project: {
+            _id: 1,
+            planId: 1,
+            processId: 1,
+            operatorId: 1,
+            deviceId: 1,
+            serialNo: 1,
+            searchType: 1,
+            seatNumber: 1,
+            stageName: 1,
+            status: 1,
+            flowVersion: 1,
+            flowBoundary: 1,
+            flowType: 1,
+            previousFlowVersion: 1,
+            flowStartedAt: 1,
+            timeConsumed: 1,
+            totalBreakTime: 1,
+            startTime: 1,
+            endTime: 1,
+            createdAt: 1,
+            updatedAt: 1,
             deviceKey: {
               $ifNull: [
                 { $toString: "$deviceId" },
                 { $ifNull: ["$serialNo", { $toString: "$_id" }] },
               ],
             },
+            normalizedStageName: {
+              $trim: {
+                input: { $ifNull: ["$stageName", ""] },
+              },
+            },
+            normalizedSeatNumber: {
+              $trim: {
+                input: { $ifNull: ["$seatNumber", ""] },
+              },
+            },
           },
         },
-        { $sort: { createdAt: -1 } },
         {
           $group: {
             _id: {
               planId: "$planId",
-              stageName: "$stageName",
+              stageName: "$normalizedStageName",
               deviceKey: "$deviceKey",
             },
             latest: { $first: "$$ROOT" },
           },
         },
-        { $replaceRoot: { newRoot: "$latest" } },
+        {
+          $replaceRoot: { newRoot: "$latest" },
+        },
+        {
+          $addFields: {
+            stageName: "$normalizedStageName",
+            seatNumber: "$normalizedSeatNumber",
+          },
+        },
+        {
+          $project: {
+            normalizedStageName: 0,
+            normalizedSeatNumber: 0,
+            deviceKey: 0,
+          },
+        },
       ];
 
-      const latestRecords = await DeviceTestRecordModel.aggregate(pipeline);
+      const latestRecords = await DeviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
       const stageSummary = {};
       const seatStageSummary = {};
 

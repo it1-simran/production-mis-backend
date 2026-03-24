@@ -43,24 +43,20 @@ const getDeviceFlowVersion = (device) => {
 
 const getCurrentFlowQuery = (deviceId, flowVersion) => {
   const parsed = Number(flowVersion || 1);
-  const filter = { deviceId: mongoose.Types.ObjectId.isValid(deviceId) ? new mongoose.Types.ObjectId(String(deviceId)) : deviceId };
-  
   if (parsed > 1) {
-    filter.flowVersion = parsed;
-  } else {
-    filter.$or = [{ flowVersion: 1 }, { flowVersion: { $exists: false } }];
+    return { deviceId, flowVersion: parsed };
   }
-  return filter;
+  return {
+    deviceId,
+    $or: [{ flowVersion: 1 }, { flowVersion: { $exists: false } }],
+  };
 };
 
 const getCurrentFlowHistory = async (deviceId, flowVersion, session) => {
   const query = getCurrentFlowQuery(deviceId, flowVersion);
-  let cursor = DeviceTestRecordModel.find(query)
-    .select("stageName name status searchType flowType createdAt") // Limit fields
-    .sort({ createdAt: 1 })
-    .lean();
+  let cursor = DeviceTestRecordModel.find(query);
   if (session) cursor = cursor.session(session);
-  return cursor;
+  return cursor.sort({ createdAt: 1 }).lean();
 };
 
 const getCurrentFlowProgress = (records = [], stageSequence = []) => {
@@ -162,12 +158,6 @@ module.exports = {
         console.log(">>> [DEBUG_TRACE] 3: Validation failed - Missing IDs");
         return res.status(400).json({ status: 400, message: "From and To process are required" });
       }
-
-      if (!mongoose.Types.ObjectId.isValid(fromProcessId) || !mongoose.Types.ObjectId.isValid(toProcessId)) {
-        console.log(">>> [DEBUG_TRACE] 3b: Validation failed - Invalid ObjectIds");
-        return res.status(400).json({ status: 400, message: "Invalid process ID format" });
-      }
-
       if (String(fromProcessId) === String(toProcessId)) {
         console.log(">>> [DEBUG_TRACE] 4: Validation failed - Same IDs");
         return res.status(400).json({ status: 400, message: "From and To process cannot be the same" });
@@ -195,9 +185,7 @@ module.exports = {
         return res.status(401).json({ status: 401, message: "Unauthorized user" });
       }
 
-      const requesterUser = mongoose.Types.ObjectId.isValid(actorId) 
-        ? await User.findById(actorId).lean()
-        : null;
+      const requesterUser = await User.findById(actorId).lean();
 
       if (String(fromProcess.selectedProduct) !== String(toProcess.selectedProduct)) {
         console.log(">>> [DEBUG_TRACE] 10: Product mismatch");
@@ -230,9 +218,11 @@ module.exports = {
           });
         }
 
-        const destinationStageSequence = buildStageSequence(toProcess);
-        const targetStageIndex = getStageIndex(destinationStageSequence, targetStage);
-        if (targetStageIndex === -1) {
+        const destinationStages = buildStageSequence(toProcess);
+        const stageExists = destinationStages.some(
+          (stage) => normalizeStage(stage) === normalizeStage(targetStage)
+        );
+        if (!stageExists) {
           console.log(">>> [DEBUG_TRACE] 15: Stage doesn't exist");
           return res.status(400).json({
             status: 400,
@@ -255,33 +245,46 @@ module.exports = {
           });
         }
 
+        const destinationStageSequence = buildStageSequence(toProcess);
+        const targetStageIndex = getStageIndex(destinationStageSequence, targetStage);
+        if (targetStageIndex === -1) {
+          console.log(">>> [DEBUG_TRACE] 17: Stage index -1");
+          return res.status(400).json({
+            status: 400,
+            message: "Selected target stage does not exist on destination process",
+          });
+        }
+
         console.log(">>> [DEBUG_TRACE] 18: Validating flow eligibility for serials");
         const validationFailures = [];
-        console.log(">>> [DEBUG_TRACE] 18: Validating flow eligibility for serials (Sequential for stability)");
         for (const device of devices) {
-          const startAudit = Date.now();
           const deviceFlowVersion = getDeviceFlowVersion(device);
           const currentFlowRecords = await getCurrentFlowHistory(device._id, deviceFlowVersion);
           const { highestIndex } = getCurrentFlowProgress(currentFlowRecords, destinationStageSequence);
           const effectiveCurrentIndex = getCurrentDeviceStageIndex(
             device,
             destinationStageSequence,
-            highestIndex
+            highestIndex,
           );
+          const currentStageName =
+            effectiveCurrentIndex >= 0 ? destinationStageSequence[effectiveCurrentIndex] : "";
 
-          if (targetStageIndex > effectiveCurrentIndex + 1) {
-            const currentStageName =
-              effectiveCurrentIndex >= 0 ? destinationStageSequence[effectiveCurrentIndex] : "Initial";
-            const expectedNextStage = destinationStageSequence[effectiveCurrentIndex + 1] || "";
-            validationFailures.push({
-              serialNo: device.serialNo,
-              currentStage: currentStageName,
-              targetStage: targetStage,
-              missingStage: expectedNextStage || targetStage,
-              reason: `Device ${device.serialNo} must first complete ${expectedNextStage || "the earlier stage"} before moving to ${targetStage}`,
-            });
+          if (targetStageIndex === effectiveCurrentIndex) {
+            continue;
           }
-          console.log(`>>> [DEBUG_TRACE] 18b: Device ${device.serialNo} validated in ${Date.now() - startAudit}ms`);
+
+          if (targetStageIndex > effectiveCurrentIndex) {
+            const expectedNextStage = destinationStageSequence[effectiveCurrentIndex + 1] || "";
+            if (effectiveCurrentIndex < 0 || targetStageIndex !== effectiveCurrentIndex + 1) {
+              validationFailures.push({
+                serialNo: device.serialNo,
+                currentStage: currentStageName || device.currentStage || "",
+                targetStage: targetStage,
+                missingStage: expectedNextStage || targetStage,
+                reason: `Device must first complete ${expectedNextStage || "the earlier stage"} before moving to ${targetStage}`,
+              });
+            }
+          }
         }
 
         if (validationFailures.length > 0) {
@@ -292,11 +295,6 @@ module.exports = {
             details: validationFailures,
           });
         }
-      }
-
-      if (!fromProcess.selectedProduct) {
-        console.log(">>> [DEBUG_TRACE] 10b: Missing product ID on source process");
-        return res.status(400).json({ status: 400, message: "Source process is missing product association" });
       }
 
       console.log(">>> [DEBUG_TRACE] 20: Creating database record");
@@ -322,12 +320,12 @@ module.exports = {
         request: shapeRequest(request),
       });
     } catch (error) {
-      console.error(">>> [DEBUG_TRACE] CRASH in createRequest:", error);
+      console.error(">>> [DEBUG_TRACE] CRASH:", error);
       return res.status(500).json({
         status: 500,
         message: error?.message || "Failed to create kit transfer request",
-        details: error?.details || error?.errors || null,
-        error: error?.stack || String(error),
+        details: error?.details || null,
+        error: error?.stack || error?.message || String(error),
       });
     }
   },
@@ -402,9 +400,9 @@ module.exports = {
 
         const sourceDevices = Array.isArray(request.serials) && request.serials.length > 0
           ? await DeviceModel.find({
-              serialNo: { $in: request.serials },
-              processID: fromProcess._id,
-            }).session(session)
+            serialNo: { $in: request.serials },
+            processID: fromProcess._id,
+          }).session(session)
           : [];
 
         const transferContext = [];
@@ -423,7 +421,7 @@ module.exports = {
           for (const device of sourceDevices) {
             const deviceFlowVersion = getDeviceFlowVersion(device);
             const currentFlowRecords = await getCurrentFlowHistory(device._id, deviceFlowVersion, session);
-          const { passed, highestIndex } = getCurrentFlowProgress(
+            const { passed, highestIndex } = getCurrentFlowProgress(
               currentFlowRecords,
               destinationStageSequence,
             );

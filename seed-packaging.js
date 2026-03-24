@@ -1,9 +1,20 @@
+const path = require("path");
+require("dotenv").config({
+  path: path.join(
+    __dirname,
+    process.env.NODE_ENV === "production"
+      ? ".env.production"
+      : ".env.development",
+  ),
+});
 const mongoose = require("mongoose");
+const Device = require("./models/device");
+const DeviceTestRecord = require("./models/deviceTestModel");
 
-const uri = process.env.MONGO_URI;
-
-const processId = "69b125f21878823797912f62";
-const serials = [
+const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
+const DEFAULT_PROCESS_ID =
+  process.env.PACKAGING_PROCESS_ID || "69b125f21878823797912f62";
+const DEFAULT_SERIALS = [
   "28026120001",
   "28026120002",
   "28026120003",
@@ -16,89 +27,202 @@ const serials = [
   "28026120010",
 ];
 
-const operators = {
-  "Visual Inspection": "6995a1abba950bc9f6f6fc22",
-  "Power Flow & Code Flashing": "6995a262ba950bc9f6f6feb0",
-  "Functional": "6995a2f4ba950bc9f6f6ff0a",
-  "Conformal Coating": "6995a34fba950bc9f6f6ff64",
-  "Enclosure Assembly": "6995a392ba950bc9f6f6ffbe",
-  "FQC": "6995a422ba950bc9f6f702a0",
-  "Packaging": "6995a45cba950bc9f6f702fa",
-};
-
-const stages = [
-  "Visual Inspection",
-  "Power Flow & Code Flashing",
-  "Functional",
-  "Conformal Coating",
-  "Enclosure Assembly",
-  "FQC",
-  "Packaging",
-];
-
-async function run() {
-  if (!uri) {
-    console.error("MONGO_URI env var not set.");
-    process.exit(1);
+function parseArgs(argv) {
+  const args = {};
+  for (const entry of argv) {
+    if (!entry.startsWith("--")) continue;
+    const [rawKey, ...rawValueParts] = entry.slice(2).split("=");
+    const key = rawKey.trim();
+    const value = rawValueParts.length ? rawValueParts.join("=").trim() : true;
+    args[key] = value;
   }
-
-  await mongoose.connect(uri);
-
-  const db = mongoose.connection.db;
-  const devicesCol = db.collection("devices");
-  const recordsCol = db.collection("devicetestrecords");
-
-  const devices = await devicesCol.find({
-    serialNo: { $in: serials },
-    processID: new mongoose.Types.ObjectId(processId),
-  }).toArray();
-
-  if (!devices.length) {
-    console.log("No matching devices found.");
-    process.exit(0);
-  }
-
-  await devicesCol.updateMany(
-    { _id: { $in: devices.map(d => d._id) } },
-    { $set: { currentStage: "Packaging", status: "Pass", updatedAt: new Date() } }
-  );
-
-  await recordsCol.deleteMany({
-    processId: new mongoose.Types.ObjectId(processId),
-    serialNo: { $in: serials },
-    stageName: { $in: stages },
-  });
-
-  const now = new Date();
-  const testRecords = [];
-
-  devices.forEach((device, idx) => {
-    stages.forEach((stageName, sIdx) => {
-      testRecords.push({
-        deviceId: device._id,
-        processId: new mongoose.Types.ObjectId(processId),
-        operatorId: new mongoose.Types.ObjectId(operators[stageName]),
-        serialNo: device.serialNo,
-        stageName,
-        status: "Pass",
-        assignedDeviceTo: "Operator",
-        timeConsumed: "00:01:00",
-        startTime: new Date(now.getTime() + sIdx * 60000),
-        endTime: new Date(now.getTime() + (sIdx + 1) * 60000),
-        logs: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-    });
-  });
-
-  await recordsCol.insertMany(testRecords);
-
-  console.log("Updated devices to Packaging + inserted stage history till FQC + Packaging.");
-  process.exit(0);
+  return args;
 }
 
-run().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+function normalizeSerial(serial) {
+  return String(serial || "").trim();
+}
+
+function buildSerialList(rawValue) {
+  if (!rawValue) return DEFAULT_SERIALS;
+  if (Array.isArray(rawValue)) return rawValue.map(normalizeSerial).filter(Boolean);
+  const value = String(rawValue).trim();
+  if (!value) return DEFAULT_SERIALS;
+
+  if (value.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map(normalizeSerial).filter(Boolean);
+      }
+    } catch (error) {
+      throw new Error("Invalid JSON passed to --serials");
+    }
+  }
+
+  return value
+    .split(",")
+    .map(normalizeSerial)
+    .filter(Boolean);
+}
+
+function dedupe(values) {
+  return [...new Set(values)];
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const dryRun = Boolean(args["dry-run"] || args.dryRun);
+  const processIdRaw = normalizeSerial(args.processId || DEFAULT_PROCESS_ID);
+  const processId = mongoose.Types.ObjectId.isValid(processIdRaw)
+    ? new mongoose.Types.ObjectId(processIdRaw)
+    : null;
+  const serials = dedupe(buildSerialList(args.serials));
+
+  if (!MONGO_URI) {
+    throw new Error("MONGODB_URI env var is not set.");
+  }
+
+  await mongoose.connect(MONGO_URI);
+
+  const query = {
+    serialNo: { $in: serials },
+  };
+  if (processId) {
+    query.processID = processId;
+  }
+
+  const devices = await Device.find(query).lean();
+  const deviceBySerial = new Map(
+    devices.map((device) => [normalizeSerial(device.serialNo), device]),
+  );
+
+  const foundSerials = serials.filter((serial) => deviceBySerial.has(serial));
+  const missingSerials = serials.filter((serial) => !deviceBySerial.has(serial));
+
+  const testRecordQuery = {
+    serialNo: { $in: foundSerials },
+    stageName: "Packaging",
+    flowType: "packaging",
+  };
+  if (processId) {
+    testRecordQuery.processId = processId;
+  }
+
+  const existingRecords = await DeviceTestRecord.find(testRecordQuery)
+    .select("serialNo processId deviceId createdAt")
+    .lean();
+
+  const existingSerialSet = new Set(
+    existingRecords.map((record) => normalizeSerial(record.serialNo)),
+  );
+
+  const recordsToInsert = [];
+  const devicesToUpdate = [];
+  const now = new Date();
+
+  for (const serial of foundSerials) {
+    const device = deviceBySerial.get(serial);
+    if (!device) continue;
+
+    if (existingSerialSet.has(serial)) {
+      continue;
+    }
+
+    recordsToInsert.push({
+      deviceId: device._id,
+      processId: processId || device.processID || undefined,
+      productId: device.productType || undefined,
+      serialNo: device.serialNo,
+      searchType: "Dummy Packaging Seed",
+      seatNumber: device.seatNumber || "",
+      stageName: "Packaging",
+      status: "Pass",
+      trcRemarks: [],
+      logs: [
+        {
+          stepName: "Packaging",
+          stepType: "dummy-seed",
+          logData: {
+            source: "seed-packaging.js",
+            serialNo: device.serialNo,
+          },
+          status: "Pass",
+          createdAt: now,
+        },
+      ],
+      assignedDeviceTo: "Packaging",
+      ngDescription: "",
+      flowVersion: Number(device.flowVersion || 1),
+      flowBoundary: false,
+      flowType: "packaging",
+      previousFlowVersion: null,
+      flowStartedAt: now,
+      timeConsumed: "00:01:00",
+      totalBreakTime: "00:00:00",
+      startTime: now,
+      endTime: new Date(now.getTime() + 60 * 1000),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    devicesToUpdate.push(device._id);
+  }
+
+  const summary = {
+    inputSerials: serials.length,
+    found: foundSerials.length,
+    missing: missingSerials.length,
+    skippedExisting: existingSerialSet.size,
+    toInsert: recordsToInsert.length,
+    dryRun,
+  };
+
+  if (dryRun) {
+    console.log(JSON.stringify({ summary, missingSerials, insertPreview: recordsToInsert }, null, 2));
+    await mongoose.disconnect();
+    return;
+  }
+
+  if (recordsToInsert.length > 0) {
+    await DeviceTestRecord.insertMany(recordsToInsert);
+  }
+
+  if (devicesToUpdate.length > 0) {
+    await Device.updateMany(
+      { _id: { $in: devicesToUpdate } },
+      {
+        $set: {
+          currentStage: "Packaging",
+          status: "Pass",
+          updatedAt: new Date(),
+        },
+      },
+    );
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        ...summary,
+        created: recordsToInsert.length,
+        updatedDevices: devicesToUpdate.length,
+        missingSerials,
+      },
+      null,
+      2,
+    ),
+  );
+
+  await mongoose.disconnect();
+}
+
+if (require.main === module) {
+  main().catch(async (error) => {
+    console.error(error);
+    try {
+      await mongoose.disconnect();
+    } catch (_) {}
+    process.exit(1);
+  });
+}

@@ -564,8 +564,23 @@ module.exports = {
         {
           $lookup: {
             from: "assignkitstolines",
-            localField: "_id",
-            foreignField: "planId",
+            let: { planId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ["$planId", "$$planId"] },
+                },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  issuedKits: 1,
+                  seatDetails: 1,
+                  status: 1,
+                  issuedKitsStatus: 1,
+                },
+              },
+            ],
             as: "assignKitsToLinesDetails",
           },
         },
@@ -578,8 +593,23 @@ module.exports = {
         {
           $lookup: {
             from: "shifts",
-            localField: "selectedShift",
-            foreignField: "_id",
+            let: { shiftId: "$selectedShift" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ["$_id", "$$shiftId"] },
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  startTime: 1,
+                  endTime: 1,
+                  intervals: 1,
+                  totalBreakTime: 1,
+                },
+              },
+            ],
             as: "shiftDetails",
           },
         },
@@ -589,8 +619,26 @@ module.exports = {
         {
           $lookup: {
             from: "processes",
-            localField: "selectedProcess",
-            foreignField: "_id",
+            let: { processId: "$selectedProcess" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ["$_id", "$$processId"] },
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  name: 1,
+                  processID: 1,
+                  status: 1,
+                  quantity: 1,
+                  selectedProduct: 1,
+                  stages: 1,
+                  commonStages: 1,
+                },
+              },
+            ],
             as: "processDetails",
           },
         },

@@ -761,7 +761,23 @@ module.exports = {
     try {
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
+      const statusRaw = req.query.status || req.query.onlyNg;
       const shouldPaginate = pageRaw || limitRaw;
+      const statusFilter =
+        String(statusRaw || "").toLowerCase() === "ng"
+          ? { status: { $regex: /^NG$/i } }
+          : {};
+      const projection = {
+        deviceId: 1,
+        processId: 1,
+        operatorId: 1,
+        serialNo: 1,
+        stageName: 1,
+        status: 1,
+        assignedDeviceTo: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      };
       let DeviceTestEntry;
       let meta;
       if (shouldPaginate) {
@@ -770,21 +786,21 @@ module.exports = {
         const skip = (page - 1) * limit;
         const [entries, total] = await Promise.all([
           deviceTestRecords
-            .find({}, null, { sort: { createdAt: -1 } })
-            .populate("deviceId")
-            .populate("processId")
+            .find(statusFilter, projection, { sort: { createdAt: -1 } })
+            .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
+            .populate({ path: "processId", select: "name processName" })
             .skip(skip)
             .limit(limit)
             .lean(),
-          deviceTestRecords.countDocuments(),
+          deviceTestRecords.countDocuments(statusFilter),
         ]);
         DeviceTestEntry = entries;
         meta = { page, limit, total };
       } else {
         DeviceTestEntry = await deviceTestRecords
-          .find({}, null, { sort: { createdAt: -1 } })
-          .populate("deviceId")
-          .populate("processId")
+          .find(statusFilter, projection, { sort: { createdAt: -1 } })
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
+          .populate({ path: "processId", select: "name processName" })
           .lean();
       }
       return res.status(200).json({

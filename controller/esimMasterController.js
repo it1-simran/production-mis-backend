@@ -46,7 +46,10 @@ module.exports = {
     },
     view: async (req, res) => {
         try {
-            const esimMasters = await EsimMaster.find();
+            const esimMasters = await EsimMaster.find()
+                .select("ccid esimMake profile1 profile2 apnProfile1 apnProfile2 remarks isEditable createdAt updatedAt")
+                .sort({ createdAt: -1 })
+                .lean();
             return res.status(200).json({
                 status: 200,
                 message: "ESIM Master records fetched successfully",
@@ -149,7 +152,7 @@ module.exports = {
     getByCcid: async (req, res) => {
         try {
             const { ccid } = req.params;
-            const result = await EsimMaster.findOne({ ccid: ccid.trim() });
+            const result = await EsimMaster.findOne({ ccid: ccid.trim() }).lean();
             if (!result) {
                 return res.status(404).json({ status: 404, message: "ESIM Master not found for this CCID" });
             }
@@ -161,7 +164,7 @@ module.exports = {
                 EsimProfile.findOne({ name: { $in: [result.profile2] } })
             ]);
 
-            const finalData = result.toObject();
+            const finalData = { ...result };
             finalData.esimMakeId = makeData ? makeData.simId : result.esimMake;
             finalData.profile1Id = p1Data ? p1Data.profileId : result.profile1;
             finalData.profile2Id = p2Data ? p2Data.profileId : result.profile2;
