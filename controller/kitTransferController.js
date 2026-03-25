@@ -23,6 +23,9 @@ const buildStageSequence = (processDoc) => {
 const getStageIndex = (stageSequence, stageName) =>
   stageSequence.findIndex((stage) => normalizeStage(stage) === normalizeStage(stageName));
 
+const getFunctionalStageIndex = (stageSequence) =>
+  stageSequence.findIndex((stage) => normalizeStage(stage).includes("functional"));
+
 const isTransferAuditRecord = (record) => {
   const searchType = normalizeStage(record?.searchType);
   const status = normalizeStage(record?.status);
@@ -255,6 +258,14 @@ module.exports = {
           });
         }
 
+        const functionalStageIndex = getFunctionalStageIndex(destinationStageSequence);
+        if (functionalStageIndex !== -1 && targetStageIndex > functionalStageIndex) {
+          return res.status(400).json({
+            status: 400,
+            message: "Destination stage must be Functional or earlier for kit transfer",
+          });
+        }
+
         console.log(">>> [DEBUG_TRACE] 18: Validating flow eligibility for serials");
         const validationFailures = [];
         for (const device of devices) {
@@ -268,6 +279,17 @@ module.exports = {
           );
           const currentStageName =
             effectiveCurrentIndex >= 0 ? destinationStageSequence[effectiveCurrentIndex] : "";
+
+          if (functionalStageIndex !== -1 && effectiveCurrentIndex > functionalStageIndex) {
+            validationFailures.push({
+              serialNo: device.serialNo,
+              currentStage: currentStageName || device.currentStage || "",
+              targetStage,
+              missingStage: "Functional",
+              reason: `Device has already passed Functional and is not eligible for kit transfer`,
+            });
+            continue;
+          }
 
           if (targetStageIndex === effectiveCurrentIndex) {
             continue;

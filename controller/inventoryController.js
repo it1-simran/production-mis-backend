@@ -3,6 +3,27 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 
+const toPositiveInt = (value) => Math.max(parseInt(value, 10) || 0, 0);
+
+const deriveCartonsFromQuantity = (quantity, maxCapacity) => {
+  const qty = toPositiveInt(quantity);
+  const capacity = toPositiveInt(maxCapacity);
+  if (!qty || !capacity) return 0;
+  return Math.ceil(qty / capacity);
+};
+
+const getPackagingDataByProductId = async (productId) => {
+  if (!mongoose.Types.ObjectId.isValid(productId)) return null;
+  const product = await ProductModel.findById(productId).select("stages").lean();
+  if (!product) return null;
+
+  const packagingStep = (product.stages || [])
+    .flatMap((stage) => stage.subSteps || [])
+    .find((step) => step?.isPackagingStatus);
+
+  return packagingStep?.packagingData || null;
+};
+
 module.exports = {
   dashboard: async (req, res) => {
     try {
@@ -54,7 +75,12 @@ module.exports = {
   },
   create: async (req, res) => {
     try {
-      const data = req.body;
+      const data = { ...req.body };
+      const quantity = toPositiveInt(data.quantity);
+      const packagingData = await getPackagingDataByProductId(data.productType);
+      data.quantity = quantity;
+      data.cartonQuantity = deriveCartonsFromQuantity(quantity, packagingData?.maxCapacity);
+      data.status = quantity > 0 ? "In Stock" : "Out of Stock";
       const newInventoryModel = new InventoryModel(data);
       await newInventoryModel.save();
       return res.status(201).json({
@@ -80,7 +106,7 @@ module.exports = {
         Inventory,
       });
     } catch (e) {
-      console.error("Error fetching Inventory details:", error);
+      console.error("Error fetching Inventory details:", e);
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
@@ -127,13 +153,37 @@ module.exports = {
           },
         },
       ]);
-      const processInventory = data.filter(
-        (item) =>
-          item?.status === "Waiting_Kits_allocation" ||
-          item?.status === "Waiting_Kits_approval" ||
-          item?.status === "active" ||
-          item?.kitStatus === "partially_issued"
-      );
+      const processInventory = data
+        .filter(
+          (item) =>
+            item?.status === "Waiting_Kits_allocation" ||
+            item?.status === "Waiting_Kits_approval" ||
+            item?.status === "active" ||
+            item?.kitStatus === "partially_issued"
+        )
+        .map((item) => {
+          const packStep = item?.productDetails?.stages
+            ?.flatMap((stage) => stage?.subSteps || [])
+            ?.find((step) => step?.isPackagingStatus);
+          const cartonCapacity = toPositiveInt(packStep?.packagingData?.maxCapacity);
+          const cartonsNeeded = deriveCartonsFromQuantity(item?.processQuantity, cartonCapacity);
+          const cartonsAllocated = toPositiveInt(item?.issuedCartons);
+          const cartonShortage = Math.max(0, cartonsNeeded - cartonsAllocated);
+
+          return {
+            ...item,
+            cartonCapacity,
+            cartonsNeeded,
+            cartonsAllocated,
+            cartonShortage,
+            cartonAllocationStatus:
+              cartonCapacity === 0
+                ? "No Packaging Spec"
+                : cartonShortage > 0
+                  ? "Carton Allocation Pending"
+                  : "Carton Auto Allocated",
+          };
+        });
 
       return res.status(200).json({
         status: 200,
@@ -153,10 +203,17 @@ module.exports = {
           .status(400)
           .json({ status: 400, message: "Invalid ID format" });
       }
+      const inventory = await InventoryModel.findById(id).lean();
+      if (!inventory) {
+        return res.status(404).json({ message: "Inventory not found" });
+      }
+
+      const quantity = toPositiveInt(req?.body?.quantity);
+      const packagingData = await getPackagingDataByProductId(inventory.productType);
       const updateInventory = {
-        quantity: req?.body?.quantity,
-        cartonQuantity: req?.body?.cartonQuantity,
-        status: req?.body?.status,
+        quantity,
+        cartonQuantity: deriveCartonsFromQuantity(quantity, packagingData?.maxCapacity),
+        status: quantity > 0 ? "In Stock" : "Out of Stock",
         updatedAt: new Date(),
       };
       const update = await InventoryModel.findByIdAndUpdate(
@@ -195,47 +252,9 @@ module.exports = {
   },
   updateCarton: async (req, res) => {
     try {
-      const id = req?.body?.process;
-      const process = await ProcessModel.findById(req.body.process);
-      if (!process) {
-        return res.status(404).json({ status: 404, message: "Process not found" });
-      }
-
-      let Inventory = await InventoryModel.findOne({
-        productType: process?.selectedProduct,
-      });
-
-      if (!Inventory) {
-        Inventory = new InventoryModel({
-          productName: process.productName || "Unknown",
-          productType: process.selectedProduct,
-          quantity: 0,
-          cartonQuantity: 0,
-          status: "Out of Stock",
-        });
-        await Inventory.save();
-      }
-
-      const issueQty = parseInt(req?.body?.issueCartonProcess) || 0;
-      const updateIssueCarton = {
-        quantity: (Inventory?.quantity || 0) - issueQty,
-        updatedAt: new Date(),
-      };
-
-      const updatedData = {
-        issuedCartons: (process?.issuedCartons || 0) + issueQty,
-        updatedAt: new Date(),
-      };
-
-      await InventoryModel.findByIdAndUpdate(Inventory._id, updateIssueCarton);
-      const updatedProcess = await ProcessModel.findByIdAndUpdate(id, updatedData, {
-        new: true,
-        runValidators: true,
-      });
-      return res.status(200).json({
-        status: 200,
-        status_msg: "Carton Updated Sucessfully!!",
-        updatedProcess,
+      return res.status(410).json({
+        status: 410,
+        status_msg: "Carton allocation is now auto-derived from product packaging and issued kits.",
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -345,14 +364,37 @@ module.exports = {
         await Inventory.save();
       }
 
-      const kitQty = parseInt(req?.body?.issuedKits) || 0;
+      const kitQty = toPositiveInt(req?.body?.issuedKits);
+      const availableInventoryQty = toPositiveInt(Inventory?.quantity);
+      const currentProcessQty = toPositiveInt(process.quantity);
+      const currentIssuedKits = toPositiveInt(process.issuedKits);
+      const remainingProcessQty = Math.max(0, currentProcessQty - currentIssuedKits);
+
+      if (kitQty <= 0) {
+        return res.status(400).json({ status: 400, message: "Issued kits must be greater than zero" });
+      }
+      if (kitQty > remainingProcessQty) {
+        return res.status(400).json({ status: 400, message: "Cannot allocate more kits than required" });
+      }
+      if (kitQty > availableInventoryQty) {
+        return res.status(400).json({ status: 400, message: "Insufficient kit stock" });
+      }
+
+      const packagingData = await getPackagingDataByProductId(process.selectedProduct);
+      const maxCapacity = toPositiveInt(packagingData?.maxCapacity);
+      const nextIssuedKits = currentIssuedKits + kitQty;
+      const nextIssuedCartons = deriveCartonsFromQuantity(nextIssuedKits, maxCapacity);
+      const remainingInventoryQty = availableInventoryQty - kitQty;
       const updateIssueKit = {
-        quantity: (Inventory?.quantity || 0) - kitQty,
+        quantity: remainingInventoryQty,
+        cartonQuantity: deriveCartonsFromQuantity(remainingInventoryQty, maxCapacity),
+        status: remainingInventoryQty > 0 ? "In Stock" : "Out of Stock",
         updatedAt: new Date(),
       };
 
       const updatedData = {
-        issuedKits: (process.issuedKits || 0) + kitQty,
+        issuedKits: nextIssuedKits,
+        issuedCartons: nextIssuedCartons,
         kitStatus: req?.body?.kitStatus,
         status: req?.body?.status,
         updatedAt: new Date(),
