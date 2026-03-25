@@ -233,6 +233,9 @@ router.post('/process/orderConfirmation/create', authController.authenticateToke
 router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, OrderConfirmationController.delete);
 router.post('/process/orderConfirmation/delete-multiple', authController.authenticateToken, OrderConfirmationController.deleteMultiple);
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
+router.put('/process/addOvertime/:id', authController.authenticateToken, planningAndSchedulingController.addOvertime);
+router.delete('/process/removeOvertime/:id/:windowId', authController.authenticateToken, planningAndSchedulingController.removeOvertime);
+router.get('/process/overtime/:id', authController.authenticateToken, planningAndSchedulingController.getOvertime);
 router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, planningAndSchedulingController.getPlaningAndSchedulingDateWise);
 router.get('/planing/downtime-reasons', authController.authenticateToken, planningAndSchedulingController.getDowntimeReasons);
