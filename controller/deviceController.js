@@ -713,7 +713,22 @@ module.exports = {
         });
       }
 
-      const normalizedStageName = String(stageName || "").trim();
+      let resolvedStageName = String(stageName || "").trim();
+      if (!resolvedStageName) {
+        try {
+          let deviceDoc = null;
+          if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
+            deviceDoc = await deviceModel.findById(deviceId).select("currentStage").lean();
+          } else if (serialNo) {
+            deviceDoc = await deviceModel.findOne({ serialNo }).select("currentStage").lean();
+          }
+          resolvedStageName = String(deviceDoc?.currentStage || "").trim();
+        } catch (e) {
+          resolvedStageName = "";
+        }
+      }
+
+      const normalizedStageName = resolvedStageName;
       const stageKey = Buffer.from(
         normalizedStageName.length > 0 ? normalizedStageName : "__default__"
       ).toString("base64url");
