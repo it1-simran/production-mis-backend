@@ -60,6 +60,37 @@ const planingAndSchedulingSchema = new mongoose.Schema({
     downTimeType: { type: String, required: false, default: "" },
     description: { type: String, required: false, trim: true, default: "" },
   },
+  overtimeWindows: {
+    type: [
+      {
+        from: { type: Date, required: true },
+        to: { type: Date, required: true },
+        reason: { type: String, required: false, trim: true, default: "" },
+        createdBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: false,
+          default: null,
+        },
+        createdAt: { type: Date, required: false, default: Date.now },
+        updatedAt: { type: Date, required: false, default: Date.now },
+        active: { type: Boolean, required: false, default: true },
+      },
+    ],
+    default: [],
+  },
+  overtimeSummary: {
+    type: {
+      totalMinutes: { type: Number, required: false, default: 0 },
+      totalWindows: { type: Number, required: false, default: 0 },
+      lastUpdatedAt: { type: Date, required: false, default: null },
+    },
+    default: {
+      totalMinutes: 0,
+      totalWindows: 0,
+      lastUpdatedAt: null,
+    },
+  },
 });
 
 const PlaningAndSchedulingModel = mongoose.model(

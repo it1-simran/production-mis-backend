@@ -8,6 +8,180 @@ const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
+
+const TZ = process.env.TIMEZONE || "Asia/Kolkata";
+
+const toObjectId = (id) => {
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
+  return new mongoose.Types.ObjectId(id);
+};
+
+const parseDateValue = (value) => {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const getPlanDateRange = (plan) => {
+  const start = parseDateValue(plan?.startDate);
+  if (!start) return { start: null, end: null };
+
+  const estimationDays = Number(plan?.totalTimeEstimation || 0);
+  let end = parseDateValue(plan?.estimatedEndDate);
+
+  if (!end && Number.isFinite(estimationDays) && estimationDays > 0) {
+    end = new Date(start);
+    end.setTime(start.getTime() + estimationDays * 24 * 60 * 60 * 1000);
+  }
+
+  return { start, end };
+};
+
+const overlapMs = (startA, endA, startB, endB) => {
+  if (!startA || !endA || !startB || !endB) return 0;
+  const s = Math.max(startA.getTime(), startB.getTime());
+  const e = Math.min(endA.getTime(), endB.getTime());
+  return Math.max(0, e - s);
+};
+
+const getShiftProductiveMinutes = (shift) => {
+  if (!shift?.intervals || !Array.isArray(shift.intervals)) {
+    const totalBreak = Number(shift?.totalBreakTime || 0);
+    if (!shift?.startTime || !shift?.endTime) return 0;
+    const start = moment(shift.startTime, ["HH:mm", "HH:mm:ss", "h:mm A"], true);
+    const end = moment(shift.endTime, ["HH:mm", "HH:mm:ss", "h:mm A"], true);
+    if (!start.isValid() || !end.isValid()) return 0;
+    let minutes = end.diff(start, "minutes");
+    if (minutes <= 0) minutes += 24 * 60;
+    return Math.max(0, minutes - totalBreak);
+  }
+
+  return shift.intervals.reduce((sum, interval) => {
+    if (!interval?.startTime || !interval?.endTime || interval?.breakTime) return sum;
+    const start = moment(interval.startTime, ["HH:mm", "HH:mm:ss", "h:mm A"], true);
+    const end = moment(interval.endTime, ["HH:mm", "HH:mm:ss", "h:mm A"], true);
+    if (!start.isValid() || !end.isValid()) return sum;
+    let minutes = end.diff(start, "minutes");
+    if (minutes <= 0) minutes += 24 * 60;
+    return sum + minutes;
+  }, 0);
+};
+
+const getDowntimeOverlapMinutes = (plan, fromDate, toDate) => {
+  const from = parseDateValue(fromDate);
+  const to = parseDateValue(toDate);
+  const downFrom = parseDateValue(plan?.downTime?.from);
+  const downTo = parseDateValue(plan?.downTime?.to);
+  if (!from || !to || !downFrom || !downTo) return 0;
+  return overlapMs(from, to, downFrom, downTo) / (60 * 1000);
+};
+
+const getOvertimeSummary = (plan) => {
+  const windows = Array.isArray(plan?.overtimeWindows) ? plan.overtimeWindows : [];
+  const activeWindows = windows.filter((w) => w?.active);
+  const totalMinutes = activeWindows.reduce((sum, w) => {
+    const from = parseDateValue(w?.from);
+    const to = parseDateValue(w?.to);
+    if (!from || !to || to <= from) return sum;
+    const gross = (to.getTime() - from.getTime()) / (60 * 1000);
+    const downOverlap = getDowntimeOverlapMinutes(plan, from, to);
+    return sum + Math.max(0, gross - downOverlap);
+  }, 0);
+
+  return {
+    totalMinutes: Math.round(totalMinutes),
+    totalWindows: activeWindows.length,
+    lastUpdatedAt: new Date(),
+  };
+};
+
+const createProcessLog = async ({ action, processId, userId, description }) => {
+  const pId = toObjectId(processId);
+  const uId = toObjectId(userId);
+  if (!pId || !uId) return;
+  await ProcessLogsModel.create({
+    action,
+    processId: pId,
+    userId: uId,
+    description: description || "",
+    timestamp: new Date(),
+  });
+};
+
+const getBottleneckUPH = (processData) => {
+  const stages = Array.isArray(processData?.stages) ? processData.stages : [];
+  const values = stages
+    .map((s) => Number(s?.upha))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  if (values.length === 0) return 0;
+  return Math.min(...values);
+};
+
+const recalculatePlanWithOvertime = async (plan) => {
+  const summary = getOvertimeSummary(plan);
+  plan.overtimeSummary = summary;
+
+  const shift = await ShiftModel.findById(plan.selectedShift).lean();
+  const processData = await ProcessModel.findById(plan.selectedProcess).lean();
+  const productiveMinutesPerDay = getShiftProductiveMinutes(shift);
+  if (!productiveMinutesPerDay || productiveMinutesPerDay <= 0) {
+    return plan;
+  }
+
+  let baseDays = Number(plan?.totalTimeEstimation || 0);
+  const quantity = Number(processData?.quantity || 0);
+  const bottleneckUPH = getBottleneckUPH(processData);
+  const productiveHoursPerDay = productiveMinutesPerDay / 60;
+  const unitsPerDay = bottleneckUPH * productiveHoursPerDay;
+  if (quantity > 0 && unitsPerDay > 0) {
+    baseDays = quantity / unitsPerDay;
+  }
+
+  if (!Number.isFinite(baseDays) || baseDays <= 0) {
+    return plan;
+  }
+
+  const overtimeDays = summary.totalMinutes / productiveMinutesPerDay;
+  const updatedDays = Math.max(0, baseDays - overtimeDays);
+  plan.totalTimeEstimation = updatedDays.toFixed(2);
+
+  const start = parseDateValue(plan.startDate);
+  if (start) {
+    plan.estimatedEndDate = moment(start).tz(TZ).add(updatedDays, "days").toDate();
+  }
+
+  return plan;
+};
+
+const findOvertimeConflict = async ({ planId, selectedRoom, selectedShift, from, to }) => {
+  const roomId = toObjectId(selectedRoom);
+  if (!roomId || !from || !to) return null;
+
+  const query = {
+    _id: { $ne: planId },
+    selectedRoom: roomId,
+  };
+  if (selectedShift) {
+    query.selectedShift = selectedShift;
+  }
+
+  const plans = await PlaningAndSchedulingModel.find(query)
+    .select("_id processName selectedProcess startDate estimatedEndDate totalTimeEstimation status")
+    .lean();
+
+  for (const candidate of plans) {
+    if (String(candidate?.status || "").toLowerCase() === "completed") continue;
+    const range = getPlanDateRange(candidate);
+    if (!range.start || !range.end) continue;
+    if (overlapMs(from, to, range.start, range.end) > 0) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -167,6 +341,8 @@ module.exports = {
             estimatedEndDate: 1,
             consumedKit: 1,
             downTime: 1,
+            overtimeWindows: 1,
+            overtimeSummary: 1,
             processName: "$planingData.name",
             isActiveProcess: {
               $and: [
@@ -684,6 +860,8 @@ module.exports = {
             estimatedEndDate: 1,
             consumedKit: 1,
             downTime: 1,
+            overtimeWindows: 1,
+            overtimeSummary: 1,
             assignedIssuedKits: "$assignKitsToLinesDetails.issuedKits",
             assignedSeatDetails: "$assignKitsToLinesDetails.seatDetails",
             assignedStatus: "$assignKitsToLinesDetails.status",
@@ -974,6 +1152,166 @@ module.exports = {
       });
     } catch (error) {
       console.error("API Error:", error.message);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  addOvertime: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const userId = req?.user?.id || null;
+      const { from, to, reason = "", replaceWindowId = null } = req.body || {};
+
+      const fromDate = parseDateValue(from);
+      const toDate = parseDateValue(to);
+
+      if (!fromDate || !toDate || toDate <= fromDate) {
+        return res.status(400).json({
+          status: 400,
+          message: "Valid overtime 'from' and 'to' are required.",
+        });
+      }
+
+      const plan = await PlaningAndSchedulingModel.findById(id);
+      if (!plan) {
+        return res.status(404).json({ status: 404, message: "Planning not found" });
+      }
+
+      const conflict = await findOvertimeConflict({
+        planId: plan._id,
+        selectedRoom: plan.selectedRoom,
+        selectedShift: plan.selectedShift,
+        from: fromDate,
+        to: toDate,
+      });
+
+      if (conflict) {
+        return res.status(409).json({
+          status: 409,
+          message: "Overtime overlaps with another active plan in the same room/shift window.",
+          conflict: {
+            planId: conflict._id,
+            selectedProcess: conflict.selectedProcess,
+            processName: conflict.processName || "",
+            startDate: conflict.startDate,
+            estimatedEndDate: conflict.estimatedEndDate,
+          },
+        });
+      }
+
+      let action = "OVERTIME_ADDED";
+      let updatedWindow = null;
+
+      if (replaceWindowId) {
+        const target = (plan.overtimeWindows || []).find(
+          (w) => String(w._id) === String(replaceWindowId)
+        );
+        if (!target) {
+          return res.status(404).json({ status: 404, message: "Overtime window not found" });
+        }
+        target.from = fromDate;
+        target.to = toDate;
+        target.reason = reason || "";
+        target.updatedAt = new Date();
+        target.active = true;
+        updatedWindow = target;
+        action = "OVERTIME_UPDATED";
+      } else {
+        updatedWindow = {
+          from: fromDate,
+          to: toDate,
+          reason: reason || "",
+          createdBy: toObjectId(userId),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          active: true,
+        };
+        plan.overtimeWindows = [...(plan.overtimeWindows || []), updatedWindow];
+      }
+
+      await recalculatePlanWithOvertime(plan);
+      await plan.save();
+
+      await createProcessLog({
+        action,
+        processId: plan.selectedProcess,
+        userId,
+        description: `Overtime ${action === "OVERTIME_ADDED" ? "added" : "updated"} from ${fromDate.toISOString()} to ${toDate.toISOString()}${reason ? ` (${reason})` : ""}.`,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Overtime saved successfully",
+        overtimeSummary: plan.overtimeSummary,
+        overtimeWindows: plan.overtimeWindows,
+        totalTimeEstimation: plan.totalTimeEstimation,
+        estimatedEndDate: plan.estimatedEndDate,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  removeOvertime: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const windowId = req.params.windowId;
+      const userId = req?.user?.id || null;
+
+      const plan = await PlaningAndSchedulingModel.findById(id);
+      if (!plan) {
+        return res.status(404).json({ status: 404, message: "Planning not found" });
+      }
+
+      const target = (plan.overtimeWindows || []).find(
+        (w) => String(w._id) === String(windowId)
+      );
+      if (!target) {
+        return res.status(404).json({ status: 404, message: "Overtime window not found" });
+      }
+
+      target.active = false;
+      target.updatedAt = new Date();
+
+      await recalculatePlanWithOvertime(plan);
+      await plan.save();
+
+      await createProcessLog({
+        action: "OVERTIME_REMOVED",
+        processId: plan.selectedProcess,
+        userId,
+        description: `Overtime removed for window ${windowId}.`,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Overtime removed successfully",
+        overtimeSummary: plan.overtimeSummary,
+        overtimeWindows: plan.overtimeWindows,
+        totalTimeEstimation: plan.totalTimeEstimation,
+        estimatedEndDate: plan.estimatedEndDate,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getOvertime: async (req, res) => {
+    try {
+      const id = req.params.id;
+      const plan = await PlaningAndSchedulingModel.findById(id)
+        .select("_id selectedProcess overtimeWindows overtimeSummary totalTimeEstimation estimatedEndDate")
+        .lean();
+
+      if (!plan) {
+        return res.status(404).json({ status: 404, message: "Planning not found" });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        overtimeWindows: plan.overtimeWindows || [],
+        overtimeSummary: plan.overtimeSummary || { totalMinutes: 0, totalWindows: 0, lastUpdatedAt: null },
+        totalTimeEstimation: plan.totalTimeEstimation,
+        estimatedEndDate: plan.estimatedEndDate,
+      });
+    } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
