@@ -34,6 +34,21 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
+      if (String(req.query?.lite || "").toLowerCase() === "true" || req.query?.lite === "1") {
+        const Processes = await ProcessModel.find({})
+          .select(
+            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt"
+          )
+          .sort({ updatedAt: -1 })
+          .lean();
+
+        return res.status(200).json({
+          status: 200,
+          message: "Process Fetched Successfully!!",
+          Processes,
+        });
+      }
+
       const Processes = await ProcessModel.aggregate([
         {
           $lookup: {
