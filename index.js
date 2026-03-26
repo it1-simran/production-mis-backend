@@ -38,9 +38,26 @@ app.use('/api', apiRoutes);
 app.use((err, req, res, next) => {
   console.error(">>> [GLOBAL ERROR]:", err.stack || err.message || err);
   const status = err.statusCode || err.status || 500;
+  const raw = String(err.message || "").trim();
+  let safeMessage = "We couldn't complete your request. Please try again.";
+
+  if (status === 400 || status === 422) {
+    safeMessage = raw || "Please review the entered details and try again.";
+  } else if (status === 401) {
+    safeMessage = "Your session has expired. Please sign in again.";
+  } else if (status === 403) {
+    safeMessage = "You do not have permission to perform this action.";
+  } else if (status === 404) {
+    safeMessage = "The requested record was not found.";
+  } else if (status === 409) {
+    safeMessage = raw || "This action conflicts with existing data.";
+  } else if (raw && raw.length <= 180 && !raw.includes(" at ")) {
+    safeMessage = raw;
+  }
+
   res.status(status).json({
     status,
-    message: err.message || "Something went wrong!",
+    message: safeMessage,
     ...(process.env.NODE_ENV !== "production" ? { stack: err.stack } : {}),
   });
 });

@@ -93,6 +93,10 @@ const planingAndSchedulingSchema = new mongoose.Schema({
   },
 });
 
+planingAndSchedulingSchema.index({ selectedProcess: 1, status: 1, startDate: -1 });
+planingAndSchedulingSchema.index({ selectedRoom: 1, selectedShift: 1, status: 1 });
+planingAndSchedulingSchema.index({ "overtimeWindows.active": 1, startDate: -1 });
+ 
 const PlaningAndSchedulingModel = mongoose.model(
   "PlaningAndScheduling",
   planingAndSchedulingSchema

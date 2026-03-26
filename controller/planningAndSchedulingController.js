@@ -902,7 +902,7 @@ module.exports = {
       const id = req.params.id;
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
         selectedProcess: id,
-      });
+      }).lean();
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
@@ -916,7 +916,7 @@ module.exports = {
   },
   fetchAllPlaningModel: async (req, res) => {
     try {
-      const PlaningAndScheduling = await PlaningAndSchedulingModel.find();
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find().lean();
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",

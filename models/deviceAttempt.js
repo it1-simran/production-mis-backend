@@ -15,6 +15,8 @@ const deviceAttemptSchema = new mongoose.Schema(
 );
 
 deviceAttemptSchema.index({ deviceId: 1, planId: 1, processId: 1 }, { unique: true });
+deviceAttemptSchema.index({ processId: 1, stageName: 1, lastAttemptAt: -1 });
+deviceAttemptSchema.index({ operatorId: 1, planId: 1, updatedAt: -1 });
 
 const DeviceAttempt = mongoose.model("device_attempts", deviceAttemptSchema);
 
