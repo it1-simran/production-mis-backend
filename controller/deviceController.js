@@ -1067,7 +1067,7 @@ module.exports = {
   },
   searchByJigFields: async (req, res) => {
     try {
-      const { jigFields, processId } = req.body;
+      const { jigFields, processId, stageName } = req.body;
       if (!jigFields || typeof jigFields !== 'object') {
         return res.status(400).json({ status: 400, message: "Invalid jigFields" });
       }
@@ -1087,7 +1087,11 @@ module.exports = {
       // We fetch all devices for this process and filter in JS
       // This is because searching across all keys in the nested customFields object is difficult in plain MongoDB queries 
       // without knowing the stage names (which are the first-level keys in customFields).
-      const devices = await deviceModel.find({ processID: processId });
+      const devices = await deviceModel.find({
+        processID: processId,
+        ...(stageName ? { currentStage: stageName } : {}),
+        status: { $nin: ["Pass", "Completed", "NG"] }
+      });
 
       const matchingDevices = devices.filter(device => {
         let customFields = device.customFields;
