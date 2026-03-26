@@ -833,11 +833,16 @@ module.exports = {
   },
   getDeviceTestEntryByOperatorId: async (req, res) => {
     try {
+      console.log(">>> [DEBUG]: getDeviceTestEntryByOperatorId - id:", req.params.id, "query:", req.query);
       const id = req.params.id;
-      const { date, startDate, endDate } = req.query;
+      const { date, startDate, endDate, serialNo } = req.query;
 
       let query = { operatorId: id };
       let startOfDay, endOfDay;
+
+      if (serialNo) {
+        query.serialNo = { $regex: serialNo, $options: "i" };
+      }
 
       if (date) {
         const targetDate = new Date(date);
@@ -845,23 +850,20 @@ module.exports = {
         startOfDay.setHours(0, 0, 0, 0);
         endOfDay = new Date(targetDate);
         endOfDay.setHours(23, 59, 59, 999);
+        query.createdAt = {
+          $gte: startOfDay,
+          $lte: endOfDay,
+        };
       } else if (startDate && endDate) {
         startOfDay = new Date(startDate);
         startOfDay.setHours(0, 0, 0, 0);
         endOfDay = new Date(endDate);
         endOfDay.setHours(23, 59, 59, 999);
-      } else {
-        // Default to current date
-        startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        endOfDay = new Date();
-        endOfDay.setHours(23, 59, 59, 999);
+        query.createdAt = {
+          $gte: startOfDay,
+          $lte: endOfDay,
+        };
       }
-
-      query.createdAt = {
-        $gte: startOfDay,
-        $lte: endOfDay,
-      };
 
       const deviceTestRecord = await deviceTestRecords
         .find(query, null, { sort: { createdAt: -1 } })
@@ -871,10 +873,10 @@ module.exports = {
         .lean();
 
       if (deviceTestRecord.length === 0) {
-        return res.status(404).json({
-          status: 404,
-          message:
-            "No device records found for the given Operator ID with the specified filters/date",
+        return res.status(200).json({
+          status: 200,
+          message: "No device records found",
+          data: [],
         });
       }
       return res.status(200).json({
@@ -1366,9 +1368,13 @@ module.exports = {
   getDeviceTestHistoryByOperatorId: async (req, res) => {
     try {
       const id = req.params.id;
-      const { date, startDate, endDate } = req.query;
+      const { date, startDate, endDate, serialNo } = req.query;
 
       let query = { operatorId: id };
+
+      if (serialNo) {
+        query.serialNo = { $regex: serialNo, $options: "i" };
+      }
 
       if (date) {
         const targetDate = new Date(date);
@@ -1393,10 +1399,10 @@ module.exports = {
         .sort({ createdAt: -1 });
 
       if (deviceTestRecord.length === 0) {
-        return res.status(404).json({
-          status: 404,
-          message:
-            "No device records found for the given Operator ID with the specified filters",
+        return res.status(200).json({
+          status: 200,
+          message: "No device records found",
+          data: [],
         });
       }
       return res.status(200).json({
