@@ -8,6 +8,10 @@
     "migrate:ng-devices-report-menu": "node scripts/migrate-menu-ng-devices-report.js",
     "reset:devices:stage1": "node scripts/reset-stage1-devices.js",
     "reset:devices:stage1:dry": "node scripts/reset-stage1-devices.js --dry-run",
+    "move:devices:packaging": "node scripts/move-devices-to-packaging.js",
+    "move:devices:packaging:dry": "node scripts/move-devices-to-packaging.js --dry-run",
+    "reset:cartons:printing": "node scripts/reset-cartons-to-printing-stage.js",
+    "reset:cartons:printing:dry": "node scripts/reset-cartons-to-printing-stage.js --dry-run",
     "seed:packaging": "node seed-packaging.js",
     "seed:packaging:dry": "node seed-packaging.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1"

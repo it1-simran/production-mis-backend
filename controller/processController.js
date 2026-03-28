@@ -7,6 +7,7 @@ const AssignJigToPlanModel = require("../models/assignJigToPlan");
 const AssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
+const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -34,10 +35,13 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      if (String(req.query?.lite || "").toLowerCase() === "true" || req.query?.lite === "1") {
+      if (
+        String(req.query?.lite || "").toLowerCase() === "true" ||
+        req.query?.lite === "1"
+      ) {
         const Processes = await ProcessModel.find({})
           .select(
-            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt"
+            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt",
           )
           .sort({ updatedAt: -1 })
           .lean();
@@ -124,7 +128,7 @@ module.exports = {
         .json({ message: "Server error", error: error.message });
     }
   },
-    delete: async (req, res) => {
+  delete: async (req, res) => {
     try {
       const { id } = req.params;
       const deletedProcess = await ProcessModel.findByIdAndDelete(id);
@@ -134,7 +138,10 @@ module.exports = {
       }
       await Promise.all([
         PlaningAndSchedulingModel.deleteMany({ selectedProcess: id }),
-        AssignOperatorToPlanModel.updateMany({ processId: id }, { status: "Free" }),
+        AssignOperatorToPlanModel.updateMany(
+          { processId: id },
+          { status: "Free" },
+        ),
         AssignJigToPlanModel.updateMany({ processId: id }, { status: "Free" }),
         AssignOperatorToPlanModel.deleteMany({ processId: id }),
         AssignJigToPlanModel.deleteMany({ processId: id }),
@@ -171,7 +178,7 @@ module.exports = {
   //     return res.status(500).json({ status: 500, error: error.message });
   //   }
   // },
-    deleteProcessMultiple: async (req, res) => {
+  deleteProcessMultiple: async (req, res) => {
     try {
       const ids = req.body.deleteIds;
       if (!Array.isArray(ids) || ids.length === 0) {
@@ -188,9 +195,17 @@ module.exports = {
       });
 
       await Promise.all([
-        PlaningAndSchedulingModel.deleteMany({ selectedProcess: { $in: objectIds } }),
-        AssignOperatorToPlanModel.updateMany({ processId: { $in: objectIds } }, { status: "Free" }),
-        AssignJigToPlanModel.updateMany({ processId: { $in: objectIds } }, { status: "Free" }),
+        PlaningAndSchedulingModel.deleteMany({
+          selectedProcess: { $in: objectIds },
+        }),
+        AssignOperatorToPlanModel.updateMany(
+          { processId: { $in: objectIds } },
+          { status: "Free" },
+        ),
+        AssignJigToPlanModel.updateMany(
+          { processId: { $in: objectIds } },
+          { status: "Free" },
+        ),
         AssignOperatorToPlanModel.deleteMany({ processId: { $in: objectIds } }),
         AssignJigToPlanModel.deleteMany({ processId: { $in: objectIds } }),
       ]);
@@ -204,6 +219,43 @@ module.exports = {
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getOrderConfirmationByNo: async (req, res) => {
+    try {
+      const { orderConfirmationNo } = req.params;
+
+      if (!orderConfirmationNo) {
+        return res.status(400).json({
+          status: 400,
+          error: "orderConfirmationNo is required",
+        });
+      }
+
+      // Use the model directly for a more robust query
+      const orderConfirmation = await OrderConfirmationNumberModel.findOne({
+        orderConfirmationNo: {
+          $regex: `^${orderConfirmationNo.trim()}$`,
+          $options: "i",
+        },
+      });
+
+      if (!orderConfirmation) {
+        return res.status(404).json({
+          status: 404,
+          message: "Order confirmation not found",
+          orderConfirmationNo,
+        });
+      }
+
+      // Return the document directly to simplify frontend logic
+      return res.status(200).json(orderConfirmation);
+    } catch (error) {
+      console.error("Error fetching order confirmation:", error);
+      return res.status(500).json({
+        status: 500,
+        error: error.message,
+      });
     }
   },
   getProcessByID: async (req, res) => {
@@ -235,7 +287,7 @@ module.exports = {
       if (data?.isCloning === "true") {
         newStages = newStages.map((ns) => {
           const matchingOld = oldProcess.stages.find(
-            (os) => os.stageName === ns.stageName
+            (os) => os.stageName === ns.stageName,
           );
           if (matchingOld) {
             return {
@@ -248,7 +300,7 @@ module.exports = {
         });
         newCommonStages = newCommonStages.map((ncs) => {
           const matchingOld = oldProcess.commonStages.find(
-            (ocs) => ocs.stageName === ncs.stageName
+            (ocs) => ocs.stageName === ncs.stageName,
           );
           if (matchingOld) {
             return {
@@ -277,17 +329,19 @@ module.exports = {
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
 
       if (!updatedProcess) {
-        return res.status(404).json({ message: "Process not found after update" });
+        return res
+          .status(404)
+          .json({ message: "Process not found after update" });
       }
 
       // Surgical cleanup of orphan assignments in plans
       const activeStageNames = new Set(newStages.map((s) => s.stageName));
       const activeCommonStageNames = new Set(
-        newCommonStages.map((s) => s.stageName)
+        newCommonStages.map((s) => s.stageName),
       );
 
       try {
@@ -334,8 +388,12 @@ module.exports = {
           }
 
           // Cleanup for custom/common stages
-          let assignedCustomStages = JSON.parse(plan.assignedCustomStages || "[]");
-          let assignedCustomStagesOp = JSON.parse(plan.assignedCustomStagesOp || "[]");
+          let assignedCustomStages = JSON.parse(
+            plan.assignedCustomStages || "[]",
+          );
+          let assignedCustomStagesOp = JSON.parse(
+            plan.assignedCustomStagesOp || "[]",
+          );
           let filteredCustomStages = [];
           let filteredCustomStagesOp = [];
           let customModified = false;
@@ -360,7 +418,9 @@ module.exports = {
             plan.assignedOperators = JSON.stringify(assignedOperators);
             plan.assignedJigs = JSON.stringify(assignedJigs);
             plan.assignedCustomStages = JSON.stringify(filteredCustomStages);
-            plan.assignedCustomStagesOp = JSON.stringify(filteredCustomStagesOp);
+            plan.assignedCustomStagesOp = JSON.stringify(
+              filteredCustomStagesOp,
+            );
             await plan.save();
           }
         }
@@ -396,7 +456,6 @@ module.exports = {
     try {
       const { id } = req.params;
 
-
       if (!id) {
         return res
           .status(400)
@@ -409,15 +468,14 @@ module.exports = {
       if (assignedOperatorsToPlan.length > 0) {
         assignedOperatorsToPlan.map(async (value, index) => {
           let operatorData = { status: "Free" };
-          const updatedPlan =
-            await AssignOperatorToPlanModel.findByIdAndUpdate(
-              value._id,
-              operatorData,
-              {
-                new: true,
-                runValidators: true,
-              }
-            );
+          const updatedPlan = await AssignOperatorToPlanModel.findByIdAndUpdate(
+            value._id,
+            operatorData,
+            {
+              new: true,
+              runValidators: true,
+            },
+          );
         });
       }
       const updatedData = req.body;
@@ -427,7 +485,7 @@ module.exports = {
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
 
       if (!updatedProcess) {
@@ -499,7 +557,7 @@ module.exports = {
       let totalQuantity =
         parseInt(finalPlanData.quantity) + parseInt(req.body.quantity);
       const totalTimeEstimationInDays = parseInt(
-        (totalQuantity / totalUPHA).toFixed(2)
+        (totalQuantity / totalUPHA).toFixed(2),
       );
       const endDate = new Date(startDate);
       endDate.setDate(startDate.getDate() + totalTimeEstimationInDays);
@@ -509,7 +567,7 @@ module.exports = {
           quantity: totalQuantity,
           kitStatus: req.body.status,
         },
-        { new: true, runValidators: true }
+        { new: true, runValidators: true },
       );
 
       const updatedPlaningAndScheduling =
@@ -519,7 +577,7 @@ module.exports = {
             totalTimeEstimation: totalTimeEstimationInDays,
             estimatedEndDate: endDate,
           },
-          { new: true, runValidators: true }
+          { new: true, runValidators: true },
         );
       return res.status(200).json({
         status: 200,
@@ -594,7 +652,7 @@ module.exports = {
           await AssignOperatorToPlanModel.findByIdAndUpdate(
             operatorData._id,
             { status },
-            { new: true, runValidators: true }
+            { new: true, runValidators: true },
           );
       } else {
         return res.status(500).json({
@@ -640,7 +698,7 @@ module.exports = {
       const updatedEntry = await AssignKitsToLineModel.findOneAndUpdate(
         condition,
         updateData,
-        options
+        options,
       );
       // if(updatedEntry) {
       const updatedPlan = await PlaningAndSchedulingModel.findByIdAndUpdate(
@@ -649,12 +707,12 @@ module.exports = {
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
         data.processId,
         processData,
-        { new: true, runValidators: true }
+        { new: true, runValidators: true },
       );
       if (updatedProcess) {
         return res.status(200).json({
@@ -671,7 +729,10 @@ module.exports = {
   updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
-      let data = { status: req?.body?.status, issuedKitsStatus: req?.body?.issuedKitsStatus };
+      let data = {
+        status: req?.body?.status,
+        issuedKitsStatus: req?.body?.issuedKitsStatus,
+      };
       let processData = {
         status: req.body.processStatus,
       };
@@ -681,12 +742,12 @@ module.exports = {
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
         req.body.processId,
         processData,
-        { new: true, runValidators: true }
+        { new: true, runValidators: true },
       );
       return res.status(200).json({
         status: 200,
@@ -710,7 +771,9 @@ module.exports = {
         const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
         const skip = (page - 1) * limit;
         const [entries, total] = await Promise.all([
-          DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
+          DeviceTestRecordModel.find({ processId }, null, {
+            sort: { createdAt: -1 },
+          })
             .populate("operatorId", "name employeeCode")
             .skip(skip)
             .limit(limit)
@@ -720,7 +783,11 @@ module.exports = {
         deviceTestRecords = entries;
         meta = { page, limit, total };
       } else {
-        deviceTestRecords = await DeviceTestRecordModel.find({ processId }, null, { sort: { createdAt: -1 } })
+        deviceTestRecords = await DeviceTestRecordModel.find(
+          { processId },
+          null,
+          { sort: { createdAt: -1 } },
+        )
           .populate("operatorId", "name employeeCode")
           .lean();
       }
@@ -821,7 +888,8 @@ module.exports = {
         },
       ];
 
-      const latestRecords = await DeviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
+      const latestRecords =
+        await DeviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
       const stageSummary = {};
       const seatStageSummary = {};
 
@@ -832,16 +900,21 @@ module.exports = {
         if (!stageSummary[stageName]) {
           stageSummary[stageName] = { pass: 0, ng: 0, total: 0 };
         }
-        if (status === "PASS" || status === "COMPLETED") stageSummary[stageName].pass += 1;
-        if (status === "NG" || status === "FAIL") stageSummary[stageName].ng += 1;
+        if (status === "PASS" || status === "COMPLETED")
+          stageSummary[stageName].pass += 1;
+        if (status === "NG" || status === "FAIL")
+          stageSummary[stageName].ng += 1;
         stageSummary[stageName].total += 1;
 
         const seatKey = String(record?.seatNumber || "").trim();
         if (seatKey) {
           const key = `${seatKey}:${stageName}`;
-          if (!seatStageSummary[key]) seatStageSummary[key] = { pass: 0, ng: 0 };
-          if (status === "PASS" || status === "COMPLETED") seatStageSummary[key].pass += 1;
-          if (status === "NG" || status === "FAIL") seatStageSummary[key].ng += 1;
+          if (!seatStageSummary[key])
+            seatStageSummary[key] = { pass: 0, ng: 0 };
+          if (status === "PASS" || status === "COMPLETED")
+            seatStageSummary[key].pass += 1;
+          if (status === "NG" || status === "FAIL")
+            seatStageSummary[key].ng += 1;
         }
       });
 

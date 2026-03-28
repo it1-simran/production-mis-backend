@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const processLogModel = require("../models/ProcessLogs");
 const cartonModel = require("../models/cartonManagement");
+const cartonHistoryModel = require("../models/cartonHistory");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/process");
 const productModel = require("../models/Products");
@@ -8,6 +9,11 @@ const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
 // const ProcessModel = require("../models/process");
+
+const PDI_CARTON_NG_REASONS = {
+  WEIGHT_MISMATCH: "Weight Verification Mismatched",
+  CARTON_DAMAGED: "Carton Damaged",
+};
 
 const normalizeObjectIdList = (values = []) =>
   values
@@ -21,6 +27,157 @@ const normalizeObjectIdList = (values = []) =>
     })
     .filter(Boolean);
 
+const normalizeWeightValue = (value) => {
+  if (value === undefined || value === null) return null;
+  const sanitizedValue = String(value)
+    .trim()
+    .replace(",", ".")
+    .replace(/[^0-9.]/g, "");
+  if (!sanitizedValue) return null;
+  const parsedValue = Number.parseFloat(sanitizedValue);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) return null;
+  return {
+    numeric: parsedValue,
+    scaled: Math.round(parsedValue * 1000),
+  };
+};
+
+const createCartonHistoryEvent = async ({
+  carton,
+  eventType,
+  performedBy,
+  fromCartonStatus = "",
+  toCartonStatus = "",
+  fromDeviceStage = "",
+  toDeviceStage = "",
+  reasonCode = "",
+  reasonText = "",
+  notes = "",
+  extra = null,
+}) => {
+  if (!carton?._id || !carton?.cartonSerial || !carton?.processId) return null;
+  return cartonHistoryModel.create({
+    cartonSerial: carton.cartonSerial,
+    cartonId: carton._id,
+    processId: carton.processId,
+    eventType,
+    fromCartonStatus,
+    toCartonStatus,
+    fromDeviceStage,
+    toDeviceStage,
+    reasonCode,
+    reasonText,
+    notes,
+    performedBy: performedBy || null,
+    cycleNo: Number(carton?.cartonReworkCount || 0),
+    weightAtEvent: String(carton?.weightCarton || ""),
+    stickerPrintedState: !!carton?.isStickerPrinted,
+    stickerVerifiedState: !!carton?.isStickerVerified,
+    extra,
+    timestamp: new Date(),
+  });
+};
+
+const getConfiguredCartonWeight = async (carton) => {
+  const processDoc = await ProcessModel.findById(carton.processId).lean();
+  const productId = processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
+  let productDoc = null;
+  if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
+    productDoc = await productModel.findById(productId).lean();
+  }
+
+  const expectedWeight = normalizeWeightValue(
+    carton?.packagingData?.cartonWeight ??
+      processDoc?.packagingData?.cartonWeight ??
+      productDoc?.packagingData?.cartonWeight ??
+      0,
+  );
+
+  const configuredCapacity = Number(
+    processDoc?.packagingData?.maxCapacity ??
+      productDoc?.packagingData?.maxCapacity ??
+      0,
+  );
+
+  return { expectedWeight, configuredCapacity, processDoc, productDoc };
+};
+
+const isPartialOrDerivedCarton = (carton, configuredCapacity = 0) => {
+  const cartonStatus = String(carton?.status || "").trim().toLowerCase();
+  const looseCartonAction = String(carton?.looseCartonAction || "").trim().toLowerCase();
+  const cartonCapacity = Number(
+    carton?.packagingData?.maxCapacity ??
+      carton?.maxCapacity ??
+      (Array.isArray(carton?.devices) ? carton.devices.length : 0),
+  );
+  const looksLikePartialDerivedByCapacity =
+    Number.isFinite(configuredCapacity) &&
+    configuredCapacity > 0 &&
+    Number.isFinite(cartonCapacity) &&
+    cartonCapacity > 0 &&
+    cartonCapacity < configuredCapacity;
+
+  return (
+    cartonStatus === "partial" ||
+    !!carton?.isLooseCarton ||
+    looseCartonAction === "assign-new" ||
+    !!carton?.sourceCartonSerial ||
+    Number(carton?.reassignedQuantity || 0) > 0 ||
+    looksLikePartialDerivedByCapacity
+  );
+};
+
+const findDeviceStageForCarton = async (carton) => {
+  if (!Array.isArray(carton?.devices) || carton.devices.length === 0) return "";
+  const firstDevice = await deviceModel.findOne({ _id: { $in: carton.devices } }).lean();
+  return String(firstDevice?.currentStage || "").trim();
+};
+
+const findLatestCartonHistory = async (cartonSerial) => {
+  if (!cartonSerial) return [];
+  return cartonHistoryModel.find({ cartonSerial }).sort({ timestamp: -1, createdAt: -1 }).lean();
+};
+
+const resolveReturnContextForCarton = async (carton) => {
+  let returnCartonStatus = String(carton?.previousCartonStatus || "").trim();
+  let returnDeviceStage = String(carton?.previousDeviceStage || "").trim();
+
+  if (!returnDeviceStage) {
+    const history = await findLatestCartonHistory(carton?.cartonSerial);
+    const lastPdiEntry = history.find(
+      (event) =>
+        ["SHIFT_TO_PDI", "RETURN_TO_PDI"].includes(String(event?.eventType || "")) &&
+        String(event?.fromDeviceStage || "").trim() &&
+        String(event?.fromDeviceStage || "").trim() !== "PDI",
+    );
+
+    if (lastPdiEntry) {
+      returnDeviceStage = String(lastPdiEntry.fromDeviceStage || "").trim();
+      if (!returnCartonStatus) {
+        returnCartonStatus = String(lastPdiEntry.fromCartonStatus || "").trim();
+      }
+    }
+  }
+
+  if (!returnDeviceStage && Array.isArray(carton?.devices) && carton.devices.length > 0) {
+    const latestPackagingRecord = await deviceTestModel.findOne({
+      deviceId: { $in: carton.devices },
+      stageName: {
+        $nin: ["", "PDI", "FG to Store", "FG_TO_STORE", "KEEP_IN_STORE", "STOCKED"],
+      },
+    }).sort({ createdAt: -1 }).lean();
+
+    if (latestPackagingRecord?.stageName) {
+      returnDeviceStage = String(latestPackagingRecord.stageName || "").trim();
+    }
+  }
+
+  return {
+    returnCartonStatus,
+    returnDeviceStage,
+  };
+};
+
 const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
   const normalizedDeviceIds = normalizeObjectIdList(deviceIds);
   if (normalizedDeviceIds.length === 0) return null;
@@ -31,7 +188,6 @@ const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
     devices: { $in: normalizedDeviceIds },
   });
 };
-
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
@@ -128,28 +284,31 @@ module.exports = {
     try {
       const { cartonSerial } = req.body;
       if (!cartonSerial) {
-        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+        return res
+          .status(400)
+          .json({ status: 400, message: "Carton serial is required." });
       }
 
-
-      const carton = await cartonModel.findOne({ cartonSerial });
-      if (carton) {
-        await processLogModel.create({
-          action: "PRINT_STICKER",
-          processId: carton.processId,
-          userId: req.user.id,
-          description: `Sticker printed for carton ${cartonSerial}`
-        });
-      }
-      const updatedCarton = await cartonModel.findOneAndUpdate(
-        { cartonSerial },
-        { isStickerVerified: true },
-        { new: true }
-      );
-
+      const updatedCarton = await cartonModel.findOne({ cartonSerial });
       if (!updatedCarton) {
-        return res.status(404).json({ status: 404, message: "Carton not found." });
+        return res
+          .status(404)
+          .json({ status: 404, message: "Carton not found." });
       }
+
+      updatedCarton.isStickerVerified = true;
+      await updatedCarton.save();
+
+      const currentDeviceStage = await findDeviceStageForCarton(updatedCarton);
+      await createCartonHistoryEvent({
+        carton: updatedCarton,
+        eventType: updatedCarton.isReturnedFromPdi ? "STICKER_REVERIFIED" : "STICKER_VERIFIED",
+        performedBy: req.user?.id,
+        fromCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
+        toCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
+        fromDeviceStage: currentDeviceStage,
+        toDeviceStage: currentDeviceStage,
+      });
 
       return res.status(200).json({ status: 200, message: "Sticker verified successfully.", carton: updatedCarton });
     } catch (error) {
@@ -203,12 +362,26 @@ module.exports = {
             maxCapacity: { $first: "$maxCapacity" },
             status: { $first: "$status" },
             isStickerVerified: { $first: "$isStickerVerified" },
+            isStickerPrinted: { $first: "$isStickerPrinted" },
+            isWeightVerified: { $first: "$isWeightVerified" },
             isLooseCarton: { $first: "$isLooseCarton" },
+            looseCartonAction: { $first: "$looseCartonAction" },
+            sourceCartonSerial: { $first: "$sourceCartonSerial" },
+            reassignedQuantity: { $first: "$reassignedQuantity" },
             weightCarton: { $first: "$weightCarton" },
             createdAt: { $first: "$createdAt" },
             updatedAt: { $first: "$updatedAt" },
             __v: { $first: "$__v" },
             cartonStatus: { $first: "$cartonStatus" },
+            previousCartonStatus: { $first: "$previousCartonStatus" },
+            previousDeviceStage: { $first: "$previousDeviceStage" },
+            isReturnedFromPdi: { $first: "$isReturnedFromPdi" },
+            returnedFromPdiAt: { $first: "$returnedFromPdiAt" },
+            lastSentToPdiAt: { $first: "$lastSentToPdiAt" },
+            cartonReworkCount: { $first: "$cartonReworkCount" },
+            lastPdiNgReasonCode: { $first: "$lastPdiNgReasonCode" },
+            lastPdiNgReasonText: { $first: "$lastPdiNgReasonText" },
+            lastPdiNgNotes: { $first: "$lastPdiNgNotes" },
             devices: { $push: "$devices" },
           },
         },
@@ -272,12 +445,27 @@ module.exports = {
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
             status: { $first: "$status" },
+            isStickerVerified: { $first: "$isStickerVerified" },
+            isStickerPrinted: { $first: "$isStickerPrinted" },
+            isWeightVerified: { $first: "$isWeightVerified" },
             weightCarton: { $first: "$weightCarton" },
             createdAt: { $first: "$createdAt" },
             updatedAt: { $first: "$updatedAt" },
             __v: { $first: "$__v" },
             cartonStatus: { $first: "$cartonStatus" },
+            previousCartonStatus: { $first: "$previousCartonStatus" },
+            previousDeviceStage: { $first: "$previousDeviceStage" },
+            isReturnedFromPdi: { $first: "$isReturnedFromPdi" },
+            returnedFromPdiAt: { $first: "$returnedFromPdiAt" },
+            lastSentToPdiAt: { $first: "$lastSentToPdiAt" },
+            cartonReworkCount: { $first: "$cartonReworkCount" },
+            lastPdiNgReasonCode: { $first: "$lastPdiNgReasonCode" },
+            lastPdiNgReasonText: { $first: "$lastPdiNgReasonText" },
+            lastPdiNgNotes: { $first: "$lastPdiNgNotes" },
             isLooseCarton: { $first: "$isLooseCarton" },
+            looseCartonAction: { $first: "$looseCartonAction" },
+            sourceCartonSerial: { $first: "$sourceCartonSerial" },
+            reassignedQuantity: { $first: "$reassignedQuantity" },
             devices: { $push: "$devices" },
           },
         },
@@ -338,12 +526,27 @@ module.exports = {
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
             status: { $first: "$status" },
+            isStickerVerified: { $first: "$isStickerVerified" },
+            isStickerPrinted: { $first: "$isStickerPrinted" },
+            isWeightVerified: { $first: "$isWeightVerified" },
             weightCarton: { $first: "$weightCarton" },
             createdAt: { $first: "$createdAt" },
             updatedAt: { $first: "$updatedAt" },
             __v: { $first: "$__v" },
             cartonStatus: { $first: "$cartonStatus" },
+            previousCartonStatus: { $first: "$previousCartonStatus" },
+            previousDeviceStage: { $first: "$previousDeviceStage" },
+            isReturnedFromPdi: { $first: "$isReturnedFromPdi" },
+            returnedFromPdiAt: { $first: "$returnedFromPdiAt" },
+            lastSentToPdiAt: { $first: "$lastSentToPdiAt" },
+            cartonReworkCount: { $first: "$cartonReworkCount" },
+            lastPdiNgReasonCode: { $first: "$lastPdiNgReasonCode" },
+            lastPdiNgReasonText: { $first: "$lastPdiNgReasonText" },
+            lastPdiNgNotes: { $first: "$lastPdiNgNotes" },
             isLooseCarton: { $first: "$isLooseCarton" },
+            looseCartonAction: { $first: "$looseCartonAction" },
+            sourceCartonSerial: { $first: "$sourceCartonSerial" },
+            reassignedQuantity: { $first: "$reassignedQuantity" },
             devices: { $push: "$devices" },
           },
         },
@@ -567,10 +770,8 @@ module.exports = {
           .json({ success: false, message: "No cartons provided" });
       }
 
-      // Convert to array if it's a single string (from FormData)
       const cartonArray = Array.isArray(cartons) ? cartons : [cartons];
 
-      // Verification check: ensure all cartons are verified
       const unverifiedCartons = await cartonModel.find({
         cartonSerial: { $in: cartonArray },
         isStickerVerified: { $ne: true },
@@ -586,30 +787,50 @@ module.exports = {
         });
       }
 
-      // Update all cartons whose serials match
-
-      const firstCarton = await cartonModel.findOne({ cartonSerial: { $in: cartonArray } });
-      if (firstCarton) {
-        await processLogModel.create({
-          action: "SHIFT_CARTON",
-          processId: firstCarton.processId,
-          userId: req.user.id,
-          description: `Shifted ${cartonArray.length} cartons to PDI: ${cartonArray.join(", ")}`
-        });
-      }
-      const result = await cartonModel.updateMany(
-        { cartonSerial: { $in: cartonArray } }, // filter
-        { $set: { cartonStatus: "PDI" } } // update
-      );
-
-      // Also update devices in those cartons
       const affectedCartons = await cartonModel.find({
         cartonSerial: { $in: cartonArray },
       });
-      const allDeviceIds = affectedCartons.reduce(
-        (acc, curr) => acc.concat(curr.devices),
-        []
-      );
+
+      if (!affectedCartons.length) {
+        return res.status(404).json({
+          success: false,
+          message: "No cartons found for the provided serials.",
+        });
+      }
+
+      await processLogModel.create({
+        action: "SHIFT_CARTON",
+        processId: affectedCartons[0].processId,
+        userId: req.user.id,
+        description: `Shifted ${cartonArray.length} cartons to PDI: ${cartonArray.join(", ")}`,
+      });
+
+      const allDeviceIds = [];
+      for (const carton of affectedCartons) {
+        const fromCartonStatus = String(carton.cartonStatus || "").trim();
+        const fromDeviceStage = await findDeviceStageForCarton(carton);
+        const wasReturnedFromPdi = Boolean(carton.isReturnedFromPdi);
+        carton.previousCartonStatus = fromCartonStatus;
+        carton.previousDeviceStage = fromDeviceStage;
+        carton.lastSentToPdiAt = new Date();
+        carton.isReturnedFromPdi = false;
+        carton.cartonStatus = "PDI";
+        await carton.save();
+        allDeviceIds.push(...(Array.isArray(carton.devices) ? carton.devices : []));
+
+        await createCartonHistoryEvent({
+          carton,
+          eventType: wasReturnedFromPdi ? "RETURN_TO_PDI" : "SHIFT_TO_PDI",
+          performedBy: req.user?.id,
+          fromCartonStatus,
+          toCartonStatus: "PDI",
+          fromDeviceStage,
+          toDeviceStage: "PDI",
+          reasonCode: wasReturnedFromPdi ? carton.lastPdiNgReasonCode || "" : "",
+          reasonText: wasReturnedFromPdi ? carton.lastPdiNgReasonText || "" : "",
+          notes: wasReturnedFromPdi ? carton.lastPdiNgNotes || "" : "",
+        });
+      }
 
       await deviceModel.updateMany(
         { _id: { $in: allDeviceIds } },
@@ -618,7 +839,7 @@ module.exports = {
 
       return res.status(200).json({
         success: true,
-        shifted: result.modifiedCount,
+        shifted: affectedCartons.length,
         message: "Cartons and devices shifted to PDI successfully",
       });
     } catch (error) {
@@ -626,6 +847,149 @@ module.exports = {
       return res
         .status(500)
         .json({ success: false, error: "Failed to shift cartons" });
+    }
+  },
+  markPdiCartonNg: async (req, res) => {
+    try {
+      const { cartonSerial, reasonCode, notes = "" } = req.body;
+
+      if (!cartonSerial || !reasonCode) {
+        return res.status(400).json({
+          success: false,
+          message: "Carton serial and reason are required.",
+        });
+      }
+
+      const reasonText = PDI_CARTON_NG_REASONS[reasonCode];
+      if (!reasonText) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid carton NG reason.",
+        });
+      }
+
+      const carton = await cartonModel.findOne({ cartonSerial });
+      if (!carton) {
+        return res.status(404).json({
+          success: false,
+          message: "Carton not found.",
+        });
+      }
+
+      if (String(carton.cartonStatus || "").trim() !== "PDI") {
+        return res.status(400).json({
+          success: false,
+          message: "Only cartons in PDI can be marked NG.",
+        });
+      }
+
+      const { returnCartonStatus, returnDeviceStage } = await resolveReturnContextForCarton(carton);
+      if (!returnDeviceStage) {
+        return res.status(400).json({
+          success: false,
+          message: "Previous packaging stage not found for this carton.",
+        });
+      }
+
+      const fromDeviceStage = (await findDeviceStageForCarton(carton)) || "PDI";
+      const fromCartonStatus = String(carton.cartonStatus || "").trim();
+
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "PDI_CARTON_NG",
+        performedBy: req.user?.id,
+        fromCartonStatus,
+        toCartonStatus: returnCartonStatus,
+        fromDeviceStage,
+        toDeviceStage: returnDeviceStage,
+        reasonCode,
+        reasonText,
+        notes,
+      });
+
+      carton.cartonStatus = returnCartonStatus;
+      carton.isWeightVerified = false;
+      carton.isStickerPrinted = false;
+      carton.isStickerVerified = false;
+      carton.isReturnedFromPdi = true;
+      carton.returnedFromPdiAt = new Date();
+      carton.cartonReworkCount = Number(carton.cartonReworkCount || 0) + 1;
+      carton.lastPdiNgReasonCode = reasonCode;
+      carton.lastPdiNgReasonText = reasonText;
+      carton.lastPdiNgNotes = String(notes || "").trim();
+      await carton.save();
+
+      await deviceModel.updateMany(
+        { _id: { $in: carton.devices } },
+        { $set: { currentStage: returnDeviceStage } }
+      );
+
+      await processLogModel.create({
+        action: "PDI_CARTON_NG",
+        processId: carton.processId,
+        userId: req.user?.id,
+        description: `Marked carton ${cartonSerial} as NG in PDI for ${reasonText}. Returned to ${returnDeviceStage}.`,
+      });
+
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "RETURN_TO_PACKAGING",
+        performedBy: req.user?.id,
+        fromCartonStatus,
+        toCartonStatus: returnCartonStatus,
+        fromDeviceStage,
+        toDeviceStage: returnDeviceStage,
+        reasonCode,
+        reasonText,
+        notes,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Carton ${cartonSerial} returned to packaging successfully.`,
+        carton,
+      });
+    } catch (error) {
+      console.error("Error marking PDI carton NG:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to mark carton NG.",
+        error: error.message,
+      });
+    }
+  },
+  getCartonHistory: async (req, res) => {
+    try {
+      const { cartonSerial } = req.params;
+      if (!cartonSerial) {
+        return res.status(400).json({
+          success: false,
+          message: "Carton serial is required.",
+        });
+      }
+
+      const history = await findLatestCartonHistory(cartonSerial);
+      const pdiNgEvents = history.filter((event) => event.eventType === "PDI_CARTON_NG");
+      const latestNgEvent = pdiNgEvents[0] || null;
+
+      return res.status(200).json({
+        success: true,
+        cartonSerial,
+        history,
+        summary: {
+          totalNgCount: pdiNgEvents.length,
+          lastNgReasonCode: latestNgEvent?.reasonCode || "",
+          lastNgReasonText: latestNgEvent?.reasonText || "",
+          lastNgAt: latestNgEvent?.timestamp || null,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching carton history:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch carton history.",
+        error: error.message,
+      });
     }
   },
   fetchCurrentRunningProcessFG: async (req, res) => {
@@ -810,15 +1174,24 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Carton serial is required." });
       }
 
-      const updatedCarton = await cartonModel.findOneAndUpdate(
-        { cartonSerial },
-        { isStickerPrinted: true },
-        { new: true }
-      );
-
+      const updatedCarton = await cartonModel.findOne({ cartonSerial });
       if (!updatedCarton) {
         return res.status(404).json({ status: 404, message: "Carton not found." });
       }
+
+      updatedCarton.isStickerPrinted = true;
+      await updatedCarton.save();
+
+      const currentDeviceStage = await findDeviceStageForCarton(updatedCarton);
+      await createCartonHistoryEvent({
+        carton: updatedCarton,
+        eventType: updatedCarton.isReturnedFromPdi ? "STICKER_REPRINTED" : "STICKER_PRINTED",
+        performedBy: req.user?.id,
+        fromCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
+        toCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
+        fromDeviceStage: currentDeviceStage,
+        toDeviceStage: currentDeviceStage,
+      });
 
       return res.status(200).json({
         status: 200,
@@ -846,66 +1219,60 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Carton not found." });
       }
 
-      const cartonStatus = String(carton.status || "").trim().toLowerCase();
-      if (cartonStatus !== "full") {
-        return res.status(400).json({
-          status: 400,
-          message: "Carton weight can only be verified for full cartons.",
-        });
-      }
-
-      const recordedWeight = Number(weight);
-      if (!Number.isFinite(recordedWeight) || recordedWeight <= 0) {
+      const recordedWeight = normalizeWeightValue(weight);
+      if (!recordedWeight) {
         return res.status(400).json({
           status: 400,
           message: "Carton weight must be a valid positive number.",
         });
       }
 
-      const processDoc = await ProcessModel.findById(carton.processId).lean();
-      const productId = processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
-      let productDoc = null;
-      if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
-        productDoc = await productModel.findById(productId).lean();
-      }
-
-      const expectedWeight = Number(
-        carton?.packagingData?.cartonWeight ??
-        processDoc?.packagingData?.cartonWeight ??
-        productDoc?.packagingData?.cartonWeight ??
-        0,
-      );
-
-      if (!Number.isFinite(expectedWeight) || expectedWeight <= 0) {
+      const { expectedWeight, configuredCapacity } = await getConfiguredCartonWeight(carton);
+      if (!expectedWeight) {
         return res.status(400).json({
           status: 400,
           message: "No carton weight specification found for this carton.",
         });
       }
 
-      const toleranceKg = 0.5;
-      const variance = Math.abs(recordedWeight - expectedWeight);
-      if (variance > toleranceKg) {
+      const requiresExactConfiguredWeight = !isPartialOrDerivedCarton(carton, configuredCapacity);
+
+      if (requiresExactConfiguredWeight) {
+        if (recordedWeight.scaled !== expectedWeight.scaled) {
+          return res.status(400).json({
+            status: 400,
+            message: "Weight mismatch! Please enter the correct carton weight.",
+          });
+        }
+      } else if (recordedWeight.scaled > expectedWeight.scaled) {
         return res.status(400).json({
           status: 400,
-          message: `Weight mismatch! Expected ${expectedWeight} KG, got ${recordedWeight} KG.`,
+          message: "Partial carton weight cannot exceed the configured carton weight.",
         });
       }
 
-      const updatedCarton = await cartonModel.findOneAndUpdate(
-        { cartonSerial },
-        { weightCarton: recordedWeight },
-        { new: true }
-      );
+      carton.weightCarton = recordedWeight.numeric;
+      carton.isWeightVerified = true;
+      await carton.save();
 
-      if (!updatedCarton) {
-        return res.status(404).json({ status: 404, message: "Carton not found." });
-      }
+      const currentDeviceStage = await findDeviceStageForCarton(carton);
+      await createCartonHistoryEvent({
+        carton,
+        eventType: carton.isReturnedFromPdi ? "PACKAGING_WEIGHT_REVERIFIED" : "WEIGHT_VERIFIED",
+        performedBy: req.user?.id,
+        fromCartonStatus: String(carton.cartonStatus || "").trim(),
+        toCartonStatus: String(carton.cartonStatus || "").trim(),
+        fromDeviceStage: currentDeviceStage,
+        toDeviceStage: currentDeviceStage,
+        extra: {
+          validationMode: requiresExactConfiguredWeight ? "exact" : "upper_limit",
+        },
+      });
 
       return res.status(200).json({
         status: 200,
         message: "Carton weight updated successfully.",
-        carton: updatedCarton,
+        carton,
       });
     } catch (error) {
       return res.status(500).json({
