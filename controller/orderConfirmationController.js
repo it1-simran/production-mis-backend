@@ -7,6 +7,7 @@ module.exports = {
 
       // ✅ Update logic
       if (data?.id) {
+        data.updatedAt = Date.now();
         const updatedOrder =
           await OrderConfirmationNumberModel.findByIdAndUpdate(data.id, data, {
             new: true,

@@ -254,6 +254,8 @@ router.get("/cartonsProcessId/:processId", authController.authenticateToken, car
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
 router.put('/carton/close-loose', authController.authenticateToken, cartonController.closeLooseCarton);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
+router.post('/cartons/pdi-ng', authController.authenticateToken, cartonController.markPdiCartonNg);
+router.get('/cartons/:cartonSerial/history', authController.authenticateToken, cartonController.getCartonHistory);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
@@ -309,6 +311,6 @@ router.get('/esim-apn/view/:id', authController.authenticateToken, esimApnContro
 router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
 router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
-
+router.get("/process/orderconfirmation/:orderConfirmationNo",authController.authenticateToken, processController.getOrderConfirmationByNo);
 module.exports = router;
 

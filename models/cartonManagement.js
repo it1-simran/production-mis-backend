@@ -26,6 +26,7 @@ const cartonManagementSchema = new mongoose.Schema(
     status: { type: String, required: false, default: "" },
     isStickerVerified: { type: Boolean, required: false, default: false },
     isStickerPrinted: { type: Boolean, required: false, default: false },
+    isWeightVerified: { type: Boolean, required: false, default: false },
     cartonStatus: { type: String, required: false, default: "" },
     weightCarton: { type: String, required: false, default: "" },
     isLooseCarton: { type: Boolean, required: false, default: false },
@@ -34,6 +35,15 @@ const cartonManagementSchema = new mongoose.Schema(
     reassignedCartonSerial: { type: String, required: false, default: "" },
     reassignedQuantity: { type: Number, required: false, default: 0 },
     looseCartonClosedAt: { type: Date, required: false, default: null },
+    previousCartonStatus: { type: String, required: false, default: "" },
+    previousDeviceStage: { type: String, required: false, default: "" },
+    isReturnedFromPdi: { type: Boolean, required: false, default: false },
+    returnedFromPdiAt: { type: Date, required: false, default: null },
+    lastSentToPdiAt: { type: Date, required: false, default: null },
+    cartonReworkCount: { type: Number, required: false, default: 0 },
+    lastPdiNgReasonCode: { type: String, required: false, default: "" },
+    lastPdiNgReasonText: { type: String, required: false, default: "" },
+    lastPdiNgNotes: { type: String, required: false, default: "" },
   },
   { timestamps: true }
 );

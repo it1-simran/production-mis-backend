@@ -812,6 +812,7 @@ module.exports = {
                   selectedProduct: 1,
                   stages: 1,
                   commonStages: 1,
+                  orderConfirmationNo: 1,
                 },
               },
             ],
@@ -821,6 +822,32 @@ module.exports = {
         {
           $unwind: {
             path: "$processDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $lookup: {
+            from: "orderconfirmationnumbers",
+            let: { ocNo: "$processDetails.orderConfirmationNo" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ["$orderConfirmationNo", "$$ocNo"] },
+                },
+              },
+              {
+                $project: {
+                  customerName: 1,
+                  modelName: 1,
+                },
+              },
+            ],
+            as: "ocDetails",
+          },
+        },
+        {
+          $unwind: {
+            path: "$ocDetails",
             preserveNullAndEmptyArrays: true,
           },
         },
@@ -873,6 +900,9 @@ module.exports = {
             startTime: "$shiftDetails.startTime",
             processStatus: "$processDetails.status",
             processQuantity: "$processDetails.quantity",
+            orderConfirmationNo: "$processDetails.orderConfirmationNo",
+            customerName: "$ocDetails.customerName",
+            modelName: "$ocDetails.modelName",
             endTime: "$shiftDetails.endTime",
             totalBreakTime: "$shiftDetails.totalBreakTime",
             //stageType: "$assignOperatorToPlans.stageType"
