@@ -475,10 +475,11 @@ module.exports = {
       });
 
       if (filteredPlans.length === 0) {
-        return res.status(404).json({
-          status: 404,
-          error:
-            "No available seats for the given room, shift, and date range.",
+        return res.status(200).json({
+          status: 200,
+          message:
+            "Available seats fetched successfully!",
+          plans: filteredPlans,
         });
       }
       return res.status(200).json({

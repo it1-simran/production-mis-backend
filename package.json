@@ -8,6 +8,8 @@
     "migrate:ng-devices-report-menu": "node scripts/migrate-menu-ng-devices-report.js",
     "reset:devices:stage1": "node scripts/reset-stage1-devices.js",
     "reset:devices:stage1:dry": "node scripts/reset-stage1-devices.js --dry-run",
+    "reset:devices:process:stage1": "node scripts/reset-process-stage1-devices.js",
+    "reset:devices:process:stage1:dry": "node scripts/reset-process-stage1-devices.js --dry-run",
     "move:devices:packaging": "node scripts/move-devices-to-packaging.js",
     "move:devices:packaging:dry": "node scripts/move-devices-to-packaging.js --dry-run",
     "reset:cartons:printing": "node scripts/reset-cartons-to-printing-stage.js",
