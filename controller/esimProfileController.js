@@ -25,7 +25,10 @@ module.exports = {
     },
     view: async (req, res) => {
         try {
-            const profiles = await EsimProfile.find();
+            const profiles = await EsimProfile.find()
+                .select("_id profileId name activeStatus remarks createdAt updatedAt")
+                .sort({ updatedAt: -1, createdAt: -1 })
+                .lean();
             return res.status(200).json({
                 status: 200,
                 message: "ESIM Profile records fetched successfully",
@@ -43,7 +46,7 @@ module.exports = {
     esimProfileById: async (req, res) => {
         try {
             const { id } = req.params;
-            const profile = await EsimProfile.find({ profileId: id });
+            const profile = await EsimProfile.find({ profileId: id }).lean();
             if (!profile) {
                 return res.status(404).json({ status: 404, message: "Record not found" });
             }

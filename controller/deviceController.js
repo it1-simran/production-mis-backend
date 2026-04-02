@@ -385,7 +385,7 @@ module.exports = {
       }
       let planing;
       try {
-        planing = await planingAndScheduling.findById(data.planId);
+        planing = await planingAndScheduling.findById(data.planId).select("selectedProcess assignedStages assignedOperators assignedCustomStagesOp consumedKit").lean();
         if (!planing) {
           return res.status(404).json({
             status: 404,
@@ -400,8 +400,8 @@ module.exports = {
       }
       let products;
       try {
-        products = await processModel.find({ _id: planing.selectedProcess });
-        if (!products) {
+        products = await processModel.findById(planing.selectedProcess).select("stages commonStages").lean();
+        if (!products?._id) {
           return res.status(404).json({
             status: 404,
             message: "Process not found",
@@ -497,10 +497,10 @@ module.exports = {
       if (matchingIndices.length > 0) {
         let currentIndex = matchingIndices[0];
         let currentStage = assignedStages[currentIndex][0]?.name;
-        let productStages = (products.stages || []).map(
+        let productStages = (products?.stages || []).map(
           (stage) => stage.stageName
         );
-        let commonStages = (products.commonStages || []).map(
+        let commonStages = (products?.commonStages || []).map(
           (stage) => stage.stageName
         );
         const mergedStages = [...productStages, ...commonStages];
