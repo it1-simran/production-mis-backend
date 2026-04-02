@@ -112,6 +112,9 @@ router.get('/process/logs/getLogsByProcessID/:id', authController.authenticateTo
 router.post('/assignPlanToOperator/create', authController.authenticateToken, assignedOperatorsToPlan.create);
 router.get(`/assignPlanToOperator/view/:id`, authController.authenticateToken, assignedOperatorsToPlan.getTaskByUserID);
 router.get(`/assignPlanToOperator/get/:id`, authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskByUserID);
+router.get('/operator-task/bootstrap/:planId/:operatorId', authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskBootstrap);
+router.get('/operator-task/refresh/:planId/:operatorId', authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskRefresh);
+router.get('/operator-task/device/:planId/:operatorId', authController.authenticateToken, assignedOperatorsToPlan.getOperatorTaskDevice);
 
 // Operator work tracking (session + breaks + event logs)
 router.post(
@@ -313,4 +316,6 @@ router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnC
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
 router.get("/process/orderconfirmation/:orderConfirmationNo",authController.authenticateToken, processController.getOrderConfirmationByNo);
 module.exports = router;
+
+
 

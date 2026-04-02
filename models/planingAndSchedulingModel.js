@@ -93,9 +93,15 @@ const planingAndSchedulingSchema = new mongoose.Schema({
   },
 });
 
+planingAndSchedulingSchema.index({ selectedProcess: 1 });
+planingAndSchedulingSchema.index({ selectedShift: 1 });
+planingAndSchedulingSchema.index({ status: 1, startDate: -1 });
+
 const PlaningAndSchedulingModel = mongoose.model(
   "PlaningAndScheduling",
   planingAndSchedulingSchema
 );
 
 module.exports = PlaningAndSchedulingModel;
+
+

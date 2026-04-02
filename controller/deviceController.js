@@ -29,45 +29,93 @@ function sanitizeKeys(value) {
 module.exports = {
   create: async (req, res) => {
     try {
-      const data = req.body;
+      const data = req.body || {};
       const productType = data.selectedProduct;
       const currentStage = req.body.currentStage;
       const processID = req.body.processId;
       const prefix = req.body.prefix;
-      const noOfSerialRequired = req.body.noOfSerialRequired;
+      const noOfSerialRequired = Number.parseInt(req.body.noOfSerialRequired, 10) || 0;
       const suffix = req.body.suffix;
       const enableZero = req.body.enableZero;
       const lastSerialNo = req.body.lastSerialNo;
       const noOfZeroRequired = req.body.noOfZeroRequired;
       const startFrom = req.body.startFrom;
+
+      if (!productType || !processID) {
+        return res.status(400).json({ status: 400, message: "selectedProduct and processId are required" });
+      }
+      if (noOfSerialRequired <= 0) {
+        return res.status(400).json({ status: 400, message: "noOfSerialRequired must be greater than 0" });
+      }
+
+      const parsedStartFrom = Number.parseInt(startFrom, 10);
       const serials = generateSerials(
         lastSerialNo,
         prefix,
-        parseInt(noOfSerialRequired),
+        noOfSerialRequired,
         suffix,
         enableZero,
         noOfZeroRequired,
         1,
         1,
-        parseInt(startFrom)
+        Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
       );
-      const savedDevices = [];
 
-      for (const value of serials) {
-        const device = new deviceModel({
-          productType,
-          processID,
-          serialNo: value,
-          currentStage,
-        });
-        const savedDevice = await device.save();
-        savedDevices.push(savedDevice);
+      const documents = serials.map((value) => ({
+        productType,
+        processID,
+        serialNo: value,
+        currentStage,
+      }));
+
+      const chunkSize = 250;
+      let insertedCount = 0;
+      let duplicateErrors = 0;
+
+      for (let index = 0; index < documents.length; index += chunkSize) {
+        const chunk = documents.slice(index, index + chunkSize);
+
+        try {
+          const result = await deviceModel.insertMany(chunk, {
+            ordered: false,
+            rawResult: true,
+          });
+
+          insertedCount += Number(result?.insertedCount || chunk.length);
+        } catch (error) {
+          if (error?.name !== "MongoBulkWriteError") {
+            throw error;
+          }
+
+          const writeErrors = Array.isArray(error?.writeErrors) ? error.writeErrors : [];
+          const chunkDuplicateErrors = writeErrors.filter((item) => item?.code === 11000).length;
+          const chunkInsertedCount = Number(
+            error?.result?.result?.nInserted ??
+            error?.result?.insertedCount ??
+            Math.max(chunk.length - writeErrors.length, 0)
+          );
+
+          insertedCount += chunkInsertedCount;
+          duplicateErrors += chunkDuplicateErrors;
+
+          const nonDuplicateWriteError = writeErrors.find((item) => item?.code !== 11000);
+          if (nonDuplicateWriteError) {
+            throw error;
+          }
+        }
       }
+
+      const requestedCount = documents.length;
+      const message = duplicateErrors > 0
+        ? `${insertedCount} devices created, ${duplicateErrors} duplicate serials skipped.`
+        : "Devices added successfully";
 
       return res.status(200).json({
         status: 200,
-        message: "Devices added successfully",
-        data: savedDevices,
+        message,
+        requestedCount,
+        insertedCount,
+        duplicateErrors,
       });
     } catch (error) {
       console.error("error ==>", error);
@@ -1591,3 +1639,4 @@ function generateSerials(
   }
   return serials;
 }
+

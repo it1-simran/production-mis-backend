@@ -43,6 +43,9 @@ deviceSchemas.pre('findByIdAndUpdate', function (next) {
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
 deviceSchemas.index({ serialNo: 1, processID: 1 });
+deviceSchemas.index({ productType: 1, processID: 1, currentStage: 1, status: 1 });
 
 const device = mongoose.model("devices", deviceSchemas);
 module.exports = device;
+
+

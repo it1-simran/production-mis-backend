@@ -50,6 +50,7 @@ deviceTestSchema.index({ deviceId: 1, flowVersion: 1, createdAt: -1 });
 deviceTestSchema.index({ planId: 1, operatorId: 1 });
 deviceTestSchema.index({ planId: 1, createdAt: -1 });
 deviceTestSchema.index({ planId: 1, processId: 1, createdAt: -1 });
+deviceTestSchema.index({ planId: 1, processId: 1, stageName: 1, createdAt: -1 });
 deviceTestSchema.index({ processId: 1, createdAt: -1 });
 deviceTestSchema.index({ serialNo: 1 });
 deviceTestSchema.index({ createdAt: -1 });
@@ -57,3 +58,5 @@ deviceTestSchema.index({ createdAt: -1 });
 const deviceTest = mongoose.model("deviceTestRecords", deviceTestSchema);
 
 module.exports = deviceTest;
+
+
