@@ -35,9 +35,15 @@ const assignOperatorToPlanSchema = new mongoose.Schema({
   updatedAt: {type: Date, default: Date.now},
 });
 
+assignOperatorToPlanSchema.index({ userId: 1, processId: 1 });
+assignOperatorToPlanSchema.index({ userId: 1, status: 1 });
+assignOperatorToPlanSchema.index({ processId: 1, status: 1 });
+
 const assignOperatorToPlan = mongoose.model(
   "assignpOperatorsPlan",
   assignOperatorToPlanSchema
 );
 
 module.exports = assignOperatorToPlan;
+
+
