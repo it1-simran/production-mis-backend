@@ -22,7 +22,10 @@ module.exports = {
     },
     view: async (req, res) => {
         try {
-            const makes = await EsimMake.find();
+            const makes = await EsimMake.find()
+                .select("_id simId name activeStatus remarks createdAt updatedAt")
+                .sort({ name: 1 })
+                .lean();
             return res.status(200).json({
                 status: 200,
                 message: "ESIM Make records fetched successfully",
