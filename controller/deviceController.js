@@ -1,4 +1,4 @@
-﻿const deviceModel = require("../models/device");
+const deviceModel = require("../models/device");
 const deviceTestModel = require("../models/deviceTestModel");
 const processModel = require("../models/process");
 const deviceTestRecords = require("../models/deviceTestModel");
@@ -118,6 +118,318 @@ function resolveAssignedSeatContext({
   return fallbackSeatKey ? tryResolveSeat(fallbackSeatKey) : null;
 }
 
+const normalizeKey = (value) => normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+
+const toSeatParts = (seatKey = "") => {
+  const [lineIndex, seatIndex] = String(seatKey || "")
+    .split("-")
+    .map((part) => Number(part));
+
+  return {
+    lineIndex: Number.isFinite(lineIndex) ? lineIndex : -1,
+    seatIndex: Number.isFinite(seatIndex) ? seatIndex : -1,
+  };
+};
+
+const sortSeatKeys = (seatKeys = []) =>
+  [...seatKeys].sort((left, right) => {
+    const leftSeat = toSeatParts(left);
+    const rightSeat = toSeatParts(right);
+
+    if (leftSeat.lineIndex !== rightSeat.lineIndex) {
+      return leftSeat.lineIndex - rightSeat.lineIndex;
+    }
+
+    return leftSeat.seatIndex - rightSeat.seatIndex;
+  });
+
+const normalizeAssignedStagesPayload = (assignedStages = {}, processStages = []) => {
+  const stageOrderMap = new Map();
+  (Array.isArray(processStages) ? processStages : []).forEach((stage, index) => {
+    const stageName = normalizeKey(stage?.stageName || stage?.name);
+    if (stageName && !stageOrderMap.has(stageName)) {
+      stageOrderMap.set(stageName, index);
+    }
+  });
+
+  return sortSeatKeys(Object.keys(assignedStages || {})).reduce((acc, seatKey) => {
+    const seatItems = Array.isArray(assignedStages?.[seatKey])
+      ? assignedStages[seatKey]
+      : assignedStages?.[seatKey]
+        ? [assignedStages[seatKey]]
+        : [];
+
+    if (seatItems.length === 0) {
+      return acc;
+    }
+
+    const { lineIndex } = toSeatParts(seatKey);
+    acc[seatKey] = seatItems.map((item, itemIndex) => {
+      if (item?.reserved) {
+        return {
+          ...item,
+          seatKey,
+          lineIndex,
+        };
+      }
+
+      const stageName = normalizeText(item?.stageName || item?.name || item?.stage);
+      const normalizedStageName = normalizeKey(stageName);
+      const sequenceIndex = stageOrderMap.has(normalizedStageName)
+        ? Number(stageOrderMap.get(normalizedStageName))
+        : itemIndex;
+      const parallelGroupKey =
+        item?.parallelGroupKey ||
+        `line-${lineIndex}-seq-${sequenceIndex}-stage-${normalizedStageName.replace(/[^a-z0-9]+/g, "-")}`;
+      const stageInstanceId =
+        item?.stageInstanceId ||
+        `${parallelGroupKey}-seat-${seatKey.replace(/[^0-9-]+/g, "")}`;
+
+      return {
+        ...item,
+        name: stageName || item?.name || item?.stage || "",
+        stageName: stageName || item?.stageName || item?.name || "",
+        seatKey,
+        lineIndex,
+        sequenceIndex,
+        parallelGroupKey,
+        stageInstanceId,
+      };
+    });
+
+    return acc;
+  }, {});
+};
+
+const getSeatStageEntry = (assignedStages = {}, seatKey = "") => {
+  const seatStages = Array.isArray(assignedStages?.[seatKey])
+    ? assignedStages[seatKey]
+    : assignedStages?.[seatKey]
+      ? [assignedStages[seatKey]]
+      : [];
+
+  return seatStages.find((stage) => !stage?.reserved) || seatStages[0] || null;
+};
+
+const getParallelSeatEntries = ({ assignedStages = {}, stageName = "", lineIndex = -1, parallelGroupKey = "" }) => {
+  const targetStageName = normalizeKey(stageName);
+  const targetGroupKey = normalizeText(parallelGroupKey);
+
+  const normalizedEntries = sortSeatKeys(Object.keys(assignedStages || {}))
+    .map((seatKey) => ({ seatKey, stage: getSeatStageEntry(assignedStages, seatKey) }))
+    .filter(({ stage }) => !!stage && !stage?.reserved);
+
+  const sameLane = normalizedEntries.filter(({ stage }) => {
+    if (targetGroupKey) {
+      return normalizeText(stage?.parallelGroupKey) === targetGroupKey;
+    }
+
+    return (
+      stage?.lineIndex === lineIndex &&
+      normalizeKey(stage?.stageName || stage?.name || stage?.stage) === targetStageName
+    );
+  });
+
+  if (sameLane.length > 0) {
+    return sameLane;
+  }
+
+  return normalizedEntries.filter(({ stage }) => (
+    normalizeKey(stage?.stageName || stage?.name || stage?.stage) === targetStageName
+  ));
+};
+
+const getNextLogicalStageName = (processStages = [], currentStageName = "", commonStages = []) => {
+  const normalizedCurrent = normalizeKey(currentStageName);
+  const stages = Array.isArray(processStages) ? processStages : [];
+  const currentIndex = stages.findIndex(
+    (stage) => normalizeKey(stage?.stageName || stage?.name) === normalizedCurrent,
+  );
+
+  if (currentIndex >= 0 && currentIndex < stages.length - 1) {
+    return normalizeText(stages[currentIndex + 1]?.stageName || stages[currentIndex + 1]?.name);
+  }
+
+  const commonStage = (Array.isArray(commonStages) ? commonStages : [])[0];
+  return normalizeText(commonStage?.stageName || commonStage?.name || commonStage?.stage);
+};
+
+const chooseNextStageSeatAssignment = ({
+  assignedStages = {},
+  currentSeatKey = "",
+  currentStageName = "",
+  processStages = [],
+  commonStages = [],
+}) => {
+  const nextLogicalStage = getNextLogicalStageName(processStages, currentStageName, commonStages);
+  if (!nextLogicalStage) {
+    return {
+      nextLogicalStage: "",
+      assignedSeatKey: "",
+      assignedStageInstanceId: "",
+      assignedParallelGroupKey: "",
+    };
+  }
+
+  const currentSeatStage = getSeatStageEntry(assignedStages, currentSeatKey);
+  const currentLineIndex = currentSeatStage?.lineIndex ?? toSeatParts(currentSeatKey).lineIndex;
+  const sameLaneCandidates = getParallelSeatEntries({
+    assignedStages,
+    stageName: nextLogicalStage,
+    lineIndex: currentLineIndex,
+  });
+  const candidates = sameLaneCandidates.length > 0
+    ? sameLaneCandidates
+    : getParallelSeatEntries({ assignedStages, stageName: nextLogicalStage });
+
+  if (candidates.length === 0) {
+    return {
+      nextLogicalStage,
+      assignedSeatKey: "",
+      assignedStageInstanceId: "",
+      assignedParallelGroupKey: "",
+    };
+  }
+
+  const selectedCandidate = [...candidates].sort((left, right) => {
+    const leftLoad = Number(left?.stage?.totalUPHA || 0);
+    const rightLoad = Number(right?.stage?.totalUPHA || 0);
+    if (leftLoad !== rightLoad) {
+      return leftLoad - rightLoad;
+    }
+
+    return sortSeatKeys([left.seatKey, right.seatKey])[0] === left.seatKey ? -1 : 1;
+  })[0];
+
+  return {
+    nextLogicalStage,
+    assignedSeatKey: selectedCandidate?.seatKey || "",
+    assignedStageInstanceId: selectedCandidate?.stage?.stageInstanceId || "",
+    assignedParallelGroupKey: selectedCandidate?.stage?.parallelGroupKey || "",
+  };
+};
+
+const isPassingStatus = (status) => {
+  const normalizedStatus = normalizeKey(status);
+  return normalizedStatus === "pass" || normalizedStatus === "completed";
+};
+
+const resolvePreviousStageEligibility = async ({
+  processStages = [],
+  currentStageName = "",
+  serialNo = "",
+  deviceCurrentStage = "",
+  planId = "",
+  processId = "",
+}) => {
+  const normalizedCurrentStage = normalizeText(currentStageName);
+  const stages = Array.isArray(processStages) ? processStages : [];
+  const currentStageIndex = stages.findIndex(
+    (stage) => normalizeKey(stage?.stageName || stage?.name) === normalizeKey(normalizedCurrentStage),
+  );
+
+  if (!normalizedCurrentStage || currentStageIndex < 0) {
+    return { isEligible: true, message: "", previousStageRecord: null };
+  }
+
+  if (currentStageIndex === 0) {
+    return { isEligible: true, message: "", previousStageRecord: null };
+  }
+
+  if (
+    normalizeText(deviceCurrentStage) &&
+    normalizeKey(deviceCurrentStage) === normalizeKey(normalizedCurrentStage)
+  ) {
+    return { isEligible: true, message: "", previousStageRecord: null };
+  }
+
+  const previousStageName = normalizeText(
+    stages[currentStageIndex - 1]?.stageName || stages[currentStageIndex - 1]?.name || "",
+  );
+  const query = {
+    serialNo: normalizeText(serialNo),
+    $or: [
+      { stageName: previousStageName },
+      { currentLogicalStage: previousStageName },
+      { currentStage: previousStageName },
+    ],
+  };
+
+  if (planId && mongoose.Types.ObjectId.isValid(planId)) {
+    query.planId = new mongoose.Types.ObjectId(planId);
+  }
+  if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+    query.processId = new mongoose.Types.ObjectId(processId);
+  }
+
+  const previousStageRecord = await deviceTestRecords.findOne(query).sort({ createdAt: -1 }).lean();
+  if (!previousStageRecord) {
+    return {
+      isEligible: false,
+      message: `This device must first pass ${previousStageName} before testing can start at ${normalizedCurrentStage}.`,
+      previousStageRecord: null,
+    };
+  }
+
+  if (!isPassingStatus(previousStageRecord?.status)) {
+    const latestStatus = normalizeText(previousStageRecord?.status || "Unknown");
+    return {
+      isEligible: false,
+      message: `This device cannot start ${normalizedCurrentStage} because ${previousStageName} is not passed. Latest status: ${latestStatus}.`,
+      previousStageRecord,
+    };
+  }
+
+  return { isEligible: true, message: "", previousStageRecord };
+};
+
+const getRoutedStageName = (record = {}) => normalizeKey(
+  record?.nextLogicalStage ||
+  record?.currentLogicalStage ||
+  record?.currentStage ||
+  record?.stageName,
+);
+
+const getClaimedSeatKey = (record = {}, currentStageName = "") => {
+  const normalizedCurrentStage = normalizeKey(currentStageName);
+  const directStage = normalizeKey(record?.currentLogicalStage || record?.currentStage || record?.stageName);
+  if (directStage === normalizedCurrentStage && normalizeText(record?.currentSeatKey)) {
+    return normalizeText(record.currentSeatKey);
+  }
+
+  const routedStage = getRoutedStageName(record);
+  if (routedStage === normalizedCurrentStage && normalizeText(record?.assignedSeatKey)) {
+    return normalizeText(record.assignedSeatKey);
+  }
+
+  return "";
+};
+
+const buildActionResponseMeta = (status) => {
+  const normalizedStatus = normalizeKey(status);
+  if (normalizedStatus === "ng") {
+    return {
+      actionStatus: "NG",
+      resultType: "ng",
+      message: "Device marked as NG",
+    };
+  }
+
+  if (normalizedStatus === "pass" || normalizedStatus === "completed") {
+    return {
+      actionStatus: "Pass",
+      resultType: "pass",
+      message: "Device passed successfully",
+    };
+  }
+
+  const readableStatus = normalizeText(status || "Saved");
+  return {
+    actionStatus: readableStatus,
+    resultType: "saved",
+    message: readableStatus ? `Device ${readableStatus} saved successfully` : "Device saved successfully",
+  };
+};
 module.exports = {
   create: async (req, res) => {
     try {
@@ -482,15 +794,53 @@ module.exports = {
         data.logs = sanitizeKeys(data.logs);
       }
 
-      const assignedDeviceTo = normalizeText(req.body.assignedDeviceTo);
+      const serialNo = normalizeText(
+        data.serialNo || data.serialNoValue || data.deviceSerial || data.serial,
+      );
+      const requestedProcessId = normalizeText(data.processId || "");
+      const assignedDeviceTo = normalizeText(data.assignedDeviceTo);
+      const actionMeta = buildActionResponseMeta(data.status);
       const isQcOrTrc = assignedDeviceTo === "QC" || assignedDeviceTo === "TRC";
 
       const planStart = Date.now();
-      const planing = await planingAndScheduling
+      const planPromise = planingAndScheduling
         .findById(data.planId)
         .select("selectedProcess assignedStages assignedOperators assignedCustomStagesOp consumedKit")
-        .lean();
-      markTiming("planLoadMs", planStart);
+        .lean()
+        .then((result) => {
+          markTiming("planLoadMs", planStart);
+          return result;
+        });
+
+      const processStart = Date.now();
+      const processPromise = requestedProcessId && mongoose.Types.ObjectId.isValid(requestedProcessId)
+        ? processModel.findById(requestedProcessId).select("stages commonStages").lean().then((result) => {
+            markTiming("processLoadMs", processStart);
+            return result;
+          })
+        : Promise.resolve(null).then((result) => {
+            markTiming("processLoadMs", processStart);
+            return result;
+          });
+
+      const deviceLookupStart = Date.now();
+      const devicePromise = data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)
+        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean().then((result) => {
+            markTiming("deviceLookupMs", deviceLookupStart);
+            return result;
+          })
+        : serialNo
+          ? deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean().then((result) => {
+              markTiming("deviceLookupMs", deviceLookupStart);
+              return result;
+            })
+          : Promise.resolve(null).then((result) => {
+              markTiming("deviceLookupMs", deviceLookupStart);
+              return result;
+            });
+
+      let [planing, products, deviceSnapshot] = await Promise.all([planPromise, processPromise, devicePromise]);
+
       if (!planing) {
         return res.status(404).json({
           status: 404,
@@ -498,9 +848,12 @@ module.exports = {
         });
       }
 
-      const processStart = Date.now();
-      const products = await processModel.findById(planing.selectedProcess).select("stages commonStages").lean();
-      markTiming("processLoadMs", processStart);
+      const resolvedProcessId = normalizeText(planing.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
+      if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
+        const fallbackProcessStart = Date.now();
+        products = await processModel.findById(resolvedProcessId).select("stages commonStages").lean();
+        markTiming("fallbackProcessLoadMs", fallbackProcessStart);
+      }
       if (!products?._id) {
         return res.status(404).json({
           status: 404,
@@ -508,31 +861,34 @@ module.exports = {
         });
       }
 
+      if (!deviceSnapshot && serialNo) {
+        const fallbackDeviceStart = Date.now();
+        deviceSnapshot = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean();
+        markTiming("fallbackDeviceLookupMs", fallbackDeviceStart);
+      }
+      if (!deviceSnapshot?._id) {
+        return res.status(404).json({
+          status: 404,
+          message: "Device not found",
+        });
+      }
+
+      data.deviceId = data.deviceId || String(deviceSnapshot._id || "");
+      data.serialNo = serialNo || normalizeText(deviceSnapshot.serialNo);
+      data.processId = resolvedProcessId;
+
       const payloadFlowVersion = Number(data.flowVersion);
       const hasFlowVersion = Number.isFinite(payloadFlowVersion) && payloadFlowVersion > 0;
       const hasFlowStartedAt = Object.prototype.hasOwnProperty.call(data, "flowStartedAt");
-      let flowDevice = null;
-      if (!hasFlowVersion || !hasFlowStartedAt) {
-        const flowLookupStart = Date.now();
-        try {
-          if (data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)) {
-            flowDevice = await deviceModel.findById(data.deviceId).select("flowVersion flowStartedAt serialNo").lean();
-          } else if (data.serialNo) {
-            flowDevice = await deviceModel.findOne({ serialNo: data.serialNo }).select("flowVersion flowStartedAt serialNo").lean();
-          }
-        } catch (error) {
-          flowDevice = null;
-        }
-        markTiming("flowLookupMs", flowLookupStart);
-      }
-      data.flowVersion = hasFlowVersion ? payloadFlowVersion : Number(flowDevice?.flowVersion || 1);
-      data.flowStartedAt = hasFlowStartedAt ? (data.flowStartedAt || null) : (flowDevice?.flowStartedAt || null);
+      data.flowVersion = hasFlowVersion ? payloadFlowVersion : Number(deviceSnapshot?.flowVersion || 1);
+      data.flowStartedAt = hasFlowStartedAt ? (data.flowStartedAt || null) : (deviceSnapshot?.flowStartedAt || null);
       data.flowBoundary = false;
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
 
       const parseStart = Date.now();
-      const assignedStages = safeParseJson(planing.assignedStages, {}) || {};
+      const rawAssignedStages = safeParseJson(planing.assignedStages, {}) || {};
+      const normalizedAssignedStages = normalizeAssignedStagesPayload(rawAssignedStages, products?.stages || []);
       let assignedCustomStagesOp = [];
       if (planing.assignedCustomStagesOp) {
         const parsedCustomStages = safeParseJson(planing.assignedCustomStagesOp, []);
@@ -542,7 +898,7 @@ module.exports = {
 
       const seatResolveStart = Date.now();
       const resolvedSeatContext = resolveAssignedSeatContext({
-        assignedStages,
+        assignedStages: normalizedAssignedStages,
         rawAssignedOperators: planing.assignedOperators,
         operatorId: data.operatorId,
         currentSeatKey: data.currentSeatKey,
@@ -554,13 +910,13 @@ module.exports = {
 
       if (!resolvedSeatContext && isQcOrTrc) {
         try {
-          const notes = String(data.ngDescription || data?.logData?.description || "").trim();
+          const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
           const ngPayload = {
-            processId: planing.selectedProcess || data.processId || null,
+            processId: resolvedProcessId || null,
             userId: data.operatorId || data.userId || null,
             department: assignedDeviceTo,
-            serialNo: data.serialNo || data.serialNoValue || data.deviceSerial || "",
-            ngStage: data.stageName || data.ngStage || "",
+            serialNo: data.serialNo || "",
+            ngStage: normalizeText(data.stageName || data.ngStage || ""),
             ...(notes ? { notes } : {}),
           };
           if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
@@ -579,17 +935,23 @@ module.exports = {
         markTiming("recordSaveMs", recordSaveStart);
         timings.totalMs = Date.now() - requestStartedAt;
         logOperatorPassTimings(timings, {
-          status: data.status || "",
+          actionStatus: actionMeta.actionStatus,
           planId: data.planId || "",
-          processId: planing.selectedProcess || data.processId || "",
+          processId: resolvedProcessId || "",
           seatKey: data.currentSeatKey || "",
           stageName: data.stageName || data.currentLogicalStage || "",
           branch: "qc-trc-direct",
         });
         return res.status(200).json({
           status: 200,
-          message: `Device ${data.status || "test entry"} saved successfully`,
-          data: buildCompactDeviceTestRecord(savedDeviceTestRecord),
+          message: actionMeta.message,
+          actionStatus: actionMeta.actionStatus,
+          resultType: actionMeta.resultType,
+          data: {
+            ...buildCompactDeviceTestRecord(savedDeviceTestRecord),
+            actionStatus: actionMeta.actionStatus,
+            resultType: actionMeta.resultType,
+          },
         });
       }
 
@@ -601,134 +963,203 @@ module.exports = {
       }
 
       const currentIndex = resolvedSeatContext.seatKey;
-      const seatStages = resolvedSeatContext.seatStages;
-      const targetStageIdx = resolvedSeatContext.targetStageIdx;
-      const currentStage = resolvedSeatContext.currentStageName || getStageLabel(seatStages[0]);
-      const productStages = (products?.stages || []).map((stage) => stage.stageName);
-      const commonStages = (products?.commonStages || []).map((stage) => stage.stageName);
+      const currentSeatKey = normalizeText(data.currentSeatKey || currentIndex || "");
+      const currentStageName = normalizeText(
+        resolvedSeatContext.currentStageName || data.currentLogicalStage || data.stageName || getStageLabel(rawAssignedStages[currentIndex]),
+      );
+      const rawSeatStages = toStageArray(rawAssignedStages[currentIndex]);
+      const targetStageIdx = resolvedSeatContext.targetStageIdx >= 0 && resolvedSeatContext.targetStageIdx < rawSeatStages.length
+        ? resolvedSeatContext.targetStageIdx
+        : Math.max(rawSeatStages.findIndex((stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(currentStageName)), 0);
+      const currentSeatStage = getSeatStageEntry(normalizedAssignedStages, currentSeatKey);
+      const productStages = (products?.stages || []).map((stage) => normalizeText(stage?.stageName || stage?.name));
+      const commonStages = (products?.commonStages || []).map((stage) => normalizeText(stage?.stageName || stage?.name || stage?.stage));
       const mergedStages = [...productStages, ...commonStages];
-      const lastProductStage = productStages[productStages.length - 1];
-      const lastStage = mergedStages[mergedStages.length - 1];
-      const nextIndex = getNextIndex(assignedStages, currentIndex);
+      const lastProductStage = productStages[productStages.length - 1] || "";
+      const lastStage = mergedStages[mergedStages.length - 1] || "";
+      const nextIndex = getNextIndex(rawAssignedStages, currentIndex);
 
-      if (assignedStages[currentIndex]) {
-        if (data.status === "Pass") {
-          if (Number(seatStages[targetStageIdx]?.totalUPHA || 0) > 0) {
-            seatStages[targetStageIdx].totalUPHA -= 1;
-          }
-          seatStages[targetStageIdx].passedDevice = (seatStages[targetStageIdx].passedDevice || 0) + 1;
+      data.stageName = currentStageName;
+      data.currentLogicalStage = currentStageName;
+      data.currentSeatKey = currentSeatKey;
 
-          if (currentStage === lastProductStage) {
-            if (commonStages.length > 0) {
-              assignedCustomStagesOp.push({
-                name: commonStages[0],
-                totalUPHA: 1,
-                passedDevice: 0,
-                ngDevice: 0,
-              });
-            }
-          } else if (nextIndex && assignedStages[nextIndex] && assignedStages[nextIndex][0]) {
-            assignedStages[nextIndex][0].totalUPHA = Number(assignedStages[nextIndex][0].totalUPHA || 0) + 1;
-          }
-        } else {
-          if (Number(seatStages[targetStageIdx]?.totalUPHA || 0) > 0) {
-            seatStages[targetStageIdx].totalUPHA -= 1;
-          }
-          seatStages[targetStageIdx].ngDevice = (seatStages[targetStageIdx].ngDevice || 0) + 1;
+      const eligibilityStart = Date.now();
+      const eligibility = await resolvePreviousStageEligibility({
+        processStages: products?.stages || [],
+        currentStageName,
+        serialNo: data.serialNo,
+        deviceCurrentStage: deviceSnapshot?.currentStage || "",
+        planId: data.planId,
+        processId: resolvedProcessId,
+      });
+      markTiming("eligibilityMs", eligibilityStart);
+      if (!eligibility.isEligible) {
+        return res.status(409).json({
+          status: 409,
+          message: eligibility.message || "Previous stage must be passed before testing this device.",
+        });
+      }
 
-          data.assignedDeviceTo = assignedDeviceTo;
-          if (assignedDeviceTo === "QC" || assignedDeviceTo === "TRC") {
-            try {
-              const notes = String(data.ngDescription || data?.logData?.description || "").trim();
-              const ngPayload = {
-                processId: planing.selectedProcess || data.processId || null,
-                userId: data.operatorId || data.userId || null,
-                department: assignedDeviceTo,
-                serialNo: data.serialNo || data.serialNoValue || data.deviceSerial || "",
-                ngStage: currentStage || data.ngStage || "",
-                ...(notes ? { notes } : {}),
-              };
-              if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
-                const ngRecord = new NGDevice(ngPayload);
-                await ngRecord.save();
-              } else {
-                console.warn("NGDevice not created due to missing fields", ngPayload);
-              }
-            } catch (ngErr) {
-              console.error("Error creating NGDevice record:", ngErr);
-            }
+      const parallelSeats = getParallelSeatEntries({
+        assignedStages: normalizedAssignedStages,
+        stageName: currentStageName,
+        lineIndex: currentSeatStage?.lineIndex,
+        parallelGroupKey: currentSeatStage?.parallelGroupKey,
+      });
+      if (parallelSeats.length > 1) {
+        const seatConflictStart = Date.now();
+        const latestRecordQuery = { serialNo: data.serialNo };
+        if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
+          latestRecordQuery.planId = new mongoose.Types.ObjectId(data.planId);
+        }
+        if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
+          latestRecordQuery.processId = new mongoose.Types.ObjectId(resolvedProcessId);
+        }
+        const latestSeatRecord = await deviceTestRecords
+          .findOne(latestRecordQuery)
+          .sort({ createdAt: -1 })
+          .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
+          .lean();
+        markTiming("seatConflictMs", seatConflictStart);
+
+        const claimedSeatKey = getClaimedSeatKey(latestSeatRecord, currentStageName);
+        if (claimedSeatKey && claimedSeatKey !== currentSeatKey) {
+          return res.status(409).json({
+            status: 409,
+            message: `This device is assigned to seat ${claimedSeatKey} for ${currentStageName}.`,
+            conflictSeatKey: claimedSeatKey,
+          });
+        }
+      }
+
+      let nextSeatRouting = {
+        nextLogicalStage: "",
+        assignedSeatKey: "",
+        assignedStageInstanceId: "",
+        assignedParallelGroupKey: "",
+      };
+
+      if (actionMeta.actionStatus === "Pass") {
+        nextSeatRouting = chooseNextStageSeatAssignment({
+          assignedStages: normalizedAssignedStages,
+          currentSeatKey,
+          currentStageName,
+          processStages: products?.stages || [],
+          commonStages: products?.commonStages || [],
+        });
+      }
+
+      data.nextLogicalStage = nextSeatRouting.nextLogicalStage || "";
+      data.assignedSeatKey = nextSeatRouting.assignedSeatKey || data.assignedSeatKey || "";
+      data.assignedStageInstanceId = nextSeatRouting.assignedStageInstanceId || data.assignedStageInstanceId || "";
+      data.assignedParallelGroupKey = nextSeatRouting.assignedParallelGroupKey || data.assignedParallelGroupKey || "";
+
+      const currentSeatStageEntry = rawSeatStages[targetStageIdx] || rawSeatStages[0] || {};
+      if (actionMeta.actionStatus === "Pass") {
+        if (Number(currentSeatStageEntry?.totalUPHA || 0) > 0) {
+          currentSeatStageEntry.totalUPHA = Number(currentSeatStageEntry.totalUPHA || 0) - 1;
+        }
+        currentSeatStageEntry.passedDevice = Number(currentSeatStageEntry?.passedDevice || 0) + 1;
+
+        if (currentStageName === lastProductStage && commonStages.length > 0) {
+          const commonStageName = commonStages[0];
+          const existingCommonIndex = assignedCustomStagesOp.findIndex(
+            (stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(commonStageName),
+          );
+          if (existingCommonIndex >= 0) {
+            assignedCustomStagesOp[existingCommonIndex].totalUPHA = Number(assignedCustomStagesOp[existingCommonIndex]?.totalUPHA || 0) + 1;
           } else {
-            try {
-              const serial = data.serialNo || data.serialNoValue || data.deviceSerial || data.serial || null;
-              const deviceId = data.deviceId || null;
-              let deviceToUpdate = null;
+            assignedCustomStagesOp.push({
+              name: commonStageName,
+              totalUPHA: 1,
+              passedDevice: 0,
+              ngDevice: 0,
+            });
+          }
+        } else if (nextSeatRouting.assignedSeatKey && rawAssignedStages[nextSeatRouting.assignedSeatKey]) {
+          const targetSeatStages = toStageArray(rawAssignedStages[nextSeatRouting.assignedSeatKey]);
+          const targetSeatStageIdx = targetSeatStages.findIndex(
+            (stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(nextSeatRouting.nextLogicalStage),
+          );
+          if (targetSeatStageIdx >= 0) {
+            targetSeatStages[targetSeatStageIdx].totalUPHA = Number(targetSeatStages[targetSeatStageIdx]?.totalUPHA || 0) + 1;
+            rawAssignedStages[nextSeatRouting.assignedSeatKey] = targetSeatStages;
+          }
+        } else if (nextIndex && rawAssignedStages[nextIndex] && toStageArray(rawAssignedStages[nextIndex])[0]) {
+          const nextSeatStages = toStageArray(rawAssignedStages[nextIndex]);
+          nextSeatStages[0].totalUPHA = Number(nextSeatStages[0]?.totalUPHA || 0) + 1;
+          rawAssignedStages[nextIndex] = nextSeatStages;
+        }
+      } else {
+        if (Number(currentSeatStageEntry?.totalUPHA || 0) > 0) {
+          currentSeatStageEntry.totalUPHA = Number(currentSeatStageEntry.totalUPHA || 0) - 1;
+        }
+        currentSeatStageEntry.ngDevice = Number(currentSeatStageEntry?.ngDevice || 0) + 1;
 
-              if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
-                deviceToUpdate = await deviceModel.findById(deviceId);
-              } else if (serial) {
-                deviceToUpdate = await deviceModel.findOne({ serialNo: serial });
-              }
-
-              if (deviceToUpdate) {
-                const targetStageName = data.assignedDeviceTo;
-                if (targetStageName) {
-                  deviceToUpdate.currentStage = targetStageName;
-                  deviceToUpdate.status = "Rework";
-                  await deviceToUpdate.save();
-
-                  const targetKey = Object.keys(assignedStages).find((key) => {
-                    const stageEntries = toStageArray(assignedStages[key]);
-                    return stageEntries.some((stage) => getStageLabel(stage) === targetStageName);
-                  });
-                  if (targetKey) {
-                    const targetStageEntries = toStageArray(assignedStages[targetKey]);
-                    const idx = targetStageEntries.findIndex((stage) => getStageLabel(stage) === targetStageName);
-                    if (idx !== -1) {
-                      targetStageEntries[idx].totalUPHA = (targetStageEntries[idx].totalUPHA || 0) + 1;
-                      assignedStages[targetKey] = targetStageEntries;
-                    }
-                  } else {
-                    console.warn("Target stage not found in assignedStages for rework", { targetStageName });
-                  }
-
-                  try {
-                    const attemptFilter = { deviceId: deviceToUpdate._id };
-                    if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
-                      attemptFilter.planId = new mongoose.Types.ObjectId(data.planId);
-                    }
-                    if (data.processId && mongoose.Types.ObjectId.isValid(data.processId)) {
-                      attemptFilter.processId = new mongoose.Types.ObjectId(data.processId);
-                    }
-                    await DeviceAttempt.updateMany(
-                      attemptFilter,
-                      { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
-                    );
-                  } catch (error) {
-                    console.warn("Failed to reset attempt count on rework:", error);
-                  }
-                }
-              } else {
-                console.warn("Device not found to move to previous stage", { deviceId, serial });
-              }
-            } catch (mvErr) {
-              console.error("Error moving device to previous stage:", mvErr);
+        data.assignedDeviceTo = assignedDeviceTo;
+        if (assignedDeviceTo === "QC" || assignedDeviceTo === "TRC") {
+          try {
+            const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
+            const ngPayload = {
+              processId: resolvedProcessId || null,
+              userId: data.operatorId || data.userId || null,
+              department: assignedDeviceTo,
+              serialNo: data.serialNo || "",
+              ngStage: currentStageName || data.ngStage || "",
+              ...(notes ? { notes } : {}),
+            };
+            if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
+              const ngRecord = new NGDevice(ngPayload);
+              await ngRecord.save();
+            }
+          } catch (ngErr) {
+            console.error("Error creating NGDevice record:", ngErr);
+          }
+        } else if (assignedDeviceTo) {
+          const targetKey = Object.keys(rawAssignedStages).find((key) => {
+            const stageEntries = toStageArray(rawAssignedStages[key]);
+            return stageEntries.some((stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(assignedDeviceTo));
+          });
+          if (targetKey) {
+            const targetStageEntries = toStageArray(rawAssignedStages[targetKey]);
+            const targetIdx = targetStageEntries.findIndex(
+              (stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(assignedDeviceTo),
+            );
+            if (targetIdx !== -1) {
+              targetStageEntries[targetIdx].totalUPHA = Number(targetStageEntries[targetIdx]?.totalUPHA || 0) + 1;
+              rawAssignedStages[targetKey] = targetStageEntries;
             }
           }
         }
       }
 
-      assignedStages[currentIndex] = seatStages;
-      if (currentStage === "FG to Store") {
+      rawSeatStages[targetStageIdx] = currentSeatStageEntry;
+      rawAssignedStages[currentIndex] = rawSeatStages;
+      if (currentStageName === "FG to Store") {
         planing.consumedKit = Number(planing.consumedKit || 0) + 1;
       }
-      if (currentStage === lastStage && assignedStages[currentIndex]?.[0]) {
-        assignedStages[currentIndex][0].totalUPHA = Number(assignedStages[currentIndex][0].totalUPHA || 0) - 1;
+      if (currentStageName === lastStage && rawAssignedStages[currentIndex]?.[0]) {
+        rawAssignedStages[currentIndex][0].totalUPHA = Number(rawAssignedStages[currentIndex][0]?.totalUPHA || 0) - 1;
       }
-      planing.assignedStages = JSON.stringify(assignedStages);
+      planing.assignedStages = JSON.stringify(rawAssignedStages);
       planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
 
+      const deviceUpdatePayload = { updatedAt: new Date() };
+      let shouldUpdateDevice = false;
+      if (actionMeta.actionStatus === "Pass") {
+        const targetStageName = normalizeText(nextSeatRouting.nextLogicalStage || currentStageName);
+        if (targetStageName) {
+          deviceUpdatePayload.currentStage = targetStageName;
+          shouldUpdateDevice = true;
+        }
+      } else if (assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
+        deviceUpdatePayload.currentStage = assignedDeviceTo;
+        deviceUpdatePayload.status = "Rework";
+        shouldUpdateDevice = true;
+      }
+
       const planUpdateStart = Date.now();
-      const updateResult = await planingAndScheduling.updateOne(
+      const planUpdatePromise = planingAndScheduling.updateOne(
         { _id: data.planId },
         {
           $set: {
@@ -737,32 +1168,76 @@ module.exports = {
             assignedCustomStagesOp: planing.assignedCustomStagesOp,
           },
         },
-      );
-      markTiming("planUpdateMs", planUpdateStart);
+      ).then((result) => {
+        markTiming("planUpdateMs", planUpdateStart);
+        return result;
+      });
+
+      const deviceUpdateStart = Date.now();
+      const deviceUpdatePromise = shouldUpdateDevice
+        ? deviceModel.updateOne({ _id: deviceSnapshot._id }, { $set: deviceUpdatePayload }).then((result) => {
+            markTiming("deviceUpdateMs", deviceUpdateStart);
+            return result;
+          })
+        : Promise.resolve({ acknowledged: true, matchedCount: 1 }).then((result) => {
+            markTiming("deviceUpdateMs", deviceUpdateStart);
+            return result;
+          });
+
+      const [updateResult, deviceUpdateResult] = await Promise.all([planUpdatePromise, deviceUpdatePromise]);
       if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
         return res.status(500).json({
           status: 500,
           message: "Error updating planing data.",
         });
       }
+      if (shouldUpdateDevice && (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount)) {
+        return res.status(500).json({
+          status: 500,
+          message: "Error updating device stage.",
+        });
+      }
 
       const recordSaveStart = Date.now();
       const savedDeviceTestRecord = await new deviceTestRecords(data).save();
       markTiming("recordSaveMs", recordSaveStart);
+
+      if (actionMeta.actionStatus === "NG" && assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
+        const attemptFilter = { deviceId: deviceSnapshot._id };
+        if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
+          attemptFilter.planId = new mongoose.Types.ObjectId(data.planId);
+        }
+        if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
+          attemptFilter.processId = new mongoose.Types.ObjectId(resolvedProcessId);
+        }
+        DeviceAttempt.updateMany(
+          attemptFilter,
+          { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } },
+        ).catch((error) => {
+          console.warn("Failed to reset attempt count on rework:", error);
+        });
+      }
+
       timings.totalMs = Date.now() - requestStartedAt;
       logOperatorPassTimings(timings, {
-        status: data.status || "",
+        actionStatus: actionMeta.actionStatus,
         planId: data.planId || "",
-        processId: planing.selectedProcess || data.processId || "",
+        processId: resolvedProcessId || "",
         seatKey: currentIndex,
-        stageName: currentStage,
+        stageName: currentStageName,
         branch: "seat-stage",
       });
 
       return res.status(200).json({
         status: 200,
-        message: `Device ${data.status || "test entry"} saved successfully`,
-        data: buildCompactDeviceTestRecord(savedDeviceTestRecord),
+        message: actionMeta.message,
+        actionStatus: actionMeta.actionStatus,
+        resultType: actionMeta.resultType,
+        data: {
+          ...buildCompactDeviceTestRecord(savedDeviceTestRecord),
+          actionStatus: actionMeta.actionStatus,
+          resultType: actionMeta.resultType,
+        },
       });
     } catch (error) {
       return res.status(500).json({
