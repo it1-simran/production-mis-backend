@@ -1,4 +1,4 @@
-const deviceModel = require("../models/device");
+﻿const deviceModel = require("../models/device");
 const deviceTestModel = require("../models/deviceTestModel");
 const processModel = require("../models/process");
 const deviceTestRecords = require("../models/deviceTestModel");
@@ -24,6 +24,98 @@ function sanitizeKeys(value) {
     return next;
   }
   return value;
+}
+
+const normalizeText = (value) => String(value || "").trim();
+const getStageLabel = (stage) => normalizeText(stage?.name || stage?.stageName || stage?.stage);
+const toStageArray = (value) => (Array.isArray(value) ? value : value ? [value] : []);
+const safeParseJson = (value, fallback) => {
+  if (value == null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+};
+const shouldLogOperatorPassTimings = String(process.env.LOG_OPERATOR_PASS_TIMINGS || "").toLowerCase() === "true";
+const logOperatorPassTimings = (timings = {}, meta = {}) => {
+  if (!shouldLogOperatorPassTimings) return;
+  try {
+    console.info("[operator-pass-timing]", JSON.stringify({ ...meta, ...timings }));
+  } catch (error) {
+    console.info("[operator-pass-timing]", { ...meta, ...timings });
+  }
+};
+const buildCompactDeviceTestRecord = (record = {}) => ({
+  _id: record?._id || null,
+  deviceId: record?.deviceId || null,
+  serialNo: record?.serialNo || "",
+  stageName: record?.stageName || "",
+  status: record?.status || "",
+  createdAt: record?.createdAt || null,
+});
+function resolveAssignedSeatContext({
+  assignedStages = {},
+  rawAssignedOperators,
+  operatorId,
+  currentSeatKey = "",
+  currentLogicalStage = "",
+  stageInstanceId = "",
+  parallelGroupKey = "",
+}) {
+  const normalizedSeatKey = normalizeText(currentSeatKey);
+  const normalizedLogicalStage = normalizeText(currentLogicalStage);
+  const normalizedStageInstanceId = normalizeText(stageInstanceId);
+  const normalizedParallelGroupKey = normalizeText(parallelGroupKey);
+
+  const tryResolveSeat = (seatKey) => {
+    if (!seatKey || !assignedStages?.[seatKey]) return null;
+    const seatStages = toStageArray(assignedStages[seatKey]);
+    if (!seatStages.length) return null;
+
+    let targetStageIdx = seatStages.findIndex((stage) => {
+      if (normalizedStageInstanceId && normalizeText(stage?.stageInstanceId) === normalizedStageInstanceId) {
+        return true;
+      }
+      const stageName = getStageLabel(stage);
+      if (normalizedLogicalStage && stageName !== normalizedLogicalStage) {
+        return false;
+      }
+      if (normalizedParallelGroupKey && normalizeText(stage?.parallelGroupKey) !== normalizedParallelGroupKey) {
+        return false;
+      }
+      return Boolean(stageName || normalizedStageInstanceId || normalizedParallelGroupKey);
+    });
+
+    if (targetStageIdx === -1) {
+      targetStageIdx = seatStages.findIndex((stage) => getStageLabel(stage) === normalizedLogicalStage);
+    }
+    if (targetStageIdx === -1) {
+      targetStageIdx = 0;
+    }
+
+    return {
+      seatKey,
+      seatStages,
+      targetStageIdx,
+      currentStageName: getStageLabel(seatStages[targetStageIdx]) || getStageLabel(seatStages[0]),
+    };
+  };
+
+  const directSeat = tryResolveSeat(normalizedSeatKey);
+  if (directSeat) {
+    return directSeat;
+  }
+
+  const assignedOperators = safeParseJson(rawAssignedOperators, {});
+  const fallbackSeatKey = Object.keys(assignedOperators || {}).find((key) =>
+    toStageArray(assignedOperators[key]).some(
+      (operator) => normalizeText(operator?._id || operator?.userId) === normalizeText(operatorId),
+    ),
+  );
+
+  return fallbackSeatKey ? tryResolveSeat(fallbackSeatKey) : null;
 }
 
 module.exports = {
@@ -378,100 +470,96 @@ module.exports = {
     }
   },
   createDeviceTestEntry: async (req, res) => {
+    const requestStartedAt = Date.now();
+    const timings = {};
+    const markTiming = (key, startedAt) => {
+      timings[key] = Date.now() - startedAt;
+    };
+
     try {
-      const data = req.body;
+      const data = req.body || {};
       if (data && data.logs) {
         data.logs = sanitizeKeys(data.logs);
       }
-      let planing;
-      try {
-        planing = await planingAndScheduling.findById(data.planId).select("selectedProcess assignedStages assignedOperators assignedCustomStagesOp consumedKit").lean();
-        if (!planing) {
-          return res.status(404).json({
-            status: 404,
-            message: "Planing not found",
-          });
-        }
-      } catch (err) {
-        return res.status(500).json({
-          status: 500,
-          message: `Error fetching planing data: ${err.message}`,
+
+      const assignedDeviceTo = normalizeText(req.body.assignedDeviceTo);
+      const isQcOrTrc = assignedDeviceTo === "QC" || assignedDeviceTo === "TRC";
+
+      const planStart = Date.now();
+      const planing = await planingAndScheduling
+        .findById(data.planId)
+        .select("selectedProcess assignedStages assignedOperators assignedCustomStagesOp consumedKit")
+        .lean();
+      markTiming("planLoadMs", planStart);
+      if (!planing) {
+        return res.status(404).json({
+          status: 404,
+          message: "Planing not found",
         });
       }
-      let products;
-      try {
-        products = await processModel.findById(planing.selectedProcess).select("stages commonStages").lean();
-        if (!products?._id) {
-          return res.status(404).json({
-            status: 404,
-            message: "Process not found",
-          });
-        }
-      } catch (err) {
-        return res.status(500).json({
-          status: 500,
-          message: `Error fetching product data: ${err.message}`,
+
+      const processStart = Date.now();
+      const products = await processModel.findById(planing.selectedProcess).select("stages commonStages").lean();
+      markTiming("processLoadMs", processStart);
+      if (!products?._id) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found",
         });
       }
+
+      const payloadFlowVersion = Number(data.flowVersion);
+      const hasFlowVersion = Number.isFinite(payloadFlowVersion) && payloadFlowVersion > 0;
+      const hasFlowStartedAt = Object.prototype.hasOwnProperty.call(data, "flowStartedAt");
       let flowDevice = null;
-      try {
-        if (data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)) {
-          flowDevice = await deviceModel.findById(data.deviceId).lean();
-        } else if (data.serialNo) {
-          flowDevice = await deviceModel.findOne({ serialNo: data.serialNo }).lean();
+      if (!hasFlowVersion || !hasFlowStartedAt) {
+        const flowLookupStart = Date.now();
+        try {
+          if (data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)) {
+            flowDevice = await deviceModel.findById(data.deviceId).select("flowVersion flowStartedAt serialNo").lean();
+          } else if (data.serialNo) {
+            flowDevice = await deviceModel.findOne({ serialNo: data.serialNo }).select("flowVersion flowStartedAt serialNo").lean();
+          }
+        } catch (error) {
+          flowDevice = null;
         }
-      } catch (err) {
-        flowDevice = null;
+        markTiming("flowLookupMs", flowLookupStart);
       }
-      data.flowVersion = Number(flowDevice?.flowVersion || 1);
-      data.flowStartedAt = flowDevice?.flowStartedAt || null;
+      data.flowVersion = hasFlowVersion ? payloadFlowVersion : Number(flowDevice?.flowVersion || 1);
+      data.flowStartedAt = hasFlowStartedAt ? (data.flowStartedAt || null) : (flowDevice?.flowStartedAt || null);
       data.flowBoundary = false;
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
-      let assignedStages = {};
-      let assignedOperator = {};
 
-      try {
-        assignedStages = JSON.parse(planing.assignedStages) || {};
-        assignedOperator = JSON.parse(planing.assignedOperators) || {};
-      } catch (err) {
-        return res.status(500).json({
-          status: 500,
-          message: "Invalid JSON format in planing data.",
-        });
-      }
+      const parseStart = Date.now();
+      const assignedStages = safeParseJson(planing.assignedStages, {}) || {};
       let assignedCustomStagesOp = [];
       if (planing.assignedCustomStagesOp) {
-        try {
-          assignedCustomStagesOp = Array.isArray(planing.assignedCustomStagesOp)
-            ? planing.assignedCustomStagesOp
-            : JSON.parse(planing.assignedCustomStagesOp);
-        } catch (err) {
-          assignedCustomStagesOp = [];
-        }
+        const parsedCustomStages = safeParseJson(planing.assignedCustomStagesOp, []);
+        assignedCustomStagesOp = Array.isArray(parsedCustomStages) ? parsedCustomStages : [];
       }
-      let matchingIndices = Object.keys(assignedOperator).filter((key) =>
-        assignedOperator[key].some(
-          (operator) => operator._id === data.operatorId
-        )
-      );
-      const assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
-      const isQcOrTrc = assignedDeviceTo === "QC" || assignedDeviceTo === "TRC";
+      markTiming("planParseMs", parseStart);
 
-      // If assigning directly to QC/TRC and operator isn't in assignedOperators,
-      // allow the record to be created without seat-based plan updates.
-      if (matchingIndices.length === 0 && isQcOrTrc) {
+      const seatResolveStart = Date.now();
+      const resolvedSeatContext = resolveAssignedSeatContext({
+        assignedStages,
+        rawAssignedOperators: planing.assignedOperators,
+        operatorId: data.operatorId,
+        currentSeatKey: data.currentSeatKey,
+        currentLogicalStage: data.currentLogicalStage || data.stageName,
+        stageInstanceId: data.stageInstanceId,
+        parallelGroupKey: data.parallelGroupKey,
+      });
+      markTiming("seatResolveMs", seatResolveStart);
+
+      if (!resolvedSeatContext && isQcOrTrc) {
         try {
           const notes = String(data.ngDescription || data?.logData?.description || "").trim();
           const ngPayload = {
             processId: planing.selectedProcess || data.processId || null,
             userId: data.operatorId || data.userId || null,
             department: assignedDeviceTo,
-            serialNo:
-              data.serialNo ||
-              data.serialNoValue ||
-              data.deviceSerial ||
-              "",
+            serialNo: data.serialNo || data.serialNoValue || data.deviceSerial || "",
             ngStage: data.stageName || data.ngStage || "",
             ...(notes ? { notes } : {}),
           };
@@ -483,245 +571,199 @@ module.exports = {
           console.error("Error creating NGDevice record:", ngErr);
         }
 
-        const deviceTestRecord = new deviceTestRecords({
+        const recordSaveStart = Date.now();
+        const savedDeviceTestRecord = await new deviceTestRecords({
           ...data,
           assignedDeviceTo,
+        }).save();
+        markTiming("recordSaveMs", recordSaveStart);
+        timings.totalMs = Date.now() - requestStartedAt;
+        logOperatorPassTimings(timings, {
+          status: data.status || "",
+          planId: data.planId || "",
+          processId: planing.selectedProcess || data.processId || "",
+          seatKey: data.currentSeatKey || "",
+          stageName: data.stageName || data.currentLogicalStage || "",
+          branch: "qc-trc-direct",
         });
-        const savedDeviceTestRecord = await deviceTestRecord.save();
         return res.status(200).json({
           status: 200,
-          message: "Device Pass Successfully",
-          data: savedDeviceTestRecord,
+          message: `Device ${data.status || "test entry"} saved successfully`,
+          data: buildCompactDeviceTestRecord(savedDeviceTestRecord),
         });
       }
-      if (matchingIndices.length > 0) {
-        let currentIndex = matchingIndices[0];
-        let currentStage = assignedStages[currentIndex][0]?.name;
-        let productStages = (products?.stages || []).map(
-          (stage) => stage.stageName
-        );
-        let commonStages = (products?.commonStages || []).map(
-          (stage) => stage.stageName
-        );
-        const mergedStages = [...productStages, ...commonStages];
 
-        let lastProductStage = productStages[productStages.length - 1];
-        let lastStage = mergedStages[mergedStages.length - 1];
-        let nextIndex = getNextIndex(assignedStages, currentIndex);
-        if (assignedStages[currentIndex]) {
-          const seatStages = assignedStages[currentIndex];
-          const stageIdx = seatStages.findIndex(s => (s.name || s.stageName) === (data.stageName || currentStage));
-          const targetStageIdx = stageIdx !== -1 ? stageIdx : 0;
-
-          if (data.status === "Pass") {
-            if (seatStages[targetStageIdx].totalUPHA > 0) {
-              seatStages[targetStageIdx].totalUPHA -= 1;
-            }
-            seatStages[targetStageIdx].passedDevice = (seatStages[targetStageIdx].passedDevice || 0) + 1;
-
-            if (currentStage === lastProductStage) {
-              if (commonStages.length > 0) {
-                const customStageData = {
-                  name: commonStages[0],
-                  totalUPHA: 1,
-                  passedDevice: 0,
-                  ngDevice: 0,
-                };
-                assignedCustomStagesOp.push(customStageData);
-              }
-            } else {
-              if (
-                nextIndex &&
-                assignedStages[nextIndex] &&
-                assignedStages[nextIndex][0]
-              ) {
-                assignedStages[nextIndex][0].totalUPHA += 1;
-              }
-            }
-          } else {
-            // NG flow: remove one from current stage WIP and mark NG count
-            if (seatStages[targetStageIdx].totalUPHA > 0) {
-              seatStages[targetStageIdx].totalUPHA -= 1;
-            }
-            seatStages[targetStageIdx].ngDevice = (seatStages[targetStageIdx].ngDevice || 0) + 1;
-
-            data.assignedDeviceTo = (req.body.assignedDeviceTo || "").trim();
-            if (data.assignedDeviceTo === "QC" || data.assignedDeviceTo === "TRC") {
-              try {
-                const notes = String(data.ngDescription || data?.logData?.description || "").trim();
-                const ngPayload = {
-                  processId: planing.selectedProcess || data.processId || null,
-                  userId: data.operatorId || data.userId || null,
-                  department: data.assignedDeviceTo,
-                  serialNo:
-                    data.serialNo ||
-                    data.serialNoValue ||
-                    data.deviceSerial ||
-                    "",
-                  ngStage: currentStage || data.ngStage || "",
-                  ...(notes ? { notes } : {}),
-                };
-                // Only attempt to create when required identifiers are present
-                if (
-                  ngPayload.processId &&
-                  ngPayload.userId &&
-                  ngPayload.serialNo
-                ) {
-                  const ngRecord = new NGDevice(ngPayload);
-                  await ngRecord.save();
-                } else {
-                  console.warn(
-                    "NGDevice not created due to missing fields",
-                    ngPayload
-                  );
-                }
-              } catch (ngErr) {
-                console.error("Error creating NGDevice record:", ngErr);
-              }
-            } else {
-              // Move device back to assigned stage (previous stage selected from UI)
-              try {
-                const serial =
-                  data.serialNo ||
-                  data.serialNoValue ||
-                  data.deviceSerial ||
-                  data.serial ||
-                  null;
-                const deviceId = data.deviceId || null;
-                let deviceToUpdate = null;
-
-                if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
-                  deviceToUpdate = await deviceModel.findById(deviceId);
-                } else if (serial) {
-                  deviceToUpdate = await deviceModel.findOne({
-                    serialNo: serial,
-                  });
-                }
-
-                if (deviceToUpdate) {
-                  const targetStageName = data.assignedDeviceTo;
-                  if (targetStageName) {
-                    deviceToUpdate.currentStage = targetStageName;
-                    deviceToUpdate.status = "Rework";
-                    await deviceToUpdate.save();
-
-                    // increment WIP count for the target stage seat in plan (if found)
-                    const targetKey = Object.keys(assignedStages).find((k) => {
-                      const arr = Array.isArray(assignedStages[k])
-                        ? assignedStages[k]
-                        : [assignedStages[k]];
-                      return arr.some(
-                        (s) =>
-                          String(s?.name || s?.stageName || "").trim() ===
-                          targetStageName
-                      );
-                    });
-                    if (targetKey) {
-                      const arr = Array.isArray(assignedStages[targetKey])
-                        ? assignedStages[targetKey]
-                        : [assignedStages[targetKey]];
-                      const idx = arr.findIndex(
-                        (s) =>
-                          String(s?.name || s?.stageName || "").trim() ===
-                          targetStageName
-                      );
-                      if (idx !== -1) {
-                        arr[idx].totalUPHA = (arr[idx].totalUPHA || 0) + 1;
-                        assignedStages[targetKey] = arr;
-                      }
-                    } else {
-                      console.warn(
-                        "Target stage not found in assignedStages for rework",
-                        { targetStageName }
-                      );
-                    }
-
-                    // Reset attempt count when device is moved back to a stage for rework
-                    try {
-                      const attemptFilter = { deviceId: deviceToUpdate._id };
-                      if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
-                        attemptFilter.planId = new mongoose.Types.ObjectId(data.planId);
-                      }
-                      if (data.processId && mongoose.Types.ObjectId.isValid(data.processId)) {
-                        attemptFilter.processId = new mongoose.Types.ObjectId(data.processId);
-                      }
-                      await DeviceAttempt.updateMany(
-                        attemptFilter,
-                        { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
-                      );
-                    } catch (e) {
-                      console.warn("Failed to reset attempt count on rework:", e);
-                    }
-                  }
-                } else {
-                  console.warn("Device not found to move to previous stage", {
-                    deviceId,
-                    serial,
-                  });
-                }
-              } catch (mvErr) {
-                console.error("Error moving device to previous stage:", mvErr);
-              }
-            }
-          }
-        }
-        if (currentStage === "FG to Store") {
-          planing.consumedKit += 1;
-        }
-        if (currentStage === lastStage) {
-          assignedStages[currentIndex][0].totalUPHA -= 1;
-        }
-        planing.assignedStages = JSON.stringify(assignedStages);
-        planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
-
-        let updatedstages;
-        try {
-          updatedstages = await planingAndScheduling.findByIdAndUpdate(
-            data.planId,
-            {
-              $set: {
-                assignedStages: planing.assignedStages,
-                consumedKit: planing.consumedKit,
-                assignedCustomStagesOp: planing.assignedCustomStagesOp,
-              },
-            },
-            { new: true, runValidators: true }
-          );
-
-          if (!updatedstages) {
-            return res.status(500).json({
-              status: 500,
-              message: "Error updating planing data.",
-            });
-          }
-        } catch (err) {
-          return res.status(500).json({
-            status: 500,
-            message: `Error updating planing data: ${err.message}`,
-          });
-        }
-        const deviceTestRecord = new deviceTestRecords(data);
-        let savedDeviceTestRecord;
-        try {
-          savedDeviceTestRecord = await deviceTestRecord.save();
-        } catch (err) {
-          return res.status(500).json({
-            status: 500,
-            message: `Error saving device test record: ${err.message}`,
-          });
-        }
-
-        return res.status(200).json({
-          status: 200,
-          message: "Device Pass  successfully",
-          data: savedDeviceTestRecord,
-        });
-      } else {
+      if (!resolvedSeatContext) {
         return res.status(404).json({
           status: 404,
           message: "Operator not found in assigned operators.",
         });
       }
+
+      const currentIndex = resolvedSeatContext.seatKey;
+      const seatStages = resolvedSeatContext.seatStages;
+      const targetStageIdx = resolvedSeatContext.targetStageIdx;
+      const currentStage = resolvedSeatContext.currentStageName || getStageLabel(seatStages[0]);
+      const productStages = (products?.stages || []).map((stage) => stage.stageName);
+      const commonStages = (products?.commonStages || []).map((stage) => stage.stageName);
+      const mergedStages = [...productStages, ...commonStages];
+      const lastProductStage = productStages[productStages.length - 1];
+      const lastStage = mergedStages[mergedStages.length - 1];
+      const nextIndex = getNextIndex(assignedStages, currentIndex);
+
+      if (assignedStages[currentIndex]) {
+        if (data.status === "Pass") {
+          if (Number(seatStages[targetStageIdx]?.totalUPHA || 0) > 0) {
+            seatStages[targetStageIdx].totalUPHA -= 1;
+          }
+          seatStages[targetStageIdx].passedDevice = (seatStages[targetStageIdx].passedDevice || 0) + 1;
+
+          if (currentStage === lastProductStage) {
+            if (commonStages.length > 0) {
+              assignedCustomStagesOp.push({
+                name: commonStages[0],
+                totalUPHA: 1,
+                passedDevice: 0,
+                ngDevice: 0,
+              });
+            }
+          } else if (nextIndex && assignedStages[nextIndex] && assignedStages[nextIndex][0]) {
+            assignedStages[nextIndex][0].totalUPHA = Number(assignedStages[nextIndex][0].totalUPHA || 0) + 1;
+          }
+        } else {
+          if (Number(seatStages[targetStageIdx]?.totalUPHA || 0) > 0) {
+            seatStages[targetStageIdx].totalUPHA -= 1;
+          }
+          seatStages[targetStageIdx].ngDevice = (seatStages[targetStageIdx].ngDevice || 0) + 1;
+
+          data.assignedDeviceTo = assignedDeviceTo;
+          if (assignedDeviceTo === "QC" || assignedDeviceTo === "TRC") {
+            try {
+              const notes = String(data.ngDescription || data?.logData?.description || "").trim();
+              const ngPayload = {
+                processId: planing.selectedProcess || data.processId || null,
+                userId: data.operatorId || data.userId || null,
+                department: assignedDeviceTo,
+                serialNo: data.serialNo || data.serialNoValue || data.deviceSerial || "",
+                ngStage: currentStage || data.ngStage || "",
+                ...(notes ? { notes } : {}),
+              };
+              if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
+                const ngRecord = new NGDevice(ngPayload);
+                await ngRecord.save();
+              } else {
+                console.warn("NGDevice not created due to missing fields", ngPayload);
+              }
+            } catch (ngErr) {
+              console.error("Error creating NGDevice record:", ngErr);
+            }
+          } else {
+            try {
+              const serial = data.serialNo || data.serialNoValue || data.deviceSerial || data.serial || null;
+              const deviceId = data.deviceId || null;
+              let deviceToUpdate = null;
+
+              if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
+                deviceToUpdate = await deviceModel.findById(deviceId);
+              } else if (serial) {
+                deviceToUpdate = await deviceModel.findOne({ serialNo: serial });
+              }
+
+              if (deviceToUpdate) {
+                const targetStageName = data.assignedDeviceTo;
+                if (targetStageName) {
+                  deviceToUpdate.currentStage = targetStageName;
+                  deviceToUpdate.status = "Rework";
+                  await deviceToUpdate.save();
+
+                  const targetKey = Object.keys(assignedStages).find((key) => {
+                    const stageEntries = toStageArray(assignedStages[key]);
+                    return stageEntries.some((stage) => getStageLabel(stage) === targetStageName);
+                  });
+                  if (targetKey) {
+                    const targetStageEntries = toStageArray(assignedStages[targetKey]);
+                    const idx = targetStageEntries.findIndex((stage) => getStageLabel(stage) === targetStageName);
+                    if (idx !== -1) {
+                      targetStageEntries[idx].totalUPHA = (targetStageEntries[idx].totalUPHA || 0) + 1;
+                      assignedStages[targetKey] = targetStageEntries;
+                    }
+                  } else {
+                    console.warn("Target stage not found in assignedStages for rework", { targetStageName });
+                  }
+
+                  try {
+                    const attemptFilter = { deviceId: deviceToUpdate._id };
+                    if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
+                      attemptFilter.planId = new mongoose.Types.ObjectId(data.planId);
+                    }
+                    if (data.processId && mongoose.Types.ObjectId.isValid(data.processId)) {
+                      attemptFilter.processId = new mongoose.Types.ObjectId(data.processId);
+                    }
+                    await DeviceAttempt.updateMany(
+                      attemptFilter,
+                      { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
+                    );
+                  } catch (error) {
+                    console.warn("Failed to reset attempt count on rework:", error);
+                  }
+                }
+              } else {
+                console.warn("Device not found to move to previous stage", { deviceId, serial });
+              }
+            } catch (mvErr) {
+              console.error("Error moving device to previous stage:", mvErr);
+            }
+          }
+        }
+      }
+
+      assignedStages[currentIndex] = seatStages;
+      if (currentStage === "FG to Store") {
+        planing.consumedKit = Number(planing.consumedKit || 0) + 1;
+      }
+      if (currentStage === lastStage && assignedStages[currentIndex]?.[0]) {
+        assignedStages[currentIndex][0].totalUPHA = Number(assignedStages[currentIndex][0].totalUPHA || 0) - 1;
+      }
+      planing.assignedStages = JSON.stringify(assignedStages);
+      planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
+
+      const planUpdateStart = Date.now();
+      const updateResult = await planingAndScheduling.updateOne(
+        { _id: data.planId },
+        {
+          $set: {
+            assignedStages: planing.assignedStages,
+            consumedKit: planing.consumedKit,
+            assignedCustomStagesOp: planing.assignedCustomStagesOp,
+          },
+        },
+      );
+      markTiming("planUpdateMs", planUpdateStart);
+      if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
+        return res.status(500).json({
+          status: 500,
+          message: "Error updating planing data.",
+        });
+      }
+
+      const recordSaveStart = Date.now();
+      const savedDeviceTestRecord = await new deviceTestRecords(data).save();
+      markTiming("recordSaveMs", recordSaveStart);
+      timings.totalMs = Date.now() - requestStartedAt;
+      logOperatorPassTimings(timings, {
+        status: data.status || "",
+        planId: data.planId || "",
+        processId: planing.selectedProcess || data.processId || "",
+        seatKey: currentIndex,
+        stageName: currentStage,
+        branch: "seat-stage",
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: `Device ${data.status || "test entry"} saved successfully`,
+        data: buildCompactDeviceTestRecord(savedDeviceTestRecord),
+      });
     } catch (error) {
       return res.status(500).json({
         status: 500,
@@ -1208,50 +1250,48 @@ module.exports = {
   },
   updateStageBySerialNo: async (req, res) => {
     try {
-      let serialNo = req.params.serialNo || req.body.serialNo;
-      let updates = req.body;
-      const device = await deviceModel.findOne({ serialNo: serialNo });
-      if (!device) {
+      const serialNo = req.params.serialNo || req.body.serialNo;
+      const updates = req.body || {};
+      const device = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage customFields").lean();
+      if (!device?._id) {
         return res.status(404).json({ message: "Device with serial number not found" });
       }
 
       if (updates.customFields) {
         let incomingCustomFields = updates.customFields;
-        if (typeof incomingCustomFields === 'string') {
+        if (typeof incomingCustomFields === "string") {
           try {
             incomingCustomFields = JSON.parse(incomingCustomFields);
-          } catch (e) {
+          } catch (error) {
             incomingCustomFields = {};
           }
         }
 
-        let currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
+        const currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
         let existingCustomFields = device.customFields || {};
-
-        if (typeof existingCustomFields !== 'object' || Array.isArray(existingCustomFields)) {
+        if (typeof existingCustomFields !== "object" || Array.isArray(existingCustomFields)) {
           existingCustomFields = {};
         }
-
         existingCustomFields[currentStageName] = {
           ...(existingCustomFields[currentStageName] || {}),
-          ...incomingCustomFields
+          ...incomingCustomFields,
         };
-
         updates.customFields = existingCustomFields;
       }
 
-      const updatedDevice = await deviceModel.findByIdAndUpdate(
-        device._id,
-        { $set: updates },
-        { new: true, runValidators: true }
-      );
-      if (!updatedDevice) {
+      const updateResult = await deviceModel.updateOne({ _id: device._id }, { $set: updates });
+      if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
         return res.status(404).json({ message: "Device not found" });
       }
-      res.status(200).json({
+      return res.status(200).json({
         status: 200,
         message: "Device updated successfully",
-        updatedDevice,
+        data: {
+          _id: device._id,
+          serialNo: device.serialNo,
+          currentStage: updates.currentStage || device.currentStage || "",
+          status: updates.status || "",
+        },
       });
     } catch (error) {
       return res.status(500).json({
@@ -1262,63 +1302,60 @@ module.exports = {
   },
   updateStageByDeviceId: async (req, res) => {
     try {
-      let deviceId = req.params.deviceId;
-      let updates = req.body;
-      const device = await deviceModel.findById(deviceId);
-      if (!device) {
+      const deviceId = req.params.deviceId;
+      const updates = req.body || {};
+      const device = await deviceModel.findById(deviceId).select("_id serialNo currentStage customFields").lean();
+      if (!device?._id) {
         return res.status(404).json({ message: "Device not found" });
       }
 
       if (updates.customFields) {
         let incomingCustomFields = updates.customFields;
-        if (typeof incomingCustomFields === 'string') {
+        if (typeof incomingCustomFields === "string") {
           try {
             incomingCustomFields = JSON.parse(incomingCustomFields);
-          } catch (e) {
+          } catch (error) {
             incomingCustomFields = {};
           }
         }
 
-        let currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
+        const currentStageName = updates.currentStage || device.currentStage || "Unknown Stage";
         let existingCustomFields = device.customFields || {};
-
-        if (typeof existingCustomFields !== 'object' || Array.isArray(existingCustomFields)) {
+        if (typeof existingCustomFields !== "object" || Array.isArray(existingCustomFields)) {
           existingCustomFields = {};
         }
-
         existingCustomFields[currentStageName] = {
           ...(existingCustomFields[currentStageName] || {}),
-          ...incomingCustomFields
+          ...incomingCustomFields,
         };
-
         updates.customFields = existingCustomFields;
       }
 
-      const updatedDevice = await deviceModel.findByIdAndUpdate(
-        deviceId,
-        { $set: updates },
-        { new: true, runValidators: true }
-      );
-      if (!updatedDevice) {
+      const updateResult = await deviceModel.updateOne({ _id: device._id }, { $set: updates });
+      if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
         return res.status(404).json({ message: "Device not found" });
       }
 
-      // Reset attempt counts when a device is resolved via QC/TRC
       if (updates.status && String(updates.status).toLowerCase().includes("resolved")) {
         try {
           await DeviceAttempt.updateMany(
             { deviceId: device._id },
             { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
           );
-        } catch (e) {
-          console.warn("Failed to reset attempt count on resolved update:", e);
+        } catch (error) {
+          console.warn("Failed to reset attempt count on resolved update:", error);
         }
       }
 
-      res.status(200).json({
+      return res.status(200).json({
         status: 200,
         message: "Device updated successfully",
-        updatedDevice,
+        data: {
+          _id: device._id,
+          serialNo: device.serialNo,
+          currentStage: updates.currentStage || device.currentStage || "",
+          status: updates.status || "",
+        },
       });
     } catch (error) {
       return res.status(500).json({
@@ -1639,4 +1676,7 @@ function generateSerials(
   }
   return serials;
 }
+
+
+
 
