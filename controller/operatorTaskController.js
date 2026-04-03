@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+﻿const mongoose = require("mongoose");
 const moment = require("moment");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const assignedJigToPlanModel = require("../models/assignJigToPlan");
@@ -187,7 +187,9 @@ const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageN
   }
 
   if (isTerminalStageStatus(currentStageRecord?.status)) {
-    return false;
+    // A terminal record from an earlier pass should not hide a device that is
+    // currently routed back into the same stage (for example after TRC resolve/rework).
+    return normalizedDeviceCurrentStage === normalizedTrimmedStageName;
   }
 
   const claimedSeatKey = getClaimSeatKey(currentStageRecord);
@@ -212,10 +214,21 @@ const filterDevicesForSeat = ({ devices = [], latestRecords = [], operatorStageN
   );
 };
 
-const getLatestDeviceTests = async (planId, processId) => {
+const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const match = { planId: new mongoose.Types.ObjectId(planId) };
   if (processId && mongoose.Types.ObjectId.isValid(processId)) {
     match.processId = new mongoose.Types.ObjectId(processId);
+  }
+
+  const normalizedStageNames = [...new Set(
+    (Array.isArray(stageNames) ? stageNames : [stageNames])
+      .map((value) => normalizeValue(value))
+      .filter(Boolean),
+  )];
+  if (normalizedStageNames.length === 1) {
+    match.stageName = normalizedStageNames[0];
+  } else if (normalizedStageNames.length > 1) {
+    match.stageName = { $in: normalizedStageNames };
   }
 
   const pipeline = [
@@ -281,6 +294,74 @@ const getTodayRange = () => {
   return { start, end };
 };
 
+const getOperatorStats = async (operatorId, includeHistory = false) => {
+  if (!operatorId || !mongoose.Types.ObjectId.isValid(operatorId)) {
+    return {
+      operatorStats: { totalAttempts: 0, totalCompleted: 0, totalNg: 0 },
+      operatorHistory: includeHistory ? [] : undefined,
+    };
+  }
+
+  const { start, end } = getTodayRange();
+  const operatorObjectId = new mongoose.Types.ObjectId(operatorId);
+  const [statsRows, operatorHistory] = await Promise.all([
+    deviceTestRecordModel.aggregate([
+      {
+        $match: {
+          operatorId: operatorObjectId,
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalAttempts: { $sum: 1 },
+          totalCompleted: {
+            $sum: {
+              $cond: [
+                { $in: [{ $toLower: { $ifNull: ["$status", ""] } }, ["pass", "completed"]] },
+                1,
+                0,
+              ],
+            },
+          },
+          totalNg: {
+            $sum: {
+              $cond: [
+                { $in: [{ $toLower: { $ifNull: ["$status", ""] } }, ["ng", "fail"]] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]),
+    includeHistory
+      ? deviceTestRecordModel
+          .find(
+            {
+              operatorId: operatorObjectId,
+              createdAt: { $gte: start, $lte: end },
+            },
+            { serialNo: 1, stageName: 1, status: 1, assignedDeviceTo: 1, timeConsumed: 1, createdAt: 1 },
+            { sort: { createdAt: -1 } },
+          )
+          .lean()
+      : Promise.resolve(undefined),
+  ]);
+
+  const stats = statsRows?.[0] || {};
+  return {
+    operatorStats: {
+      totalAttempts: Number(stats.totalAttempts || 0),
+      totalCompleted: Number(stats.totalCompleted || 0),
+      totalNg: Number(stats.totalNg || 0),
+    },
+    operatorHistory,
+  };
+};
+
 const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = false }) => {
   const [plan, assignedTaskDetails] = await Promise.all([
     planningAndSchedulingModel.findById(planId).lean(),
@@ -335,27 +416,36 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     (stage) => normalizeValue(stage?.stageName) === currentAssignedStageName,
   ) || null;
 
-  const latestRecords = process?._id ? await getLatestDeviceTests(planId, process._id) : [];
   const targetStageNames = new Set(
     (Array.isArray(assignUserStage) ? assignUserStage : assignUserStage ? [assignUserStage] : [])
       .map((stage) => normalizeValue(stage?.name || stage?.stageName || stage?.stage))
       .filter(Boolean),
   );
+  const stageNames = Array.from(targetStageNames);
+  const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
+  const stageAwareCurrentStage = currentAssignedStageName
+    ? normalizeValue(currentAssignedStageName) === firstStageName
+      ? { $in: [currentAssignedStageName, "", null] }
+      : currentAssignedStageName
+    : undefined;
 
-  const compactDeviceQuery = process && product
-    ? {
-        productType: process.selectedProduct,
-        processID: process._id,
-        status: { $nin: ["NG"] },
-      }
-    : null;
-
-  const rawDevices = compactDeviceQuery
-    ? await deviceModel
-        .find(compactDeviceQuery)
-        .select("_id serialNo imeiNo customFields modelName status currentStage processID productType")
-        .lean()
-    : [];
+  const [latestRecords, rawDevices, operatorSummary] = await Promise.all([
+    process?._id && stageNames.length > 0
+      ? getLatestDeviceTests(planId, process._id, stageNames)
+      : Promise.resolve([]),
+    process?.selectedProduct
+      ? deviceModel
+          .find({
+            productType: process.selectedProduct,
+            processID: process._id,
+            status: { $nin: ["NG"] },
+            ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
+          })
+          .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+          .lean()
+      : Promise.resolve([]),
+    getOperatorStats(operatorId, includeHistory),
+  ]);
 
   const deviceQueue = seatKey && currentAssignedStageName && process
     ? filterDevicesForSeat({
@@ -402,28 +492,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     return sum + (Number.isFinite(passed) ? passed : 0) + (Number.isFinite(ng) ? ng : 0);
   }, 0);
 
-  const { start, end } = getTodayRange();
-  const operatorHistory = await deviceTestRecordModel
-    .find(
-      {
-        operatorId,
-        createdAt: { $gte: start, $lte: end },
-      },
-      { serialNo: 1, stageName: 1, status: 1, assignedDeviceTo: 1, timeConsumed: 1, createdAt: 1 },
-      { sort: { createdAt: -1 } },
-    )
-    .lean();
-  const operatorStats = {
-    totalAttempts: operatorHistory.length,
-    totalCompleted: operatorHistory.filter((entry) => {
-      const status = normalizeKey(entry?.status);
-      return status === "pass" || status === "completed";
-    }).length,
-    totalNg: operatorHistory.filter((entry) => {
-      const status = normalizeKey(entry?.status);
-      return status === "ng" || status === "fail";
-    }).length,
-  };
+  const { operatorStats, operatorHistory } = operatorSummary;
 
   const currentStatus = plan?.processStatus || plan?.status;
   const downTime = typeof plan?.downTime === "string" ? safeJsonParse(plan.downTime, {}) : plan?.downTime || {};
@@ -606,7 +675,6 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Device not found" });
       }
 
-      const latestRecords = processId ? await getLatestDeviceTests(planId, processId).catch(() => []) : [];
       const isCommon = summary?.assignedTaskDetails?.stageType === "common";
       const normalizedAssignedStages = isCommon
         ? safeJsonParse(summary?.plan?.assignedCustomStages, {})
@@ -620,6 +688,9 @@ module.exports = {
       const currentAssignedStageName = normalizeValue(
         currentAssignedStage?.name || currentAssignedStage?.stageName || currentAssignedStage?.stage,
       );
+      const latestRecords = processId
+        ? await getLatestDeviceTests(planId, processId, currentAssignedStageName ? [currentAssignedStageName] : []).catch(() => [])
+        : [];
       const seatKey = normalizeValue(
         summary?.operatorSeatInfo?.seatKey || `${summary?.operatorSeatInfo?.rowNumber || ""}-${summary?.operatorSeatInfo?.seatNumber || ""}`,
       );
@@ -711,3 +782,4 @@ module.exports = {
     }
   },
 };
+
