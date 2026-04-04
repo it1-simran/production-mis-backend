@@ -59,6 +59,12 @@ const productSchema = new mongoose.Schema({
                 {
                   name: { type: String, required: false, default: "" },
                   slug: { type: String, required: false, default: "" },
+                  sourceFields: [
+                    {
+                      name: { type: String, required: false, default: "" },
+                      slug: { type: String, required: false, default: "" },
+                    },
+                  ],
                   x: { type: Number, required: false, default: "" },
                   y: { type: Number, required: false, default: "" },
                   width: { type: Number, required: false, default: "" },
@@ -148,3 +154,5 @@ const productSchema = new mongoose.Schema({
 const Product = mongoose.model("products", productSchema);
 
 module.exports = Product;
+
+

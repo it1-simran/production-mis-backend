@@ -16,7 +16,9 @@
     "reset:cartons:printing:dry": "node scripts/reset-cartons-to-printing-stage.js --dry-run",
     "seed:packaging": "node seed-packaging.js",
     "seed:packaging:dry": "node seed-packaging.js --dry-run",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "move:device:fqc": "node scripts/move-device-to-fqc.js",
+    "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run"
   },
   "repository": {
     "type": "git",
