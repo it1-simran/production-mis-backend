@@ -69,8 +69,14 @@ const processSchema = new mongoose.Schema({
             fields: [
               {
                 name: { type: String, required: false, default: "" },
-                slug: { type: String, required: false, default: "" },
-                x: { type: Number, required: false, default: "" },
+                  slug: { type: String, required: false, default: "" },
+                  sourceFields: [
+                    {
+                      name: { type: String, required: false, default: "" },
+                      slug: { type: String, required: false, default: "" },
+                    },
+                  ],
+                  x: { type: Number, required: false, default: "" },
                 y: { type: Number, required: false, default: "" },
                 width: { type: Number, required: false, default: "" },
                 height: { type: Number, required: false, default: "" },
@@ -186,3 +192,5 @@ const processSchema = new mongoose.Schema({
 const Process = mongoose.model("process", processSchema);
 
 module.exports = Process;
+
+
