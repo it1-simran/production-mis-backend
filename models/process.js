@@ -58,6 +58,7 @@ const processSchema = new mongoose.Schema({
           cartonDepth: { type: Number, required: false, default: 0 },
           maxCapacity: { type: Number, required: false, default: 0 },
           cartonWeight: { type: Number, required: false, default: 0 },
+          cartonWeightTolerance: { type: Number, required: false, default: 0 },
         },
         printerFields: [
           {
@@ -192,5 +193,6 @@ const processSchema = new mongoose.Schema({
 const Process = mongoose.model("process", processSchema);
 
 module.exports = Process;
+
 
 

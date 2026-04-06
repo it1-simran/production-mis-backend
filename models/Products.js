@@ -47,6 +47,7 @@ const productSchema = new mongoose.Schema({
             cartonDepth: { type: Number, required: false, default: 0 },
             maxCapacity: { type: Number, required: false, default: 0 },
             cartonWeight: { type: Number, required: false, default: 0 },
+            cartonWeightTolerance: { type: Number, required: false, default: 0 },
           },
           printerFields: [
             {
@@ -154,5 +155,6 @@ const productSchema = new mongoose.Schema({
 const Product = mongoose.model("products", productSchema);
 
 module.exports = Product;
+
 
 

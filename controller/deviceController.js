@@ -10,6 +10,10 @@ const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const DeviceAttempt = require("../models/deviceAttempt");
+const {
+  parseStickerScanTokensFromJigFields,
+  findDevicesByScanTokensStrict,
+} = require("../services/deviceScanMatcher");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -1637,86 +1641,49 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Invalid jigFields" });
       }
 
-      // Convert all jigField values to strings for comparison
-      const searchCriteria = {};
-      for (const [k, v] of Object.entries(jigFields)) {
-        if (v !== undefined && v !== null && v !== "") {
-          searchCriteria[k] = String(v).trim();
-        }
-      }
-
-      if (Object.keys(searchCriteria).length === 0) {
+      const scanTokens = parseStickerScanTokensFromJigFields(jigFields);
+      if (!scanTokens.length) {
         return res.status(400).json({ status: 400, message: "No search values provided" });
       }
 
-      // We fetch all devices for this process and filter in JS
-      // This is because searching across all keys in the nested customFields object is difficult in plain MongoDB queries 
-      // without knowing the stage names (which are the first-level keys in customFields).
-      const devices = await deviceModel.find({
-        processID: processId,
+      const query = {
+        ...(processId ? { processID: processId } : {}),
         ...(stageName ? { currentStage: stageName } : {}),
-        status: { $nin: ["Pass", "Completed", "NG"] }
-      });
+        status: { $nin: ["Pass", "Completed", "NG"] },
+      };
 
-      const matchingDevices = devices.filter(device => {
-        let customFields = device.customFields;
+      const devices = await deviceModel.find(query)
+        .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+        .lean();
 
-        if (typeof customFields === 'string') {
-          try {
-            customFields = JSON.parse(customFields);
-          } catch (e) {
-            customFields = {};
-          }
-        }
-
-        for (const [key, value] of Object.entries(searchCriteria)) {
-          const searchVal = String(value).trim();
-          const searchKeyLower = key.toLowerCase();
-
-          if (searchKeyLower.includes("imei") && String(device.imeiNo).trim() === searchVal) return true;
-          if (searchKeyLower.includes("serial") && String(device.serialNo).trim() === searchVal) return true;
-
-          if (customFields && typeof customFields === 'object') {
-            if (String(customFields[key]).trim() === searchVal) return true;
-            for (const cfName in customFields) {
-              if (cfName.toLowerCase() === searchKeyLower && String(customFields[cfName]).trim() === searchVal) {
-                return true;
-              }
-            }
-
-            for (const stageName in customFields) {
-              const stageData = customFields[stageName];
-              if (stageData && typeof stageData === 'object') {
-                if (String(stageData[key]).trim() === searchVal) return true;
-                for (const fieldName in stageData) {
-                  if (fieldName.toLowerCase() === searchKeyLower && String(stageData[fieldName]).trim() === searchVal) {
-                    return true;
-                  }
-                }
-              }
-            }
-          }
-        }
-        return false;
-      });
+      const matchingDevices = findDevicesByScanTokensStrict(devices, scanTokens);
 
       if (matchingDevices.length === 0) {
         return res.status(404).json({
           status: 404,
-          message: "Device not found with these JIG parameters"
+          message: "No device matched the scanned sticker values.",
         });
       }
 
-      // if (matchingDevices.length > 1) {
-      //   return res.status(409).json({
-      //     status: 409,
-      //     message: "Duplicate entries of device found"
-      //   });
-      // }
+      if (matchingDevices.length > 1) {
+        return res.status(409).json({
+          status: 409,
+          message: "Multiple devices matched the scanned sticker values. Please scan a more specific sticker.",
+          data: {
+            matchedTokens: scanTokens,
+            matchMode: scanTokens.length > 1 ? "multi" : "single",
+          },
+        });
+      }
+
+      const matchedResult = matchingDevices[0];
 
       return res.status(200).json({
         status: 200,
-        data: matchingDevices[0]
+        data: matchedResult.device,
+        matchedTokens: matchedResult.matchedTokens,
+        matchedFields: matchedResult.matchedFields,
+        matchMode: matchedResult.matchMode,
       });
     } catch (error) {
       console.error("Error in searchByJigFields:", error);

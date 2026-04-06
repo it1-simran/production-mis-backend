@@ -8,6 +8,10 @@ const productModel = require("../models/Products");
 const shiftModel = require("../models/shiftManagement");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
+const {
+  parseStickerScanTokens,
+  findDevicesByScanTokensStrict,
+} = require("../services/deviceScanMatcher");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -213,6 +217,9 @@ const filterDevicesForSeat = ({ devices = [], latestRecords = [], operatorStageN
     }),
   );
 };
+
+const findDevicesByScanTokens = (devices = [], scanTokens = []) =>
+  findDevicesByScanTokensStrict(devices, scanTokens);
 
 const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const match = { planId: new mongoose.Types.ObjectId(planId) };
@@ -660,21 +667,9 @@ module.exports = {
   getOperatorTaskDevice: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
-      const { deviceId, serialNo } = req.query || {};
+      const { deviceId, serialNo, scanInput } = req.query || {};
       const summary = await buildOperatorTaskSummary({ planId, operatorId });
       const processId = summary?.process?._id || summary?.selectedProcess;
-      let device = null;
-      if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
-        device = await deviceModel.findById(deviceId).lean();
-      } else if (serialNo) {
-        const query = { serialNo: String(serialNo).trim() };
-        if (processId) query.processID = processId;
-        device = await deviceModel.findOne(query).lean();
-      }
-      if (!device?._id) {
-        return res.status(404).json({ status: 404, message: "Device not found" });
-      }
-
       const isCommon = summary?.assignedTaskDetails?.stageType === "common";
       const normalizedAssignedStages = isCommon
         ? safeJsonParse(summary?.plan?.assignedCustomStages, {})
@@ -688,12 +683,80 @@ module.exports = {
       const currentAssignedStageName = normalizeValue(
         currentAssignedStage?.name || currentAssignedStage?.stageName || currentAssignedStage?.stage,
       );
+      const seatKey = normalizeValue(
+        summary?.operatorSeatInfo?.seatKey ||
+          (String(summary?.operatorSeatInfo?.rowNumber || "") + "-" + String(summary?.operatorSeatInfo?.seatNumber || "")),
+      );
+      const firstStageName = normalizeValue(summary?.process?.stages?.[0]?.stageName || "");
+      const stageAwareCurrentStage = currentAssignedStageName
+        ? normalizeKey(currentAssignedStageName) === normalizeKey(firstStageName)
+          ? { $in: [currentAssignedStageName, "", null] }
+          : currentAssignedStageName
+        : undefined;
+
+      let device = null;
+      let matchMeta = null;
+      const scanTokens = scanInput ? parseStickerScanTokens(scanInput) : [];
+      const ambiguousSearchResponse = {
+        status: 409,
+        message: "Multiple devices matched the scanned sticker values. Please scan a more specific sticker.",
+        data: {
+          matchedTokens: scanTokens,
+          matchMode: scanTokens.length > 1 ? "multi" : "single",
+        },
+      };
+
+      if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
+        device = await deviceModel.findById(deviceId).lean();
+      } else if (scanTokens.length > 0) {
+        const visibleMatches = findDevicesByScanTokens(summary?.compactQueue || [], scanTokens);
+        if (visibleMatches.length > 1) {
+          return res.status(409).json(ambiguousSearchResponse);
+        }
+        if (visibleMatches.length === 1) {
+          device = visibleMatches[0].device;
+          matchMeta = visibleMatches[0];
+        }
+
+        if (!device) {
+          const stageScopedDevices = processId && summary?.process?.selectedProduct
+            ? await deviceModel
+                .find({
+                  productType: summary.process.selectedProduct,
+                  processID: processId,
+                  status: { $nin: ["NG"] },
+                  ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
+                })
+                .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+                .lean()
+            : [];
+          const stageMatches = findDevicesByScanTokens(stageScopedDevices, scanTokens);
+          if (stageMatches.length > 1) {
+            return res.status(409).json(ambiguousSearchResponse);
+          }
+          if (stageMatches.length === 1) {
+            device = stageMatches[0].device;
+            matchMeta = stageMatches[0];
+          }
+        }
+      } else if (serialNo) {
+        const query = { serialNo: String(serialNo).trim() };
+        if (processId) query.processID = processId;
+        device = await deviceModel.findOne(query).lean();
+      }
+
+      if (!device?._id) {
+        return res.status(404).json({
+          status: 404,
+          message: scanTokens.length > 0
+            ? "No device matched the scanned sticker values."
+            : "Device not found",
+        });
+      }
+
       const latestRecords = processId
         ? await getLatestDeviceTests(planId, processId, currentAssignedStageName ? [currentAssignedStageName] : []).catch(() => [])
         : [];
-      const seatKey = normalizeValue(
-        summary?.operatorSeatInfo?.seatKey || `${summary?.operatorSeatInfo?.rowNumber || ""}-${summary?.operatorSeatInfo?.seatNumber || ""}`,
-      );
 
       const isVisibleToSeat = currentAssignedStageName && seatKey && processId
         ? isDeviceVisibleToSeat({
@@ -717,7 +780,7 @@ module.exports = {
         if (claimedSeatKey && claimedSeatKey !== seatKey && !isTerminalStageStatus(currentStageRecord?.status)) {
           return res.status(409).json({
             status: 409,
-            message: `Device is already in progress on seat ${claimedSeatKey}.`,
+            message: "Device is already in progress on seat " + claimedSeatKey + ".",
           });
         }
         return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
@@ -735,6 +798,9 @@ module.exports = {
           process: summary.process,
           assignUserStage: summary.assignUserStage,
           operatorSeatInfo: summary.operatorSeatInfo,
+          matchedTokens: matchMeta?.matchedTokens,
+          matchedFields: matchMeta?.matchedFields,
+          matchMode: matchMeta?.matchMode,
         },
       });
     } catch (error) {
@@ -782,4 +848,3 @@ module.exports = {
     }
   },
 };
-
