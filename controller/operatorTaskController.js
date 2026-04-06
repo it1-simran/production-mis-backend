@@ -11,6 +11,7 @@ const deviceTestRecordModel = require("../models/deviceTestModel");
 const {
   parseStickerScanTokens,
   findDevicesByScanTokensStrict,
+  findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
 
 const normalizeValue = (value) => String(value || "").trim();
@@ -218,8 +219,11 @@ const filterDevicesForSeat = ({ devices = [], latestRecords = [], operatorStageN
   );
 };
 
-const findDevicesByScanTokens = (devices = [], scanTokens = []) =>
-  findDevicesByScanTokensStrict(devices, scanTokens);
+const findDevicesByScanTokens = (devices = [], scanTokens = []) => {
+  const strictMatches = findDevicesByScanTokensStrict(devices, scanTokens);
+  if (strictMatches.length > 0) return strictMatches;
+  return findDevicesByScanTokensBestEffort(devices, scanTokens);
+};
 
 const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const match = { planId: new mongoose.Types.ObjectId(planId) };
@@ -737,6 +741,32 @@ module.exports = {
           if (stageMatches.length === 1) {
             device = stageMatches[0].device;
             matchMeta = stageMatches[0];
+          }
+
+          if (!device) {
+            const processScopedDevices = processId && summary?.process?.selectedProduct
+              ? await deviceModel
+                  .find({
+                    productType: summary.process.selectedProduct,
+                    processID: processId,
+                    status: { $nin: ["NG"] },
+                  })
+                  .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+                  .lean()
+              : [];
+
+            const processMatches = findDevicesByScanTokens(
+              processScopedDevices,
+              scanTokens,
+            );
+
+            if (processMatches.length > 1) {
+              return res.status(409).json(ambiguousSearchResponse);
+            }
+            if (processMatches.length === 1) {
+              device = processMatches[0].device;
+              matchMeta = processMatches[0];
+            }
           }
         }
       } else if (serialNo) {
