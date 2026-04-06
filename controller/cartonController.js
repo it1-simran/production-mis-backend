@@ -42,6 +42,36 @@ const normalizeWeightValue = (value) => {
   };
 };
 
+const normalizeToleranceValue = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return {
+      numeric: 0,
+      scaled: 0,
+    };
+  }
+  const sanitizedValue = String(value)
+    .trim()
+    .replace(",", ".")
+    .replace(/[^0-9.]/g, "");
+  if (!sanitizedValue) {
+    return {
+      numeric: 0,
+      scaled: 0,
+    };
+  }
+  const parsedValue = Number.parseFloat(sanitizedValue);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return {
+      numeric: 0,
+      scaled: 0,
+    };
+  }
+  return {
+    numeric: parsedValue,
+    scaled: Math.round(parsedValue * 1000),
+  };
+};
+
 const createCartonHistoryEvent = async ({
   carton,
   eventType,
@@ -93,13 +123,20 @@ const getConfiguredCartonWeight = async (carton) => {
       0,
   );
 
+  const expectedTolerance = normalizeToleranceValue(
+    carton?.packagingData?.cartonWeightTolerance ??
+      processDoc?.packagingData?.cartonWeightTolerance ??
+      productDoc?.packagingData?.cartonWeightTolerance ??
+      0,
+  );
+
   const configuredCapacity = Number(
     processDoc?.packagingData?.maxCapacity ??
       productDoc?.packagingData?.maxCapacity ??
       0,
   );
 
-  return { expectedWeight, configuredCapacity, processDoc, productDoc };
+  return { expectedWeight, expectedTolerance, configuredCapacity, processDoc, productDoc };
 };
 
 const isPartialOrDerivedCarton = (carton, configuredCapacity = 0) => {
@@ -1227,7 +1264,7 @@ module.exports = {
         });
       }
 
-      const { expectedWeight, configuredCapacity } = await getConfiguredCartonWeight(carton);
+      const { expectedWeight, expectedTolerance, configuredCapacity } = await getConfiguredCartonWeight(carton);
       if (!expectedWeight) {
         return res.status(400).json({
           status: 400,
@@ -1238,10 +1275,13 @@ module.exports = {
       const requiresExactConfiguredWeight = !isPartialOrDerivedCarton(carton, configuredCapacity);
 
       if (requiresExactConfiguredWeight) {
-        if (recordedWeight.scaled !== expectedWeight.scaled) {
+        const toleranceScaled = Number(expectedTolerance?.scaled || 0);
+        if (Math.abs(recordedWeight.scaled - expectedWeight.scaled) > toleranceScaled) {
           return res.status(400).json({
             status: 400,
-            message: "Weight mismatch! Please enter the correct carton weight.",
+            message: toleranceScaled > 0
+              ? "Carton weight must be within the configured tolerance range."
+              : "Weight mismatch! Please enter the correct carton weight.",
           });
         }
       } else if (recordedWeight.scaled > expectedWeight.scaled) {
@@ -1374,6 +1414,7 @@ module.exports = {
         cartonHeight,
         cartonDepth,
         cartonWeight,
+        cartonWeightTolerance,
       } = req.body;
 
       if (!cartonSerial) {
@@ -1417,6 +1458,7 @@ module.exports = {
         const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
         const resolvedDepth = Number(packagingData?.cartonDepth ?? cartonDepth);
         const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
+        const resolvedTolerance = Number(packagingData?.cartonWeightTolerance ?? cartonWeightTolerance ?? 0);
 
         if (!Number.isInteger(resolvedQty) || resolvedQty <= 0) {
           return res.status(400).json({
@@ -1446,6 +1488,13 @@ module.exports = {
           });
         }
 
+        if (!Number.isFinite(resolvedTolerance) || resolvedTolerance < 0) {
+          return res.status(400).json({
+            status: 400,
+            message: "Carton weight tolerance must be zero or greater.",
+          });
+        }
+
         const movedDevices = sourceDevices.slice(0, resolvedQty);
         const remainingDevices = sourceDevices.slice(resolvedQty);
         const conflict = await findCartonConflicts(movedDevices, [carton._id]);
@@ -1466,6 +1515,7 @@ module.exports = {
             cartonHeight: resolvedHeight,
             cartonDepth: resolvedDepth,
             cartonWeight: resolvedWeight,
+            cartonWeightTolerance: resolvedTolerance,
             maxCapacity: resolvedQty,
           },
           cartonSize: {
