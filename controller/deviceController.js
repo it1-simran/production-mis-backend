@@ -1148,10 +1148,62 @@ module.exports = {
       planing.assignedStages = JSON.stringify(rawAssignedStages);
       planing.assignedCustomStagesOp = JSON.stringify(assignedCustomStagesOp);
 
+      const getSequentialNextStage = (fromStageName = "") => {
+        const normalizedFrom = normalizeKey(fromStageName);
+        if (!normalizedFrom) return "";
+
+        const processStagesList = Array.isArray(products?.stages) ? products.stages : [];
+        const commonStagesList = Array.isArray(products?.commonStages) ? products.commonStages : [];
+
+        const processIdx = processStagesList.findIndex(
+          (stage) => normalizeKey(stage?.stageName || stage?.name) === normalizedFrom,
+        );
+        if (processIdx >= 0) {
+          if (processIdx < processStagesList.length - 1) {
+            return normalizeText(processStagesList[processIdx + 1]?.stageName || processStagesList[processIdx + 1]?.name);
+          }
+          return normalizeText(commonStagesList[0]?.stageName || commonStagesList[0]?.name || commonStagesList[0]?.stage);
+        }
+
+        const commonIdx = commonStagesList.findIndex(
+          (stage) => normalizeKey(stage?.stageName || stage?.name || stage?.stage) === normalizedFrom,
+        );
+        if (commonIdx >= 0 && commonIdx < commonStagesList.length - 1) {
+          return normalizeText(
+            commonStagesList[commonIdx + 1]?.stageName ||
+            commonStagesList[commonIdx + 1]?.name ||
+            commonStagesList[commonIdx + 1]?.stage,
+          );
+        }
+
+        return "";
+      };
+
       const deviceUpdatePayload = { updatedAt: new Date() };
       let shouldUpdateDevice = false;
       if (actionMeta.actionStatus === "Pass") {
-        const targetStageName = normalizeText(nextSeatRouting.nextLogicalStage || currentStageName);
+        let targetStageName = normalizeText(nextSeatRouting.nextLogicalStage || "");
+
+        // Fallback: derive next stage directly from process/common stage order
+        // when seat routing is missing or resolves to the same current stage.
+        if (
+          !targetStageName ||
+          normalizeKey(targetStageName) === normalizeKey(currentStageName)
+        ) {
+          const sequentialFromCurrent = getSequentialNextStage(currentStageName);
+          const sequentialFromDeviceStage = getSequentialNextStage(deviceSnapshot?.currentStage || "");
+          targetStageName = normalizeText(
+            sequentialFromCurrent ||
+            sequentialFromDeviceStage ||
+            targetStageName ||
+            currentStageName,
+          );
+        }
+
+        if (!data.nextLogicalStage && targetStageName) {
+          data.nextLogicalStage = targetStageName;
+        }
+
         if (targetStageName) {
           deviceUpdatePayload.currentStage = targetStageName;
           shouldUpdateDevice = true;
