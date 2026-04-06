@@ -31,7 +31,7 @@ const DEFAULT_SERIALS = [
 ];
 
 const loadEnv = () => {
-  const env = process.env.NODE_ENV || "production";
+  const env = process.env.NODE_ENV || "development";
   const envFile = `.env.${env}`;
   const envPath = path.resolve(__dirname, "..", envFile);
   const fallbackPath = path.resolve(__dirname, "..", ".env");
