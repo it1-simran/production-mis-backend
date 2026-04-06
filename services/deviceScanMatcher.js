@@ -105,7 +105,7 @@ const buildDeviceSearchIndex = (device = {}) => {
   return index;
 };
 
-const findDevicesByScanTokensStrict = (devices = [], scanTokens = []) => {
+const rankDevicesByScanTokens = (devices = [], scanTokens = []) => {
   const normalizedTokens = normalizeTokenList(scanTokens);
   if (!normalizedTokens.length) return [];
 
@@ -113,28 +113,69 @@ const findDevicesByScanTokensStrict = (devices = [], scanTokens = []) => {
     .map((device) => {
       const searchIndex = buildDeviceSearchIndex(device);
       const matchedFields = {};
+      const matchedTokens = [];
 
       for (const token of normalizedTokens) {
         const matchingFieldSet = searchIndex.get(token);
-        if (!matchingFieldSet || matchingFieldSet.size === 0) {
-          return null;
+        if (matchingFieldSet && matchingFieldSet.size > 0) {
+          matchedFields[token] = Array.from(matchingFieldSet);
+          matchedTokens.push(token);
         }
-        matchedFields[token] = Array.from(matchingFieldSet);
       }
+
+      if (!matchedTokens.length) return null;
 
       return {
         device,
-        matchedTokens: [...normalizedTokens],
+        matchedTokens,
         matchedFields,
-        matchedCount: normalizedTokens.length,
-        matchMode: normalizedTokens.length > 1 ? "multi" : "single",
+        matchedCount: matchedTokens.length,
+        totalTokens: normalizedTokens.length,
+        matchMode:
+          matchedTokens.length === normalizedTokens.length
+            ? normalizedTokens.length > 1
+              ? "multi"
+              : "single"
+            : "partial",
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (right.matchedCount !== left.matchedCount) {
+        return right.matchedCount - left.matchedCount;
+      }
+      return String(left?.device?._id || "").localeCompare(
+        String(right?.device?._id || ""),
+      );
+    });
+};
+
+const findDevicesByScanTokensStrict = (devices = [], scanTokens = []) => {
+  const normalizedTokens = normalizeTokenList(scanTokens);
+  if (!normalizedTokens.length) return [];
+
+  return rankDevicesByScanTokens(devices, normalizedTokens).filter(
+    (item) => item.matchedCount === normalizedTokens.length,
+  );
+};
+
+const findDevicesByScanTokensBestEffort = (devices = [], scanTokens = []) => {
+  const normalizedTokens = normalizeTokenList(scanTokens);
+  if (!normalizedTokens.length) return [];
+
+  const strictMatches = findDevicesByScanTokensStrict(devices, normalizedTokens);
+  if (strictMatches.length > 0) return strictMatches;
+
+  const rankedMatches = rankDevicesByScanTokens(devices, normalizedTokens);
+  if (!rankedMatches.length) return [];
+
+  const bestMatchedCount = rankedMatches[0].matchedCount;
+  return rankedMatches.filter((item) => item.matchedCount === bestMatchedCount);
 };
 
 module.exports = {
   parseStickerScanTokens,
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
+  findDevicesByScanTokensBestEffort,
 };
