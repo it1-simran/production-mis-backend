@@ -16,6 +16,8 @@
     "reset:cartons:printing:dry": "node scripts/reset-cartons-to-printing-stage.js --dry-run",
     "seed:packaging": "node seed-packaging.js",
     "seed:packaging:dry": "node seed-packaging.js --dry-run",
+    "backfill:carton:tolerance": "node scripts/backfill-carton-weight-tolerance.js",
+    "backfill:carton:tolerance:dry": "node scripts/backfill-carton-weight-tolerance.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1",
     "move:device:fqc": "node scripts/move-device-to-fqc.js",
     "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run"
