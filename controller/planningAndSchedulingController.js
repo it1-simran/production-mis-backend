@@ -37,6 +37,53 @@ const getPlanDateRange = (plan) => {
   return { start, end };
 };
 
+const safeParseJson = (value, fallback) => {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+};
+
+const normalizeCustomOperatorSlot = (slot) => {
+  if (Array.isArray(slot)) return slot.filter(Boolean);
+  if (!slot) return [];
+
+  if (typeof slot === "string") {
+    const trimmed = slot.trim();
+    if (!trimmed) return [];
+    const parsed = safeParseJson(trimmed, []);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  }
+
+  if (typeof slot === "object") {
+    if (Array.isArray(slot.operators)) return slot.operators.filter(Boolean);
+    if (slot._id || slot.id || slot.operatorId || slot.userId || slot.name) {
+      return [slot];
+    }
+  }
+
+  return [];
+};
+
+const normalizeAssignedCustomStagesOp = (value) => {
+  const parsed = safeParseJson(value, []);
+
+  if (Array.isArray(parsed)) {
+    return parsed.map((slot) => normalizeCustomOperatorSlot(slot));
+  }
+
+  if (parsed && typeof parsed === "object") {
+    return Object.keys(parsed)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((key) => normalizeCustomOperatorSlot(parsed[key]));
+  }
+
+  return [];
+};
+
 const overlapMs = (startA, endA, startB, endB) => {
   if (!startA || !endA || !startB || !endB) return 0;
   const s = Math.max(startA.getTime(), startB.getTime());
@@ -920,7 +967,16 @@ module.exports = {
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
-      return res.status(200).json(PlaningAndScheduling[0]);
+      const currentPlan = PlaningAndScheduling?.[0];
+      if (!currentPlan) {
+        return res.status(404).json({ error: "Product not found" });
+      }
+
+      currentPlan.assignedCustomStagesOp = JSON.stringify(
+        normalizeAssignedCustomStagesOp(currentPlan.assignedCustomStagesOp),
+      );
+
+      return res.status(200).json(currentPlan);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
       return res

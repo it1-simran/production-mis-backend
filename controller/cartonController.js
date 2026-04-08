@@ -5,6 +5,7 @@ const cartonHistoryModel = require("../models/cartonHistory");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/process");
 const productModel = require("../models/Products");
+const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
 const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
@@ -333,6 +334,51 @@ const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
     devices: { $in: normalizedDeviceIds },
   });
 };
+
+const normalizeOrderConfirmationNo = (value) => String(value || "").trim();
+
+const buildOrderConfirmationModelMap = async (orderConfirmationNos = []) => {
+  const normalizedNumbers = Array.from(
+    new Set(orderConfirmationNos.map((value) => normalizeOrderConfirmationNo(value)).filter(Boolean))
+  );
+
+  if (normalizedNumbers.length === 0) return new Map();
+
+  const records = await OrderConfirmationNumberModel.find({
+    orderConfirmationNo: { $in: normalizedNumbers },
+  })
+    .select("orderConfirmationNo modelName")
+    .lean();
+
+  return new Map(
+    records.map((record) => [
+      normalizeOrderConfirmationNo(record.orderConfirmationNo),
+      String(record.modelName || "").trim(),
+    ])
+  );
+};
+
+const attachModelNamesToCartons = async (cartons = [], resolveOrderConfirmationNo = () => "") => {
+  const modelMap = await buildOrderConfirmationModelMap(
+    cartons.map((carton) => resolveOrderConfirmationNo(carton))
+  );
+
+  return cartons.map((carton) => {
+    const orderConfirmationNo = normalizeOrderConfirmationNo(resolveOrderConfirmationNo(carton));
+    const resolvedModelName = String(carton?.modelName || modelMap.get(orderConfirmationNo) || "").trim();
+
+    return {
+      ...carton,
+      modelName: resolvedModelName,
+      devices: Array.isArray(carton?.devices)
+        ? carton.devices.map((device) => ({
+            ...device,
+            modelName: String(device?.modelName || resolvedModelName || "").trim(),
+          }))
+        : [],
+    };
+  });
+};
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
@@ -540,18 +586,8 @@ module.exports = {
         {
           $match: {
             processId: processIdMatch,
-            status: { $in: ["full", "FULL"] },
-            cartonStatus: {
-              $in: [
-                "",
-                "PDI",
-                "pdi",
-                "FG_TO_STORE",
-                "fg_to_store",
-                "FG to Store",
-                "FG TO STORE",
-              ],
-            },
+            status: "full",
+            cartonStatus: "",
           },
         },
         {
@@ -1259,12 +1295,14 @@ module.exports = {
   },
   fetchCurrentRunningProcessFG: async (req, res) => {
     try {
-      // Step 1: Get processes with status active/complete
       const processes = await ProcessModel.find({
         status: { $in: ["active", "complete"] },
       }).lean();
 
-      // Step 2: Get cartons for each process
+      const orderConfirmationModelMap = await buildOrderConfirmationModelMap(
+        processes.map((process) => process.orderConfirmationNo)
+      );
+
       const processData = await Promise.all(
         processes.map(async (process) => {
           const cartons = await cartonModel
@@ -1274,7 +1312,6 @@ module.exports = {
             })
             .lean();
 
-          // Step 3: Fetch devices for each carton
           const cartonsWithDevices = await Promise.all(
             cartons.map(async (carton) => {
               const devices = await deviceModel
@@ -1285,14 +1322,27 @@ module.exports = {
 
               return {
                 ...carton,
-                devices, // devices + their testRecords
+                devices,
               };
             })
           );
 
+          const resolvedModelName =
+            orderConfirmationModelMap.get(normalizeOrderConfirmationNo(process.orderConfirmationNo)) || "";
+
           return {
             ...process,
-            cartons: cartonsWithDevices,
+            modelName: resolvedModelName,
+            cartons: cartonsWithDevices.map((carton) => ({
+              ...carton,
+              modelName: String(carton?.modelName || resolvedModelName || "").trim(),
+              devices: Array.isArray(carton?.devices)
+                ? carton.devices.map((device) => ({
+                    ...device,
+                    modelName: String(device?.modelName || resolvedModelName || "").trim(),
+                  }))
+                : [],
+            })),
           };
         })
       );
@@ -1392,11 +1442,30 @@ module.exports = {
       // 7. Update all devices' current stage
       await deviceModel.updateMany(
         { _id: { $in: carton.devices } },
-        { $set: { currentStage: "KEEP_IN_STORE" } }
+        {
+          $set: {
+            currentStage: "KEEP_IN_STORE",
+            dispatchStatus: "READY",
+            dispatchInvoiceId: null,
+          },
+          $unset: {
+            customerName: 1,
+            dispatchDate: 1,
+            warrantyStartDate: 1,
+            warrantyEndDate: 1,
+          },
+        }
       );
 
       // 8. Update carton status to STOCKED
       carton.cartonStatus = "STOCKED";
+      carton.dispatchStatus = "READY";
+      carton.dispatchInvoiceId = null;
+      carton.dispatchedCustomerName = "";
+      carton.dispatchDate = null;
+      carton.gatePassNumber = "";
+      carton.reservedAt = null;
+      carton.reservedBy = null;
       await carton.save();
 
       return res.status(200).json({
@@ -1609,8 +1678,13 @@ module.exports = {
             cartonSerial: 1,
             processName: { $ifNull: ["$processInfo.name", "Unknown Process"] },
             processID: { $ifNull: ["$processInfo.processID", ""] },
+            orderConfirmationNo: { $ifNull: ["$processInfo.orderConfirmationNo", ""] },
             // Provide a single normalized status field for UI.
             status: "$storeStatus",
+            dispatchStatus: 1,
+            dispatchedCustomerName: 1,
+            dispatchDate: 1,
+            gatePassNumber: 1,
             createdAt: 1,
             updatedAt: 1,
             maxCapacity: 1,
@@ -1621,9 +1695,14 @@ module.exports = {
         { $sort: { createdAt: -1 } }
       ]);
 
+      const enrichedCartons = await attachModelNamesToCartons(
+        cartons,
+        (carton) => carton.orderConfirmationNo
+      );
+
       return res.status(200).json({
         success: true,
-        data: cartons,
+        data: enrichedCartons,
       });
     } catch (error) {
       console.error("Error in getStorePortalCartons:", error);

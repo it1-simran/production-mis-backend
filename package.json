@@ -19,6 +19,10 @@
     "backfill:carton:tolerance": "node scripts/backfill-carton-weight-tolerance.js",
     "backfill:carton:tolerance:dry": "node scripts/backfill-carton-weight-tolerance.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "seed:dispatch-carton": "node scripts/create-dummy-dispatch-carton.js",
+    "seed:dispatch-carton:dry": "node scripts/create-dummy-dispatch-carton.js --dry-run",
+    "repair:self-reserved-plans": "node scripts/repair-self-reserved-plans.js",
+    "repair:self-reserved-plans:dry": "node scripts/repair-self-reserved-plans.js --dry-run",
     "move:device:fqc": "node scripts/move-device-to-fqc.js",
     "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run"
   },
