@@ -5,6 +5,7 @@ const cartonHistoryModel = require("../models/cartonHistory");
 const deviceModel = require("../models/device");
 const ProcessModel = require("../models/process");
 const productModel = require("../models/Products");
+const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
 const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
@@ -26,6 +27,17 @@ const normalizeObjectIdList = (values = []) =>
       return null;
     })
     .filter(Boolean);
+
+const buildProcessIdMatch = (processId) => {
+  const normalized = String(processId || "").trim();
+  if (!normalized) return null;
+  if (mongoose.Types.ObjectId.isValid(normalized)) {
+    return {
+      $in: [new mongoose.Types.ObjectId(normalized), normalized],
+    };
+  }
+  return normalized;
+};
 
 const normalizeWeightValue = (value) => {
   if (value === undefined || value === null) return null;
@@ -108,35 +120,132 @@ const createCartonHistoryEvent = async ({
   });
 };
 
-const getConfiguredCartonWeight = async (carton) => {
-  const processDoc = await ProcessModel.findById(carton.processId).lean();
-  const productId = processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
+const toFiniteNumber = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const pickPositiveNumber = (...candidates) => {
+  for (const candidate of candidates) {
+    const parsed = toFiniteNumber(candidate);
+    if (parsed !== null && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const pickHybridTolerance = (...candidates) => {
+  let sawZero = false;
+  for (const candidate of candidates) {
+    const parsed = toFiniteNumber(candidate);
+    if (parsed === null || parsed < 0) continue;
+    if (parsed > 0) return parsed;
+    sawZero = true;
+  }
+  return sawZero ? 0 : null;
+};
+
+const extractPackagingDataFromStages = (stages = []) => {
+  const list = Array.isArray(stages) ? stages : [];
+
+  for (const stage of list) {
+    const subSteps = Array.isArray(stage?.subSteps) ? stage.subSteps : [];
+    const activePackagingSubStep = subSteps.find(
+      (subStep) => subStep?.isPackagingStatus && !subStep?.disabled && subStep?.packagingData,
+    );
+    if (activePackagingSubStep?.packagingData) {
+      return activePackagingSubStep.packagingData;
+    }
+  }
+
+  for (const stage of list) {
+    const subSteps = Array.isArray(stage?.subSteps) ? stage.subSteps : [];
+    const packagingSubStep = subSteps.find(
+      (subStep) => subStep?.isPackagingStatus && subStep?.packagingData,
+    );
+    if (packagingSubStep?.packagingData) {
+      return packagingSubStep.packagingData;
+    }
+  }
+
+  return null;
+};
+
+const getProcessAndProductDocs = async (processId) => {
+  const processDoc = processId ? await ProcessModel.findById(processId).lean() : null;
+  const productId =
+    processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
+
   let productDoc = null;
   if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
     productDoc = await productModel.findById(productId).lean();
   }
 
-  const expectedWeight = normalizeWeightValue(
-    carton?.packagingData?.cartonWeight ??
-      processDoc?.packagingData?.cartonWeight ??
-      productDoc?.packagingData?.cartonWeight ??
-      0,
-  );
+  return { processDoc, productDoc };
+};
 
-  const expectedTolerance = normalizeToleranceValue(
-    carton?.packagingData?.cartonWeightTolerance ??
-      processDoc?.packagingData?.cartonWeightTolerance ??
-      productDoc?.packagingData?.cartonWeightTolerance ??
-      0,
-  );
+const resolveEffectivePackagingConfig = ({
+  cartonPackagingData,
+  processDoc,
+  productDoc,
+} = {}) => {
+  const cartonPackaging =
+    cartonPackagingData && typeof cartonPackagingData === "object" ? cartonPackagingData : {};
+  const processPackaging = extractPackagingDataFromStages(processDoc?.stages);
+  const productPackaging = extractPackagingDataFromStages(productDoc?.stages);
 
-  const configuredCapacity = Number(
-    processDoc?.packagingData?.maxCapacity ??
-      productDoc?.packagingData?.maxCapacity ??
-      0,
-  );
+  const cartonWeight =
+    pickPositiveNumber(
+      cartonPackaging?.cartonWeight,
+      processPackaging?.cartonWeight,
+      productPackaging?.cartonWeight,
+    ) ?? 0;
 
-  return { expectedWeight, expectedTolerance, configuredCapacity, processDoc, productDoc };
+  const cartonWeightTolerance =
+    pickHybridTolerance(
+      cartonPackaging?.cartonWeightTolerance,
+      processPackaging?.cartonWeightTolerance,
+      productPackaging?.cartonWeightTolerance,
+    ) ?? 0;
+
+  const maxCapacity =
+    pickPositiveNumber(
+      cartonPackaging?.maxCapacity,
+      processPackaging?.maxCapacity,
+      productPackaging?.maxCapacity,
+    ) ?? 0;
+
+  return {
+    cartonWeight,
+    cartonWeightTolerance,
+    maxCapacity,
+    processPackaging,
+    productPackaging,
+  };
+};
+
+const getConfiguredCartonWeight = async (carton) => {
+  const { processDoc, productDoc } = await getProcessAndProductDocs(carton?.processId);
+  const resolvedPackaging = resolveEffectivePackagingConfig({
+    cartonPackagingData: carton?.packagingData,
+    processDoc,
+    productDoc,
+  });
+
+  const expectedWeight = normalizeWeightValue(resolvedPackaging.cartonWeight);
+  const expectedTolerance = normalizeToleranceValue(resolvedPackaging.cartonWeightTolerance);
+  const configuredCapacity = Number(resolvedPackaging.maxCapacity || 0);
+
+  return {
+    expectedWeight,
+    expectedTolerance,
+    configuredCapacity,
+    processDoc,
+    productDoc,
+    resolvedPackaging,
+  };
 };
 
 const isPartialOrDerivedCarton = (carton, configuredCapacity = 0) => {
@@ -225,11 +334,84 @@ const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
     devices: { $in: normalizedDeviceIds },
   });
 };
+
+const normalizeOrderConfirmationNo = (value) => String(value || "").trim();
+
+const buildOrderConfirmationModelMap = async (orderConfirmationNos = []) => {
+  const normalizedNumbers = Array.from(
+    new Set(orderConfirmationNos.map((value) => normalizeOrderConfirmationNo(value)).filter(Boolean))
+  );
+
+  if (normalizedNumbers.length === 0) return new Map();
+
+  const records = await OrderConfirmationNumberModel.find({
+    orderConfirmationNo: { $in: normalizedNumbers },
+  })
+    .select("orderConfirmationNo modelName")
+    .lean();
+
+  return new Map(
+    records.map((record) => [
+      normalizeOrderConfirmationNo(record.orderConfirmationNo),
+      String(record.modelName || "").trim(),
+    ])
+  );
+};
+
+const attachModelNamesToCartons = async (cartons = [], resolveOrderConfirmationNo = () => "") => {
+  const modelMap = await buildOrderConfirmationModelMap(
+    cartons.map((carton) => resolveOrderConfirmationNo(carton))
+  );
+
+  return cartons.map((carton) => {
+    const orderConfirmationNo = normalizeOrderConfirmationNo(resolveOrderConfirmationNo(carton));
+    const resolvedModelName = String(carton?.modelName || modelMap.get(orderConfirmationNo) || "").trim();
+
+    return {
+      ...carton,
+      modelName: resolvedModelName,
+      devices: Array.isArray(carton?.devices)
+        ? carton.devices.map((device) => ({
+            ...device,
+            modelName: String(device?.modelName || resolvedModelName || "").trim(),
+          }))
+        : [],
+    };
+  });
+};
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
-      const { processId, devices, packagingData } = req.body;
+      const { processId, devices, packagingData: rawPackagingData } = req.body;
       const deviceIds = Array.isArray(devices) ? devices : [];
+      const incomingPackagingData =
+        rawPackagingData && typeof rawPackagingData === "object" ? rawPackagingData : {};
+
+      const { processDoc, productDoc } = await getProcessAndProductDocs(processId);
+      const resolvedPackaging = resolveEffectivePackagingConfig({
+        cartonPackagingData: incomingPackagingData,
+        processDoc,
+        productDoc,
+      });
+      const effectivePackagingData = {
+        ...incomingPackagingData,
+        cartonWeight:
+          pickPositiveNumber(
+            incomingPackagingData?.cartonWeight,
+            resolvedPackaging.cartonWeight,
+          ) ?? 0,
+        cartonWeightTolerance:
+          pickHybridTolerance(
+            incomingPackagingData?.cartonWeightTolerance,
+            resolvedPackaging.cartonWeightTolerance,
+          ) ?? 0,
+        maxCapacity:
+          pickPositiveNumber(
+            incomingPackagingData?.maxCapacity,
+            resolvedPackaging.maxCapacity,
+          ) ?? 0,
+      };
+
       if (deviceIds.length === 0) {
         return res.status(400).json({
           status: 400,
@@ -265,8 +447,39 @@ module.exports = {
           });
         }
 
+        const existingPackagingData =
+          existingCarton?.packagingData && typeof existingCarton.packagingData === "object"
+            ? existingCarton.packagingData
+            : {};
+        const existingTolerance = Number(existingPackagingData?.cartonWeightTolerance ?? 0);
+        const existingWeight = Number(existingPackagingData?.cartonWeight ?? 0);
+        const existingCapacity = Number(existingCarton.maxCapacity || existingPackagingData?.maxCapacity || 0);
+
+        if (existingTolerance <= 0 && Number(effectivePackagingData.cartonWeightTolerance || 0) > 0) {
+          existingCarton.packagingData = {
+            ...existingPackagingData,
+            cartonWeightTolerance: Number(effectivePackagingData.cartonWeightTolerance || 0),
+          };
+        }
+        if (existingWeight <= 0 && Number(effectivePackagingData.cartonWeight || 0) > 0) {
+          existingCarton.packagingData = {
+            ...(existingCarton.packagingData || {}),
+            cartonWeight: Number(effectivePackagingData.cartonWeight || 0),
+          };
+        }
+        if (existingCapacity <= 0 && Number(effectivePackagingData.maxCapacity || 0) > 0) {
+          existingCarton.maxCapacity = String(Number(effectivePackagingData.maxCapacity || 0));
+          existingCarton.packagingData = {
+            ...(existingCarton.packagingData || {}),
+            maxCapacity: Number(effectivePackagingData.maxCapacity || 0),
+          };
+        }
+
         existingCarton.devices.push(...deviceIds);
-        if (existingCarton.devices.length >= existingCarton.maxCapacity) {
+        const resolvedExistingCapacity = Number(
+          existingCarton.maxCapacity || existingCarton?.packagingData?.maxCapacity || 0,
+        );
+        if (resolvedExistingCapacity > 0 && existingCarton.devices.length >= resolvedExistingCapacity) {
           existingCarton.status = "full";
         } else {
           existingCarton.status = "partial";
@@ -291,15 +504,24 @@ module.exports = {
         cartonSerial: `CARTON-${Date.now()}`,
         processId,
         devices: deviceIds,
-        packagingData,
+        packagingData: effectivePackagingData,
         cartonSize: {
-          width: packagingData?.cartonWidth ? String(packagingData.cartonWidth) : "",
-          height: packagingData?.cartonHeight ? String(packagingData.cartonHeight) : "",
-          depth: packagingData?.cartonDepth ? String(packagingData.cartonDepth) : "",
+          width: effectivePackagingData?.cartonWidth
+            ? String(effectivePackagingData.cartonWidth)
+            : "",
+          height: effectivePackagingData?.cartonHeight
+            ? String(effectivePackagingData.cartonHeight)
+            : "",
+          depth: effectivePackagingData?.cartonDepth
+            ? String(effectivePackagingData.cartonDepth)
+            : "",
         },
-        maxCapacity: packagingData.maxCapacity,
+        maxCapacity: effectivePackagingData.maxCapacity,
         status:
-          devices.length >= packagingData.maxCapacity ? "full" : "partial",
+          Number(effectivePackagingData.maxCapacity || 0) > 0 &&
+          deviceIds.length >= Number(effectivePackagingData.maxCapacity || 0)
+            ? "full"
+            : "partial",
       });
 
       await newCarton.save();
@@ -355,11 +577,15 @@ module.exports = {
   getCartonByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
+      const processIdMatch = buildProcessIdMatch(processId);
+      if (!processIdMatch) {
+        return res.status(400).json({ message: "Invalid process id." });
+      }
 
       const cartons = await cartonModel.aggregate([
         {
           $match: {
-            processId: new mongoose.Types.ObjectId(processId),
+            processId: processIdMatch,
             status: "full",
             cartonStatus: "",
           },
@@ -425,7 +651,7 @@ module.exports = {
       ]);
 
       if (!cartons || cartons.length === 0) {
-        return res.status(404).json({ message: "No Carton Found" });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
       }
 
       // 📦 Separate arrays
@@ -443,11 +669,15 @@ module.exports = {
   getCartonsIntoStore: async (req, res) => {
     try {
       const { processId } = req.params;
+      const processIdMatch = buildProcessIdMatch(processId);
+      if (!processIdMatch) {
+        return res.status(400).json({ message: "Invalid process id." });
+      }
 
       const cartons = await cartonModel.aggregate([
         {
           $match: {
-            processId: new mongoose.Types.ObjectId(processId),
+            processId: processIdMatch,
             status: "full",
             cartonStatus: "FG_TO_STORE",
           },
@@ -524,13 +754,39 @@ module.exports = {
   getCartonByProcessIdToPDI: async (req, res) => {
     try {
       const { processId } = req.params;
+      const processIdMatch = buildProcessIdMatch(processId);
+      if (!processIdMatch) {
+        return res.status(400).json({ message: "Invalid process id." });
+      }
 
       const cartons = await cartonModel.aggregate([
         {
           $match: {
-            processId: new mongoose.Types.ObjectId(processId),
-            status: "full",
-            cartonStatus: "PDI",
+            processId: processIdMatch,
+          },
+        },
+        {
+          $addFields: {
+            normalizedStatus: {
+              $toUpper: {
+                $trim: {
+                  input: { $ifNull: ["$status", ""] },
+                },
+              },
+            },
+            normalizedCartonStatus: {
+              $toUpper: {
+                $trim: {
+                  input: { $ifNull: ["$cartonStatus", ""] },
+                },
+              },
+            },
+          },
+        },
+        {
+          $match: {
+            normalizedStatus: "FULL",
+            normalizedCartonStatus: "PDI",
           },
         },
         {
@@ -682,9 +938,13 @@ module.exports = {
   getPartialCarton: async (req, res) => {
     try {
       const { processId } = req.params;
+      const processIdMatch = buildProcessIdMatch(processId);
+      if (!processIdMatch) {
+        return res.status(400).json({ message: "Invalid process id." });
+      }
       const carton = await cartonModel
         .findOne({
-          processId: processId,
+          processId: processIdMatch,
           status: "partial",
           cartonStatus: { $in: [""] },
         })
@@ -702,9 +962,13 @@ module.exports = {
   getOpenCartonsByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
+      const processIdMatch = buildProcessIdMatch(processId);
+      if (!processIdMatch) {
+        return res.status(400).json({ message: "Invalid process id." });
+      }
       const cartons = await cartonModel
         .find({
-          processId: processId,
+          processId: processIdMatch,
           status: "partial",
           cartonStatus: { $in: [""] },
         })
@@ -1031,12 +1295,14 @@ module.exports = {
   },
   fetchCurrentRunningProcessFG: async (req, res) => {
     try {
-      // Step 1: Get processes with status active/complete
       const processes = await ProcessModel.find({
         status: { $in: ["active", "complete"] },
       }).lean();
 
-      // Step 2: Get cartons for each process
+      const orderConfirmationModelMap = await buildOrderConfirmationModelMap(
+        processes.map((process) => process.orderConfirmationNo)
+      );
+
       const processData = await Promise.all(
         processes.map(async (process) => {
           const cartons = await cartonModel
@@ -1046,7 +1312,6 @@ module.exports = {
             })
             .lean();
 
-          // Step 3: Fetch devices for each carton
           const cartonsWithDevices = await Promise.all(
             cartons.map(async (carton) => {
               const devices = await deviceModel
@@ -1057,14 +1322,27 @@ module.exports = {
 
               return {
                 ...carton,
-                devices, // devices + their testRecords
+                devices,
               };
             })
           );
 
+          const resolvedModelName =
+            orderConfirmationModelMap.get(normalizeOrderConfirmationNo(process.orderConfirmationNo)) || "";
+
           return {
             ...process,
-            cartons: cartonsWithDevices,
+            modelName: resolvedModelName,
+            cartons: cartonsWithDevices.map((carton) => ({
+              ...carton,
+              modelName: String(carton?.modelName || resolvedModelName || "").trim(),
+              devices: Array.isArray(carton?.devices)
+                ? carton.devices.map((device) => ({
+                    ...device,
+                    modelName: String(device?.modelName || resolvedModelName || "").trim(),
+                  }))
+                : [],
+            })),
           };
         })
       );
@@ -1164,11 +1442,30 @@ module.exports = {
       // 7. Update all devices' current stage
       await deviceModel.updateMany(
         { _id: { $in: carton.devices } },
-        { $set: { currentStage: "KEEP_IN_STORE" } }
+        {
+          $set: {
+            currentStage: "KEEP_IN_STORE",
+            dispatchStatus: "READY",
+            dispatchInvoiceId: null,
+          },
+          $unset: {
+            customerName: 1,
+            dispatchDate: 1,
+            warrantyStartDate: 1,
+            warrantyEndDate: 1,
+          },
+        }
       );
 
       // 8. Update carton status to STOCKED
       carton.cartonStatus = "STOCKED";
+      carton.dispatchStatus = "READY";
+      carton.dispatchInvoiceId = null;
+      carton.dispatchedCustomerName = "";
+      carton.dispatchDate = null;
+      carton.gatePassNumber = "";
+      carton.reservedAt = null;
+      carton.reservedBy = null;
       await carton.save();
 
       return res.status(200).json({
@@ -1381,8 +1678,13 @@ module.exports = {
             cartonSerial: 1,
             processName: { $ifNull: ["$processInfo.name", "Unknown Process"] },
             processID: { $ifNull: ["$processInfo.processID", ""] },
+            orderConfirmationNo: { $ifNull: ["$processInfo.orderConfirmationNo", ""] },
             // Provide a single normalized status field for UI.
             status: "$storeStatus",
+            dispatchStatus: 1,
+            dispatchedCustomerName: 1,
+            dispatchDate: 1,
+            gatePassNumber: 1,
             createdAt: 1,
             updatedAt: 1,
             maxCapacity: 1,
@@ -1393,9 +1695,14 @@ module.exports = {
         { $sort: { createdAt: -1 } }
       ]);
 
+      const enrichedCartons = await attachModelNamesToCartons(
+        cartons,
+        (carton) => carton.orderConfirmationNo
+      );
+
       return res.status(200).json({
         success: true,
-        data: cartons,
+        data: enrichedCartons,
       });
     } catch (error) {
       console.error("Error in getStorePortalCartons:", error);
@@ -1458,7 +1765,18 @@ module.exports = {
         const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
         const resolvedDepth = Number(packagingData?.cartonDepth ?? cartonDepth);
         const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
-        const resolvedTolerance = Number(packagingData?.cartonWeightTolerance ?? cartonWeightTolerance ?? 0);
+        const { processDoc, productDoc } = await getProcessAndProductDocs(carton.processId);
+        const looseCartonResolvedPackaging = resolveEffectivePackagingConfig({
+          cartonPackagingData: {
+            ...(packagingData && typeof packagingData === "object" ? packagingData : {}),
+            cartonWeight: packagingData?.cartonWeight ?? cartonWeight,
+            cartonWeightTolerance: packagingData?.cartonWeightTolerance ?? cartonWeightTolerance,
+            maxCapacity: resolvedQty,
+          },
+          processDoc,
+          productDoc,
+        });
+        const resolvedTolerance = Number(looseCartonResolvedPackaging?.cartonWeightTolerance ?? 0);
 
         if (!Number.isInteger(resolvedQty) || resolvedQty <= 0) {
           return res.status(400).json({

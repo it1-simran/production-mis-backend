@@ -9,6 +9,23 @@ const deviceSchemas = new mongoose.Schema({
   modelName: { type: String, required: false, default: "" },
   status: { type: String, required: false, default: "" },
   currentStage: { type: String, required: false, default: "" },
+  dispatchStatus: {
+    type: String,
+    required: false,
+    enum: ["READY", "RESERVED", "DISPATCHED"],
+    default: undefined,
+  },
+  dispatchInvoiceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "DispatchInvoice",
+    required: false,
+    default: null,
+  },
+  dispatchDate: { type: Date, required: false, default: null },
+  customerName: { type: String, required: false, default: "" },
+  warrantyStartDate: { type: Date, required: false, default: null },
+  warrantyEndDate: { type: Date, required: false, default: null },
+  cartonSerial: { type: String, required: false, default: "" },
   flowVersion: { type: Number, required: false, default: 1 },
   flowStartedAt: { type: Date, required: false, default: null },
   createdAt: { type: Date, default: Date.now },
@@ -43,6 +60,8 @@ deviceSchemas.pre('findByIdAndUpdate', function (next) {
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
 deviceSchemas.index({ serialNo: 1, processID: 1 });
+deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
+deviceSchemas.index({ imeiNo: 1 });
 deviceSchemas.index({ productType: 1, processID: 1, currentStage: 1, status: 1 });
 
 const device = mongoose.model("devices", deviceSchemas);

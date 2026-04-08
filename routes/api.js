@@ -31,6 +31,7 @@ const cartonController = require('../controller/cartonController');
 const esimMasterController = require('../controller/esimMasterController');
 const esimMakeController = require('../controller/esimMakeController');
 const esimProfileController = require('../controller/esimProfileController');
+const dispatchController = require('../controller/dispatchController');
 const device = require('../models/device');
 connectDB();
 router.get('/items', authController.getItems);
@@ -262,6 +263,18 @@ router.get('/cartons/:cartonSerial/history', authController.authenticateToken, c
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
+router.get("/dispatch/cartons/ready", authController.authenticateToken, dispatchController.getReadyCartons);
+router.get("/dispatch/summary/processes", authController.authenticateToken, dispatchController.getProcessDispatchSummaries);
+router.get("/dispatch/cartons/:cartonSerial", authController.authenticateToken, dispatchController.getCartonBySerial);
+router.post("/dispatch/invoices", authController.authenticateToken, dispatchController.createInvoice);
+router.get("/dispatch/invoices", authController.authenticateToken, dispatchController.getInvoices);
+router.get("/dispatch/invoices/:id", authController.authenticateToken, dispatchController.getInvoiceById);
+router.put("/dispatch/invoices/:id", authController.authenticateToken, dispatchController.updateInvoice);
+router.post("/dispatch/invoices/:id/cancel", authController.authenticateToken, dispatchController.cancelInvoice);
+router.post("/dispatch/invoices/:id/confirm", authController.authenticateToken, dispatchController.confirmInvoice);
+router.get("/dispatch/invoices/:id/gate-pass", authController.authenticateToken, dispatchController.getGatePass);
+router.post("/dispatch/invoices/:id/gate-pass/pdf", authController.authenticateToken, dispatchController.generateGatePassPdf);
+router.get("/warranty/check", authController.authenticateToken, dispatchController.checkWarranty);
 router.delete("/devices/remove-duplicates", authController.authenticateToken, async (req, res) => {
   try {
     const duplicates = await device.aggregate([
