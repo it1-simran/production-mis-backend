@@ -10,6 +10,15 @@ const sendError = (res, error, fallbackMessage) =>
   });
 
 module.exports = {
+  getProcessDispatchSummaries: async (req, res) => {
+    try {
+      const summaries = await dispatchService.getProcessDispatchSummaries(req.query || {});
+      return res.status(200).json({ success: true, data: summaries });
+    } catch (error) {
+      return sendError(res, error, "Failed to fetch dispatch summaries.");
+    }
+  },
+
   getReadyCartons: async (req, res) => {
     try {
       const cartons = await dispatchService.getReadyCartons(req.query || {});

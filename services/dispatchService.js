@@ -13,6 +13,22 @@ const READY_STATUS = "READY";
 const RESERVED_STATUS = "RESERVED";
 const DISPATCHED_STATUS = "DISPATCHED";
 const STOCKED_STATUS = "STOCKED";
+const STORE_STATUSES = ["FG_TO_STORE", "STOCKED", "KEPT_IN_STORE"];
+
+const EMPTY_DISPATCH_SUMMARY = {
+  cartonsInStore: 0,
+  devicesInStore: 0,
+  cartons: {
+    ready: 0,
+    reserved: 0,
+    dispatched: 0,
+  },
+  devices: {
+    ready: 0,
+    reserved: 0,
+    dispatched: 0,
+  },
+};
 
 class DispatchService {
   constructor() {
@@ -69,6 +85,23 @@ class DispatchService {
 
   normalizeOrderConfirmationNo(value) {
     return String(value || "").trim();
+  }
+
+  normalizeObjectIdList(values = []) {
+    const tokens = Array.isArray(values)
+      ? values
+      : String(values || "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+
+    return Array.from(
+      new Set(
+        tokens
+          .map((value) => String(value || "").trim())
+          .filter((value) => mongoose.Types.ObjectId.isValid(value))
+      )
+    );
   }
 
   toPlainObject(record) {
@@ -160,6 +193,201 @@ class DispatchService {
 
     const enrichedCartons = await this.attachResolvedModelNames(cartons);
     return enrichedCartons.map((carton) => this.mapCartonForResponse(carton));
+  }
+
+  async getProcessDispatchSummaries(filters = {}) {
+    const requestedProcessIds = this.normalizeObjectIdList(filters.processIds || []);
+    const processIdObjectIds = requestedProcessIds.map((id) => new mongoose.Types.ObjectId(id));
+
+    const matchStage = {
+      normalizedStoreStatus: { $in: STORE_STATUSES },
+      processId: { $ne: null },
+    };
+
+    if (processIdObjectIds.length > 0) {
+      matchStage.processId = { $in: processIdObjectIds };
+    }
+
+    const summaries = await cartonModel.aggregate([
+      {
+        $addFields: {
+          normalizedStoreStatus: {
+            $toUpper: {
+              $ifNull: [
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$cartonStatus", null] },
+                        { $ne: ["$cartonStatus", ""] },
+                      ],
+                    },
+                    "$cartonStatus",
+                    "$status",
+                  ],
+                },
+                "",
+              ],
+            },
+          },
+          normalizedDispatchStatus: {
+            $toUpper: { $ifNull: ["$dispatchStatus", ""] },
+          },
+        },
+      },
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: "devices",
+          localField: "devices",
+          foreignField: "_id",
+          as: "deviceRows",
+        },
+      },
+      {
+        $addFields: {
+          deviceRows: {
+            $map: {
+              input: { $ifNull: ["$deviceRows", []] },
+              as: "device",
+              in: {
+                dispatchStatus: {
+                  $toUpper: { $ifNull: ["$$device.dispatchStatus", ""] },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          processId: 1,
+          normalizedStoreStatus: 1,
+          normalizedDispatchStatus: 1,
+          deviceRows: 1,
+          deviceCount: { $size: { $ifNull: ["$deviceRows", []] } },
+          devicesReadyCount: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$deviceRows", []] },
+                as: "device",
+                cond: {
+                  $or: [
+                    { $eq: ["$$device.dispatchStatus", ""] },
+                    { $eq: ["$$device.dispatchStatus", READY_STATUS] },
+                  ],
+                },
+              },
+            },
+          },
+          devicesReservedCount: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$deviceRows", []] },
+                as: "device",
+                cond: { $eq: ["$$device.dispatchStatus", RESERVED_STATUS] },
+              },
+            },
+          },
+          devicesDispatchedCount: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$deviceRows", []] },
+                as: "device",
+                cond: { $eq: ["$$device.dispatchStatus", DISPATCHED_STATUS] },
+              },
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$processId",
+          cartonsInStore: { $sum: 1 },
+          devicesInStore: { $sum: "$deviceCount" },
+          cartonsReady: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$normalizedStoreStatus", STOCKED_STATUS] },
+                    {
+                      $or: [
+                        { $eq: ["$normalizedDispatchStatus", ""] },
+                        { $eq: ["$normalizedDispatchStatus", READY_STATUS] },
+                      ],
+                    },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          cartonsReserved: {
+            $sum: {
+              $cond: [{ $eq: ["$normalizedDispatchStatus", RESERVED_STATUS] }, 1, 0],
+            },
+          },
+          cartonsDispatched: {
+            $sum: {
+              $cond: [{ $eq: ["$normalizedDispatchStatus", DISPATCHED_STATUS] }, 1, 0],
+            },
+          },
+          devicesReady: {
+            $sum: {
+              $cond: [
+                { $eq: ["$normalizedStoreStatus", STOCKED_STATUS] },
+                "$devicesReadyCount",
+                0,
+              ],
+            },
+          },
+          devicesReserved: {
+            $sum: "$devicesReservedCount",
+          },
+          devicesDispatched: {
+            $sum: "$devicesDispatchedCount",
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          processId: { $toString: "$_id" },
+          cartonsInStore: { $ifNull: ["$cartonsInStore", 0] },
+          devicesInStore: { $ifNull: ["$devicesInStore", 0] },
+          cartons: {
+            ready: { $ifNull: ["$cartonsReady", 0] },
+            reserved: { $ifNull: ["$cartonsReserved", 0] },
+            dispatched: { $ifNull: ["$cartonsDispatched", 0] },
+          },
+          devices: {
+            ready: { $ifNull: ["$devicesReady", 0] },
+            reserved: { $ifNull: ["$devicesReserved", 0] },
+            dispatched: { $ifNull: ["$devicesDispatched", 0] },
+          },
+        },
+      },
+      { $sort: { processId: 1 } },
+    ]);
+
+    if (requestedProcessIds.length === 0) {
+      return summaries;
+    }
+
+    const map = new Map(
+      summaries.map((summary) => [String(summary.processId), summary])
+    );
+
+    return requestedProcessIds.map((processId) => {
+      const existing = map.get(processId);
+      if (existing) return existing;
+      return {
+        processId,
+        ...EMPTY_DISPATCH_SUMMARY,
+      };
+    });
   }
 
   async getReadyCartonBySerial(cartonSerial) {

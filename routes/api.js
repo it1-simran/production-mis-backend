@@ -264,6 +264,7 @@ router.post('/cartons/:processId/shift', authController.authenticateToken, carto
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
 router.get("/dispatch/cartons/ready", authController.authenticateToken, dispatchController.getReadyCartons);
+router.get("/dispatch/summary/processes", authController.authenticateToken, dispatchController.getProcessDispatchSummaries);
 router.get("/dispatch/cartons/:cartonSerial", authController.authenticateToken, dispatchController.getCartonBySerial);
 router.post("/dispatch/invoices", authController.authenticateToken, dispatchController.createInvoice);
 router.get("/dispatch/invoices", authController.authenticateToken, dispatchController.getInvoices);
