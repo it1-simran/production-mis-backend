@@ -817,7 +817,23 @@ module.exports = {
       }
 
       const history = await deviceTestRecordModel
-        .find({ deviceId: device._id }, { logs: 0 }, { sort: { createdAt: -1 }, limit: 60 })
+        .find(
+          { deviceId: device._id },
+          {
+            serialNo: 1,
+            stageName: 1,
+            status: 1,
+            assignedDeviceTo: 1,
+            ngDescription: 1,
+            logs: 1,
+            flowVersion: 1,
+            flowBoundary: 1,
+            flowType: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          { sort: { createdAt: -1 }, limit: 120 },
+        )
         .lean();
       return res.status(200).json({
         status: 200,
