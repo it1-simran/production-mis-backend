@@ -1,4 +1,4 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 const moment = require("moment");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const assignedJigToPlanModel = require("../models/assignJigToPlan");
@@ -902,7 +902,7 @@ module.exports = {
             message: "Device is already in progress on seat " + claimedSeatKey + ".",
           });
         }
-        return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
+        // return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
       }
 
       const history = await deviceTestRecordModel
