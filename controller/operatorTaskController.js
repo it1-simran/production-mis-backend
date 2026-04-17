@@ -668,17 +668,38 @@ module.exports = {
   getTaskByUserID: async (req, res) => {
     try {
       const userId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) {
+        return res.status(400).json({ status: 400, message: "Invalid user id." });
+      }
+
       const task = await assignedOperatorsToPlanModel.aggregate([
         { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        { $lookup: { from: "planingandschedulings", localField: "processId", foreignField: "selectedProcess", as: "planDetails" } },
-        { $unwind: "$planDetails" },
         { $lookup: { from: "processes", localField: "processId", foreignField: "_id", as: "processDetails" } },
         { $unwind: "$processDetails" },
         { $match: { "processDetails.status": { $ne: "completed" } } },
+        {
+          $lookup: {
+            from: "planingandschedulings",
+            let: { mappedProcessId: "$processId" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: "$selectedProcess" }, { $toString: "$$mappedProcessId" }],
+                  },
+                },
+              },
+              { $sort: { updatedAt: -1, createdAt: -1 } },
+              { $limit: 1 },
+            ],
+            as: "planDetails",
+          },
+        },
+        { $unwind: { path: "$planDetails", preserveNullAndEmptyArrays: true } },
         { $lookup: { from: "assignkitstolines", localField: "processId", foreignField: "processId", as: "assignKitsToLine" } },
         { $unwind: { path: "$assignKitsToLine", preserveNullAndEmptyArrays: true } },
         { $lookup: { from: "roomplans", localField: "roomName", foreignField: "_id", as: "roomDetails" } },
-        { $unwind: "$roomDetails" },
+        { $unwind: { path: "$roomDetails", preserveNullAndEmptyArrays: true } },
         {
           $project: {
             userId: 1,
@@ -689,9 +710,10 @@ module.exports = {
             roomName: 1,
             "roomDetails.floorName": 1,
             processName: "$processDetails.name",
+            taskStartDate: { $ifNull: ["$planDetails.startDate", "$startDate"] },
             "planDetails.assignedStages": 1,
-            "planDetails.startDate": 1,
-            "planDetails.estimatedEndDate": 1,
+            "planDetails.startDate": { $ifNull: ["$planDetails.startDate", "$startDate"] },
+            "planDetails.estimatedEndDate": { $ifNull: ["$planDetails.estimatedEndDate", "$estimatedEndDate"] },
             "planDetails.roomName": 1,
             "planDetails.seatDetails": 1,
             status: "$processDetails.status",
