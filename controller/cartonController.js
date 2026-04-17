@@ -3,6 +3,7 @@ const processLogModel = require("../models/ProcessLogs");
 const cartonModel = require("../models/cartonManagement");
 const cartonHistoryModel = require("../models/cartonHistory");
 const deviceModel = require("../models/device");
+const userModel = require("../models/User");
 const ProcessModel = require("../models/process");
 const productModel = require("../models/Products");
 const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
@@ -37,6 +38,73 @@ const buildProcessIdMatch = (processId) => {
     };
   }
   return normalized;
+};
+
+const normalizeRoleToken = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const parseManagedByRoles = (managedBy) => {
+  if (!managedBy) return [];
+
+  let source = managedBy;
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed) || typeof parsed === "string") {
+        source = parsed;
+      } else {
+        source = trimmed;
+      }
+    } catch {
+      source = trimmed;
+    }
+  }
+
+  const rawValues = Array.isArray(source)
+    ? source
+    : String(source || "").split(/[,|;&/]+/);
+
+  return Array.from(
+    new Set(rawValues.map((value) => normalizeRoleToken(value)).filter(Boolean)),
+  );
+};
+
+const normalizeStageToken = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isFgToStoreStage = (stageName) => {
+  const normalized = normalizeStageToken(stageName);
+  if (!normalized) return false;
+  if (normalized === "fg to store") return true;
+  if (normalized === "keep in store") return true;
+  return normalized.includes("fg") && normalized.includes("store");
+};
+
+const resolveKeepInStoreAllowedRoles = ({ processDoc = null, productDoc = null } = {}) => {
+  const stagePool = [
+    ...(Array.isArray(processDoc?.stages) ? processDoc.stages : []),
+    ...(Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : []),
+    ...(Array.isArray(productDoc?.stages) ? productDoc.stages : []),
+    ...(Array.isArray(productDoc?.commonStages) ? productDoc.commonStages : []),
+  ];
+
+  const roles = stagePool
+    .filter((stage) =>
+      isFgToStoreStage(stage?.stageName || stage?.name || stage?.stage),
+    )
+    .flatMap((stage) => parseManagedByRoles(stage?.managedBy));
+
+  return Array.from(new Set(roles));
 };
 
 const normalizeWeightValue = (value) => {
@@ -96,9 +164,10 @@ const createCartonHistoryEvent = async ({
   reasonText = "",
   notes = "",
   extra = null,
+  session = null,
 }) => {
   if (!carton?._id || !carton?.cartonSerial || !carton?.processId) return null;
-  return cartonHistoryModel.create({
+  return cartonHistoryModel.create([{
     cartonSerial: carton.cartonSerial,
     cartonId: carton._id,
     processId: carton.processId,
@@ -117,7 +186,7 @@ const createCartonHistoryEvent = async ({
     stickerVerifiedState: !!carton?.isStickerVerified,
     extra,
     timestamp: new Date(),
-  });
+  }], session ? { session } : undefined).then((docs) => docs?.[0] || null);
 };
 
 const toFiniteNumber = (value) => {
@@ -335,6 +404,142 @@ const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
   });
 };
 
+const resolveCartonMaxCapacity = (carton) => {
+  const parsedCapacity = pickPositiveNumber(
+    carton?.maxCapacity,
+    carton?.packagingData?.maxCapacity,
+  );
+  return parsedCapacity && parsedCapacity > 0 ? Number(parsedCapacity) : 0;
+};
+
+const resolveCartonStatusFromDeviceCount = (deviceCount, maxCapacity) => {
+  const safeCount = Number(deviceCount) || 0;
+  const safeCapacity = Number(maxCapacity) || 0;
+
+  if (safeCount <= 0) {
+    return "empty";
+  }
+
+  if (safeCapacity > 0 && safeCount >= safeCapacity) {
+    return "full";
+  }
+
+  return "partial";
+};
+
+const isPackagingOpenCarton = (carton) => {
+  const lifecycleStatus = String(carton?.cartonStatus || "").trim();
+  const fillStatus = String(carton?.status || "").trim().toLowerCase();
+
+  return lifecycleStatus === "" && ["partial", "empty"].includes(fillStatus);
+};
+
+const normalizeStageText = (value) => String(value || "").trim();
+const normalizeStageKey = (value) =>
+  normalizeStageText(value).toLowerCase().replace(/\s+/g, " ");
+
+const safeParseJson = (value, fallback = {}) => {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+};
+
+const toStageArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  return [value];
+};
+
+const getStageLabel = (stage) =>
+  normalizeStageText(stage?.stageName || stage?.name || stage?.stage);
+
+const isRevertedEquivalentStatus = (status) => {
+  const normalized = normalizeStageKey(status);
+  return normalized === "reverted" || normalized === "removed";
+};
+
+const getRecordStageName = (record = {}) =>
+  normalizeStageText(
+    record?.currentLogicalStage ||
+      record?.stageName ||
+      record?.currentStage ||
+      record?.nextLogicalStage,
+  );
+
+const incrementStageTotalUPHA = (stageEntry, delta = 0) => {
+  const current = Number(stageEntry?.totalUPHA || 0);
+  const updated = current + Number(delta || 0);
+  stageEntry.totalUPHA = Math.max(updated, 0);
+};
+
+const decrementStageCount = (stageEntry, key, delta = 1) => {
+  const current = Number(stageEntry?.[key] || 0);
+  const updated = current - Number(delta || 0);
+  stageEntry[key] = Math.max(updated, 0);
+};
+
+const adjustAssignedStagesForCartonRemoval = ({
+  assignedStages = {},
+  currentSeatKey = "",
+  currentStageName = "",
+  nextSeatKey = "",
+  nextStageName = "",
+}) => {
+  const patched = assignedStages && typeof assignedStages === "object"
+    ? { ...assignedStages }
+    : {};
+
+  const applySeatStageUpdate = (seatKey, stageName, updater) => {
+    const resolvedSeatKey = normalizeStageText(seatKey);
+    const resolvedStageName = normalizeStageText(stageName);
+    if (!resolvedSeatKey || !patched[resolvedSeatKey]) return false;
+
+    const seatStages = toStageArray(patched[resolvedSeatKey]).map((item) => ({ ...item }));
+    if (seatStages.length === 0) return false;
+
+    const normalizedTargetStage = normalizeStageKey(resolvedStageName);
+    let stageIndex = seatStages.findIndex(
+      (entry) => normalizeStageKey(getStageLabel(entry)) === normalizedTargetStage,
+    );
+
+    if (stageIndex === -1 && seatStages.length === 1) {
+      stageIndex = 0;
+    }
+    if (stageIndex === -1) return false;
+
+    updater(seatStages[stageIndex]);
+    patched[resolvedSeatKey] = seatStages;
+    return true;
+  };
+
+  const currentApplied = applySeatStageUpdate(
+    currentSeatKey,
+    currentStageName,
+    (entry) => {
+      decrementStageCount(entry, "passedDevice", 1);
+      incrementStageTotalUPHA(entry, 1);
+    },
+  );
+
+  const nextApplied = applySeatStageUpdate(
+    nextSeatKey,
+    nextStageName,
+    (entry) => {
+      incrementStageTotalUPHA(entry, -1);
+    },
+  );
+
+  return {
+    assignedStages: patched,
+    currentApplied,
+    nextApplied,
+  };
+};
+
 const normalizeOrderConfirmationNo = (value) => String(value || "").trim();
 
 const buildOrderConfirmationModelMap = async (orderConfirmationNos = []) => {
@@ -374,18 +579,359 @@ const attachModelNamesToCartons = async (cartons = [], resolveOrderConfirmationN
         ? carton.devices.map((device) => ({
             ...device,
             modelName: String(device?.modelName || resolvedModelName || "").trim(),
-          }))
+      }))
         : [],
     };
   });
 };
+
+const getRecordTimestamp = (record = {}) => {
+  const raw = record?.createdAt || record?.updatedAt || 0;
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const toStatusLabel = (value = "") => {
+  const normalized = normalizeStageKey(value);
+  if (normalized === "pass") return "Pass";
+  if (normalized === "completed") return "Completed";
+  if (normalized === "ng") return "NG";
+  if (normalized === "fail") return "Fail";
+  return normalizeStageText(value);
+};
+
+const isMissingIdentityValue = (value = "") => {
+  const normalized = normalizeStageText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return (
+    !normalized ||
+    normalized === "notcaptured" ||
+    normalized === "na" ||
+    normalized === "none" ||
+    normalized === "null" ||
+    normalized === "undefined"
+  );
+};
+
+const parseIdentitySource = (source) => {
+  if (!source) return null;
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    if (!trimmed) return null;
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+  return typeof source === "object" ? source : null;
+};
+
+const doesIdentityKeyMatch = (rawKey, preferredKeys = []) => {
+  const keySegments = normalizeStageText(rawKey)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (keySegments.length === 0) return false;
+
+  return (Array.isArray(preferredKeys) ? preferredKeys : [])
+    .map((key) => normalizeStageText(key).toLowerCase().replace(/[^a-z0-9]+/g, ""))
+    .filter(Boolean)
+    .some((preferred) => keySegments.includes(preferred));
+};
+
+const tryResolveIdentityFromFieldEntry = (entry, preferredKeys = ["imei"]) => {
+  const parsedEntry = parseIdentitySource(entry);
+  if (!parsedEntry || typeof parsedEntry !== "object" || Array.isArray(parsedEntry)) {
+    return "";
+  }
+
+  const keyCandidates = [
+    parsedEntry?.fieldName,
+    parsedEntry?.name,
+    parsedEntry?.key,
+    parsedEntry?.slug,
+    parsedEntry?.label,
+    parsedEntry?.title,
+    parsedEntry?.id,
+    parsedEntry?.code,
+    parsedEntry?.type,
+  ];
+  const keyMatched = keyCandidates.some((candidate) =>
+    doesIdentityKeyMatch(candidate, preferredKeys),
+  );
+  if (!keyMatched) return "";
+
+  return resolveIdentityValue(
+    parsedEntry?.value,
+    parsedEntry?.fieldValue,
+    parsedEntry?.inputValue,
+    parsedEntry?.scannedValue,
+    parsedEntry?.data,
+    parsedEntry?.result,
+  );
+};
+
+const extractIdentityFromCustomFields = (source, preferredKeys = ["imei"]) => {
+  const parsedSource = parseIdentitySource(source);
+  if (!parsedSource || typeof parsedSource !== "object") return "";
+  const directFieldEntry = tryResolveIdentityFromFieldEntry(
+    parsedSource,
+    preferredKeys,
+  );
+  if (directFieldEntry) return directFieldEntry;
+
+  if (Array.isArray(parsedSource)) {
+    for (const entry of parsedSource) {
+      const nestedValue = extractIdentityFromCustomFields(entry, preferredKeys);
+      if (nestedValue) return nestedValue;
+    }
+    return "";
+  }
+
+  for (const [rawKey, rawValue] of Object.entries(parsedSource)) {
+    const fromFieldEntry = tryResolveIdentityFromFieldEntry(rawValue, preferredKeys);
+    if (fromFieldEntry) return fromFieldEntry;
+
+    const nestedSource = parseIdentitySource(rawValue);
+    if (nestedSource && typeof nestedSource === "object") {
+      const nestedValue = extractIdentityFromCustomFields(nestedSource, preferredKeys);
+      if (nestedValue) return nestedValue;
+    }
+
+    if (doesIdentityKeyMatch(rawKey, preferredKeys)) {
+      const candidate = normalizeStageText(rawValue);
+      if (candidate && !isMissingIdentityValue(candidate)) return candidate;
+    }
+  }
+  return "";
+};
+
+const resolveIdentityValue = (...candidates) => {
+  for (const candidate of candidates) {
+    const normalized = normalizeStageText(candidate);
+    if (normalized && !isMissingIdentityValue(normalized)) {
+      return normalized;
+    }
+  }
+  return "";
+};
+
+const pickLatestNonRevertedRecord = (records = []) => {
+  let latestRecord = null;
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    if (!record || isRevertedEquivalentStatus(record?.status)) return;
+    if (!latestRecord || getRecordTimestamp(record) >= getRecordTimestamp(latestRecord)) {
+      latestRecord = record;
+    }
+  });
+  return latestRecord;
+};
+
+const collectCartonDeviceIds = (cartons = []) => {
+  const ids = [];
+  (Array.isArray(cartons) ? cartons : []).forEach((carton) => {
+    const devices = Array.isArray(carton?.devices) ? carton.devices : [];
+    devices.forEach((device) => {
+      const candidateId = device && typeof device === "object" ? device._id : device;
+      if (candidateId) ids.push(candidateId);
+    });
+  });
+  return normalizeObjectIdList(ids);
+};
+
+const buildLatestRecordMapByDeviceIds = async (deviceIds = []) => {
+  const normalizedDeviceIds = normalizeObjectIdList(deviceIds);
+  if (normalizedDeviceIds.length === 0) return new Map();
+
+  const latestRecords = await deviceTestModel.aggregate([
+    {
+      $match: {
+        deviceId: { $in: normalizedDeviceIds },
+      },
+    },
+    {
+      $addFields: {
+        normalizedStatus: {
+          $toLower: {
+            $trim: {
+              input: { $ifNull: ["$status", ""] },
+            },
+          },
+        },
+      },
+    },
+    {
+      $match: {
+        normalizedStatus: { $nin: ["reverted", "removed"] },
+      },
+    },
+    {
+      $sort: {
+        createdAt: -1,
+        updatedAt: -1,
+        _id: -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$deviceId",
+        latest: { $first: "$$ROOT" },
+      },
+    },
+    {
+      $replaceRoot: {
+        newRoot: "$latest",
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        deviceId: 1,
+        serialNo: 1,
+        stageName: 1,
+        currentLogicalStage: 1,
+        currentStage: 1,
+        status: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+  ]);
+
+  const map = new Map();
+  latestRecords.forEach((record) => {
+    map.set(String(record?.deviceId || ""), record);
+  });
+  return map;
+};
+
+const getProcessFallbackModelName = async (processId) => {
+  if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) return "";
+
+  const processDoc = await ProcessModel.findById(processId)
+    .select("orderConfirmationNo")
+    .lean();
+  const orderConfirmationNo = normalizeOrderConfirmationNo(processDoc?.orderConfirmationNo);
+  if (!orderConfirmationNo) return "";
+
+  const modelMap = await buildOrderConfirmationModelMap([orderConfirmationNo]);
+  return normalizeStageText(modelMap.get(orderConfirmationNo));
+};
+
+const enrichCartonDevicesForResponse = ({
+  cartons = [],
+  fallbackModelName = "",
+  latestRecordByDeviceId = null,
+} = {}) => {
+  const resolvedFallbackModelName = normalizeStageText(fallbackModelName);
+
+  return (Array.isArray(cartons) ? cartons : []).map((carton) => {
+    const cartonModelName = normalizeStageText(carton?.modelName || resolvedFallbackModelName);
+    const enrichedDevices = (Array.isArray(carton?.devices) ? carton.devices : []).map((rawDevice, index) => {
+      const device = rawDevice && typeof rawDevice === "object"
+        ? { ...rawDevice }
+        : { _id: rawDevice, serialNo: normalizeStageText(rawDevice), status: "", currentStage: "" };
+      const deviceId = normalizeStageText(device?._id);
+      const fromMap = latestRecordByDeviceId instanceof Map ? latestRecordByDeviceId.get(deviceId) : null;
+      const latestRecord = fromMap || pickLatestNonRevertedRecord(device?.testRecords || []);
+
+      const displayModel = normalizeStageText(
+        device?.displayModel ||
+        device?.modelName ||
+        device?.model ||
+        device?.productModel ||
+        cartonModelName,
+      ) || "N/A";
+
+      const displayImei = resolveIdentityValue(
+        device?.displayImei,
+        device?.imeiNo,
+        device?.imei,
+        device?.ccid,
+        device?.iccid,
+        extractIdentityFromCustomFields(device?.customFields, ["imei"]),
+        extractIdentityFromCustomFields(device?.custom_fields, ["imei"]),
+        extractIdentityFromCustomFields(device?.customFields, ["ccid", "iccid"]),
+        extractIdentityFromCustomFields(device?.custom_fields, ["ccid", "iccid"]),
+        extractIdentityFromCustomFields(device, ["imei"]),
+        extractIdentityFromCustomFields(device, ["ccid", "iccid"]),
+        latestRecord?.imeiNo,
+        latestRecord?.imei,
+        latestRecord?.ccid,
+        latestRecord?.iccid,
+        extractIdentityFromCustomFields(latestRecord?.customFields, ["imei"]),
+        extractIdentityFromCustomFields(latestRecord?.customFields, ["ccid", "iccid"]),
+        extractIdentityFromCustomFields(latestRecord?.logData, ["imei"]),
+        extractIdentityFromCustomFields(latestRecord?.logData, ["ccid", "iccid"]),
+        extractIdentityFromCustomFields(latestRecord?.logs, ["imei"]),
+        extractIdentityFromCustomFields(latestRecord?.logs, ["ccid", "iccid"]),
+      ) || "Not Captured";
+
+      const displayStageStatus = toStatusLabel(
+        normalizeStageText(
+          device?.displayStageStatus ||
+          latestRecord?.status ||
+          device?.currentStage ||
+          latestRecord?.currentLogicalStage ||
+          latestRecord?.stageName ||
+          latestRecord?.currentStage ||
+          device?.status ||
+          "Pending",
+        )
+      ) || "Pending";
+
+      const serialNo = normalizeStageText(
+        device?.serialNo ||
+        device?.serial_no ||
+        device?.serial ||
+        latestRecord?.serialNo ||
+        "",
+      ) || normalizeStageText(device?._id || `UNKNOWN-${index + 1}`);
+
+      return {
+        ...device,
+        serialNo,
+        modelName: normalizeStageText(device?.modelName || displayModel),
+        displayModel,
+        displayImei,
+        displayStageStatus,
+        latestTestRecord: latestRecord || null,
+      };
+    });
+
+    return {
+      ...carton,
+      modelName: normalizeStageText(carton?.modelName || cartonModelName),
+      devices: enrichedDevices,
+    };
+  });
+};
+
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
-      const { processId, devices, packagingData: rawPackagingData } = req.body;
+      const { processId, devices, packagingData: rawPackagingData, selectedCarton: rawSelectedCarton } = req.body;
       const deviceIds = Array.isArray(devices) ? devices : [];
+      const selectedCarton = String(rawSelectedCarton || "").trim();
       const incomingPackagingData =
         rawPackagingData && typeof rawPackagingData === "object" ? rawPackagingData : {};
+      const processIdMatch = buildProcessIdMatch(processId);
+
+      if (!processIdMatch) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid process id.",
+        });
+      }
 
       const { processDoc, productDoc } = await getProcessAndProductDocs(processId);
       const resolvedPackaging = resolveEffectivePackagingConfig({
@@ -393,8 +939,19 @@ module.exports = {
         processDoc,
         productDoc,
       });
+      const resolvedCartonLength =
+        pickPositiveNumber(
+          incomingPackagingData?.cartonLength,
+          incomingPackagingData?.cartonDepth,
+          resolvedPackaging?.processPackaging?.cartonLength,
+          resolvedPackaging?.processPackaging?.cartonDepth,
+          resolvedPackaging?.productPackaging?.cartonLength,
+          resolvedPackaging?.productPackaging?.cartonDepth,
+        ) ?? 0;
       const effectivePackagingData = {
         ...incomingPackagingData,
+        cartonLength: resolvedCartonLength,
+        cartonDepth: resolvedCartonLength,
         cartonWeight:
           pickPositiveNumber(
             incomingPackagingData?.cartonWeight,
@@ -419,10 +976,32 @@ module.exports = {
         });
       }
 
-      let existingCarton = await cartonModel.findOne({
-        processId,
-        status: { $in: ["partial", "empty"] },
-      });
+      let existingCarton = null;
+
+      if (selectedCarton) {
+        existingCarton = await cartonModel.findOne({
+          processId: processIdMatch,
+          cartonSerial: selectedCarton,
+          status: { $in: ["partial", "empty"] },
+          cartonStatus: { $in: [""] },
+        });
+
+        if (!existingCarton) {
+          return res.status(409).json({
+            status: 409,
+            message: `Selected carton ${selectedCarton} is not open for packaging updates.`,
+          });
+        }
+      } else {
+        existingCarton = await cartonModel
+          .findOne({
+            processId: processIdMatch,
+            status: { $in: ["partial", "empty"] },
+            cartonStatus: { $in: [""] },
+          })
+          .sort({ updatedAt: -1, createdAt: -1, _id: -1 });
+      }
+
       if (existingCarton) {
         const existingDeviceSet = new Set(
           Array.isArray(existingCarton.devices)
@@ -476,14 +1055,11 @@ module.exports = {
         }
 
         existingCarton.devices.push(...deviceIds);
-        const resolvedExistingCapacity = Number(
-          existingCarton.maxCapacity || existingCarton?.packagingData?.maxCapacity || 0,
+        const resolvedExistingCapacity = resolveCartonMaxCapacity(existingCarton);
+        existingCarton.status = resolveCartonStatusFromDeviceCount(
+          existingCarton.devices.length,
+          resolvedExistingCapacity,
         );
-        if (resolvedExistingCapacity > 0 && existingCarton.devices.length >= resolvedExistingCapacity) {
-          existingCarton.status = "full";
-        } else {
-          existingCarton.status = "partial";
-        }
         await existingCarton.save();
         return res.status(200).json({
           status: 200,
@@ -506,22 +1082,24 @@ module.exports = {
         devices: deviceIds,
         packagingData: effectivePackagingData,
         cartonSize: {
+          length: effectivePackagingData?.cartonLength
+            ? String(effectivePackagingData.cartonLength)
+            : "",
           width: effectivePackagingData?.cartonWidth
             ? String(effectivePackagingData.cartonWidth)
             : "",
           height: effectivePackagingData?.cartonHeight
             ? String(effectivePackagingData.cartonHeight)
             : "",
-          depth: effectivePackagingData?.cartonDepth
-            ? String(effectivePackagingData.cartonDepth)
+          depth: effectivePackagingData?.cartonLength
+            ? String(effectivePackagingData.cartonLength)
             : "",
         },
         maxCapacity: effectivePackagingData.maxCapacity,
-        status:
-          Number(effectivePackagingData.maxCapacity || 0) > 0 &&
-          deviceIds.length >= Number(effectivePackagingData.maxCapacity || 0)
-            ? "full"
-            : "partial",
+        status: resolveCartonStatusFromDeviceCount(
+          deviceIds.length,
+          Number(effectivePackagingData.maxCapacity || 0),
+        ),
       });
 
       await newCarton.save();
@@ -587,7 +1165,11 @@ module.exports = {
           $match: {
             processId: processIdMatch,
             status: "full",
-            cartonStatus: "",
+            $or: [
+              { cartonStatus: { $in: ["", "LOOSE_CLOSED"] } },
+              { cartonStatus: null },
+              { cartonStatus: { $exists: false } },
+            ],
           },
         },
         {
@@ -655,11 +1237,16 @@ module.exports = {
       }
 
       // 📦 Separate arrays
-      const cartonSerials = cartons.map((c) => c.cartonSerial);
+      const fallbackModelName = await getProcessFallbackModelName(processId);
+      const enrichedCartons = enrichCartonDevicesForResponse({
+        cartons,
+        fallbackModelName,
+      });
+      const cartonSerials = enrichedCartons.map((c) => c.cartonSerial);
 
       return res.json({
         cartonSerials,
-        cartonDetails: cartons,
+        cartonDetails: enrichedCartons,
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
@@ -740,11 +1327,16 @@ module.exports = {
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
       }
-      const cartonSerials = cartons.map((c) => c.cartonSerial);
+      const fallbackModelName = await getProcessFallbackModelName(processId);
+      const enrichedCartons = enrichCartonDevicesForResponse({
+        cartons,
+        fallbackModelName,
+      });
+      const cartonSerials = enrichedCartons.map((c) => c.cartonSerial);
 
       return res.json({
         cartonSerials,
-        cartonDetails: cartons,
+        cartonDetails: enrichedCartons,
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
@@ -847,11 +1439,16 @@ module.exports = {
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
       }
-      const cartonSerials = cartons.map((c) => c.cartonSerial);
+      const fallbackModelName = await getProcessFallbackModelName(processId);
+      const enrichedCartons = enrichCartonDevicesForResponse({
+        cartons,
+        fallbackModelName,
+      });
+      const cartonSerials = enrichedCartons.map((c) => c.cartonSerial);
 
       return res.json({
         cartonSerials,
-        cartonDetails: cartons,
+        cartonDetails: enrichedCartons,
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
@@ -945,15 +1542,26 @@ module.exports = {
       const carton = await cartonModel
         .findOne({
           processId: processIdMatch,
-          status: "partial",
+          status: { $in: ["partial", "empty"] },
           cartonStatus: { $in: [""] },
         })
-        .populate("devices");
+        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
+        .populate("devices")
+        .lean();
       if (!carton) {
         return res.status(404).json({ message: "No open carton found." });
       }
+      const fallbackModelName = await getProcessFallbackModelName(processId);
+      const latestRecordByDeviceId = await buildLatestRecordMapByDeviceIds(
+        collectCartonDeviceIds([carton]),
+      );
+      const enrichedCarton = enrichCartonDevicesForResponse({
+        cartons: [carton],
+        fallbackModelName,
+        latestRecordByDeviceId,
+      })[0] || carton;
 
-      res.status(200).json(carton);
+      res.status(200).json(enrichedCarton);
     } catch (error) {
       console.error("Error fetching carton:", error);
       res.status(500).json({ error: "Server error" });
@@ -969,20 +1577,477 @@ module.exports = {
       const cartons = await cartonModel
         .find({
           processId: processIdMatch,
-          status: "partial",
+          status: { $in: ["partial", "empty"] },
           cartonStatus: { $in: [""] },
         })
+        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
         .populate("devices")
         .lean();
 
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No open cartons found." });
       }
+      const fallbackModelName = await getProcessFallbackModelName(processId);
+      const latestRecordByDeviceId = await buildLatestRecordMapByDeviceIds(
+        collectCartonDeviceIds(cartons),
+      );
+      const enrichedCartons = enrichCartonDevicesForResponse({
+        cartons,
+        fallbackModelName,
+        latestRecordByDeviceId,
+      });
 
-      return res.status(200).json(cartons);
+      return res.status(200).json(enrichedCartons);
     } catch (error) {
       console.error("Error fetching open cartons:", error);
       res.status(500).json({ error: "Server error" });
+    }
+  },
+
+  removeDevice: async (req, res) => {
+    try {
+      const {
+        processId,
+        cartonSerial: rawCartonSerial,
+        deviceSerial: rawDeviceSerial,
+        deviceId: rawDeviceId,
+      } = req.body || {};
+
+      const cartonSerial = String(rawCartonSerial || "").trim();
+      const deviceSerial = String(rawDeviceSerial || "").trim();
+      const normalizedDeviceSerial = deviceSerial.toLowerCase();
+      const deviceId = String(rawDeviceId || "").trim();
+      const processIdMatch = buildProcessIdMatch(processId);
+      const buildHttpError = (status, message) => {
+        const error = new Error(message);
+        error.status = status;
+        return error;
+      };
+
+      if (!processIdMatch) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid process id.",
+        });
+      }
+      if (!cartonSerial) {
+        return res.status(400).json({
+          status: 400,
+          message: "Carton serial is required.",
+        });
+      }
+      if (!deviceSerial && !deviceId) {
+        return res.status(400).json({
+          status: 400,
+          message: "Device serial or device id is required.",
+        });
+      }
+
+      const carton = await cartonModel.findOne({
+        processId: processIdMatch,
+        cartonSerial,
+      }).lean();
+
+      if (!carton) {
+        return res.status(404).json({
+          status: 404,
+          message: "Carton not found for this process.",
+        });
+      }
+
+      if (!isPackagingOpenCarton(carton)) {
+        return res.status(409).json({
+          status: 409,
+          message:
+            "Device removal is allowed only for cartons that are open in packaging (partial/empty).",
+        });
+      }
+
+      const cartonDeviceIds = normalizeObjectIdList(carton.devices);
+      const cartonDeviceDocs = cartonDeviceIds.length
+        ? await deviceModel
+          .find({ _id: { $in: cartonDeviceIds } })
+          .select("_id serialNo")
+          .lean()
+        : [];
+
+      const targetDevice = cartonDeviceDocs.find((deviceDoc) => {
+        const currentDeviceId = String(deviceDoc?._id || "").trim();
+        const currentSerial = String(deviceDoc?.serialNo || "")
+          .trim()
+          .toLowerCase();
+
+        return (
+          (deviceId && currentDeviceId === deviceId) ||
+          (normalizedDeviceSerial && currentSerial === normalizedDeviceSerial)
+        );
+      });
+
+      if (!targetDevice?._id) {
+        return res.status(404).json({
+          status: 404,
+          message: "Device not found in the selected carton.",
+        });
+      }
+
+      const targetDeviceId = String(targetDevice._id);
+      const targetDeviceSerial = String(targetDevice.serialNo || deviceSerial || "").trim();
+
+      const processDoc = await ProcessModel.findById(carton.processId)
+        .select("stages commonStages")
+        .lean();
+      const stageConfig = [
+        ...(Array.isArray(processDoc?.stages) ? processDoc.stages : []),
+        ...(Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : []),
+      ];
+      const packagingStageNames = Array.from(
+        new Set(
+          stageConfig
+            .filter((stage) => {
+              const subSteps = Array.isArray(stage?.subSteps) ? stage.subSteps : [];
+              return subSteps.some(
+                (subStep) => subStep?.isPackagingStatus && !subStep?.disabled,
+              );
+            })
+            .map((stage) => getStageLabel(stage))
+            .filter(Boolean),
+        ),
+      );
+
+      const latestPassQuery = {
+        deviceId: targetDevice._id,
+        processId: carton.processId,
+        status: { $regex: /^(pass|completed)$/i },
+      };
+      if (packagingStageNames.length > 0) {
+        latestPassQuery.$or = [
+          { stageName: { $in: packagingStageNames } },
+          { currentLogicalStage: { $in: packagingStageNames } },
+        ];
+      }
+
+      let latestPassRecord = await deviceTestModel
+        .findOne(latestPassQuery)
+        .sort({ createdAt: -1, updatedAt: -1, _id: -1 })
+        .lean();
+
+      if (!latestPassRecord?._id && packagingStageNames.length > 0) {
+        return res.status(409).json({
+          status: 409,
+          message:
+            "Unable to rollback carton removal because no packaging-stage pass record was found for this device.",
+        });
+      }
+      if (!latestPassRecord?._id) {
+        return res.status(409).json({
+          status: 409,
+          message: "Unable to rollback carton removal because no packaging pass record was found.",
+        });
+      }
+
+      const DOWNSTREAM_STAGE_KEYS = new Set([
+        "pdi",
+        "fg to store",
+        "fg_to_store",
+        "fg-to-store",
+        "store",
+        "dispatch",
+      ]);
+      const isDownstreamStage = (stageName = "") =>
+        DOWNSTREAM_STAGE_KEYS.has(normalizeStageKey(stageName));
+
+      let rollbackStageName = getRecordStageName(latestPassRecord);
+      if (isDownstreamStage(rollbackStageName)) {
+        const previousDeviceStage = normalizeStageText(carton?.previousDeviceStage);
+        if (previousDeviceStage && !isDownstreamStage(previousDeviceStage)) {
+          const previousStageScopedRecord = await deviceTestModel
+            .findOne({
+              deviceId: targetDevice._id,
+              processId: carton.processId,
+              status: { $regex: /^(pass|completed)$/i },
+              $or: [
+                { stageName: previousDeviceStage },
+                { currentLogicalStage: previousDeviceStage },
+              ],
+            })
+            .sort({ createdAt: -1, updatedAt: -1, _id: -1 })
+            .lean();
+
+          if (previousStageScopedRecord?._id) {
+            latestPassRecord = previousStageScopedRecord;
+            rollbackStageName = getRecordStageName(previousStageScopedRecord);
+          }
+        }
+      }
+
+      if (packagingStageNames.length > 0 && isDownstreamStage(rollbackStageName)) {
+        const packagingScopedPassRecord = await deviceTestModel
+          .findOne({
+            deviceId: targetDevice._id,
+            processId: carton.processId,
+            status: { $regex: /^(pass|completed)$/i },
+            $or: [
+              { stageName: { $in: packagingStageNames } },
+              { currentLogicalStage: { $in: packagingStageNames } },
+            ],
+          })
+          .sort({ createdAt: -1, updatedAt: -1, _id: -1 })
+          .lean();
+
+        if (packagingScopedPassRecord?._id) {
+          latestPassRecord = packagingScopedPassRecord;
+          rollbackStageName = getRecordStageName(packagingScopedPassRecord);
+        }
+      }
+
+      if (!rollbackStageName) {
+        return res.status(409).json({
+          status: 409,
+          message: "Cannot rollback carton removal because source stage could not be resolved.",
+        });
+      }
+      if (isDownstreamStage(rollbackStageName)) {
+        return res.status(409).json({
+          status: 409,
+          message:
+            "Cannot rollback carton removal because a packaging-stage source record could not be resolved.",
+        });
+      }
+
+      const stageOrderMap = new Map();
+      [...(Array.isArray(processDoc?.stages) ? processDoc.stages : []), ...(Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : [])]
+        .forEach((stage, index) => {
+          const key = normalizeStageKey(getStageLabel(stage));
+          if (key && !stageOrderMap.has(key)) {
+            stageOrderMap.set(key, index);
+          }
+        });
+      const rollbackStageKey = normalizeStageKey(rollbackStageName);
+      const rollbackStageIndex = stageOrderMap.has(rollbackStageKey)
+        ? Number(stageOrderMap.get(rollbackStageKey))
+        : -1;
+
+      const downstreamQuery = {
+        deviceId: targetDevice._id,
+        processId: carton.processId,
+        createdAt: { $gt: latestPassRecord.createdAt },
+        _id: { $ne: latestPassRecord._id },
+      };
+      if (latestPassRecord?.planId && mongoose.Types.ObjectId.isValid(String(latestPassRecord.planId))) {
+        downstreamQuery.planId = latestPassRecord.planId;
+      }
+      const downstreamRecords = await deviceTestModel
+        .find(downstreamQuery)
+        .select("status stageName currentLogicalStage currentStage createdAt")
+        .sort({ createdAt: 1, _id: 1 })
+        .lean();
+
+      const downstreamRecord = (Array.isArray(downstreamRecords) ? downstreamRecords : []).find((record) => {
+        if (isRevertedEquivalentStatus(record?.status)) return false;
+        const recordStageName = getRecordStageName(record);
+        const recordStageKey = normalizeStageKey(recordStageName);
+        if (!recordStageKey || recordStageKey === rollbackStageKey) return false;
+
+        if (rollbackStageIndex >= 0 && stageOrderMap.has(recordStageKey)) {
+          return Number(stageOrderMap.get(recordStageKey)) > rollbackStageIndex;
+        }
+
+        return true;
+      });
+
+      if (downstreamRecord) {
+        return res.status(409).json({
+          status: 409,
+          message:
+            "Cannot remove this device from carton because newer downstream stage activity already exists.",
+          downstreamStage: getRecordStageName(downstreamRecord),
+        });
+      }
+
+      let refreshedCarton = null;
+      let revertedDevice = null;
+      let rollbackSummary = null;
+
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const cartonDoc = await cartonModel.findOne({
+            _id: carton._id,
+            processId: carton.processId,
+            cartonSerial,
+          }).session(session);
+
+          if (!cartonDoc) {
+            throw buildHttpError(404, "Carton not found for this process.");
+          }
+          if (!isPackagingOpenCarton(cartonDoc)) {
+            throw buildHttpError(
+              409,
+              "Device removal is allowed only for cartons that are open in packaging (partial/empty).",
+            );
+          }
+
+          const latestPassRecordDoc = await deviceTestModel
+            .findById(latestPassRecord._id)
+            .session(session);
+          if (!latestPassRecordDoc) {
+            throw buildHttpError(
+              409,
+              "Unable to rollback carton removal because the packaging pass record is missing.",
+            );
+          }
+
+          const latestStatus = normalizeStageKey(latestPassRecordDoc.status);
+          if (!["pass", "completed"].includes(latestStatus)) {
+            throw buildHttpError(
+              409,
+              "This carton removal has already been reverted or superseded by another update.",
+            );
+          }
+
+          const beforeDeviceIds = Array.isArray(cartonDoc.devices) ? [...cartonDoc.devices] : [];
+          const deviceExistsInCarton = beforeDeviceIds.some(
+            (cartonDeviceId) => String(cartonDeviceId) === targetDeviceId,
+          );
+          if (!deviceExistsInCarton) {
+            throw buildHttpError(409, "Device is no longer present in the selected carton.");
+          }
+
+          if (!latestPassRecordDoc?.planId || !mongoose.Types.ObjectId.isValid(String(latestPassRecordDoc.planId))) {
+            throw buildHttpError(
+              409,
+              "Cannot rollback carton removal because planning context is missing.",
+            );
+          }
+
+          const planDoc = await planingModel.findById(latestPassRecordDoc.planId).session(session);
+          if (!planDoc) {
+            throw buildHttpError(
+              404,
+              "Planning data not found for rollback. Please contact production manager.",
+            );
+          }
+
+          const assignedStagesRaw = safeParseJson(planDoc.assignedStages, {});
+          const currentSeatKey = normalizeStageText(
+            latestPassRecordDoc.currentSeatKey || latestPassRecordDoc.seatNumber,
+          );
+          const nextSeatKey = normalizeStageText(latestPassRecordDoc.assignedSeatKey);
+          const nextStageName = normalizeStageText(latestPassRecordDoc.nextLogicalStage);
+          const adjustment = adjustAssignedStagesForCartonRemoval({
+            assignedStages: assignedStagesRaw,
+            currentSeatKey,
+            currentStageName: rollbackStageName,
+            nextSeatKey,
+            nextStageName,
+          });
+          planDoc.assignedStages = JSON.stringify(adjustment.assignedStages || {});
+          await planDoc.save({ session });
+
+          const existingDescription = normalizeStageText(latestPassRecordDoc.ngDescription);
+          const rollbackOperator = normalizeStageText(
+            req.user?.id ||
+              req.user?._id ||
+              latestPassRecordDoc.operatorId,
+          );
+          const rollbackReason = `Removed from carton ${cartonSerial} at ${new Date().toISOString()} by ${rollbackOperator || "system"}`;
+          latestPassRecordDoc.status = "Reverted";
+          latestPassRecordDoc.ngDescription = existingDescription
+            ? `${existingDescription} | ${rollbackReason}`
+            : rollbackReason;
+          await latestPassRecordDoc.save({ session });
+
+          const deviceDoc = await deviceModel.findById(targetDevice._id).session(session);
+          if (!deviceDoc) {
+            throw buildHttpError(404, "Device not found while applying rollback.");
+          }
+          deviceDoc.currentStage = rollbackStageName;
+          deviceDoc.status = "Pending";
+          deviceDoc.updatedAt = new Date();
+          await deviceDoc.save({ session });
+
+          cartonDoc.devices = beforeDeviceIds.filter(
+            (cartonDeviceId) => String(cartonDeviceId) !== targetDeviceId,
+          );
+          const resolvedCapacity = resolveCartonMaxCapacity(cartonDoc);
+          cartonDoc.status = resolveCartonStatusFromDeviceCount(
+            cartonDoc.devices.length,
+            resolvedCapacity,
+          );
+          cartonDoc.isStickerPrinted = false;
+          cartonDoc.isStickerVerified = false;
+          cartonDoc.isWeightVerified = false;
+          await cartonDoc.save({ session });
+
+          await createCartonHistoryEvent({
+            carton: cartonDoc,
+            eventType: "CARTON_DEVICE_REMOVED",
+            performedBy: req.user?.id,
+            fromCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
+            toCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
+            fromDeviceStage: rollbackStageName,
+            toDeviceStage: rollbackStageName,
+            notes: `Removed device ${targetDeviceSerial} from carton and reverted packaging pass.`,
+            extra: {
+              removedDeviceId: targetDeviceId,
+              removedDeviceSerial: targetDeviceSerial,
+              remainingDeviceCount: Number(cartonDoc.devices.length || 0),
+              maxCapacity: resolvedCapacity,
+              revertedTestRecordId: String(latestPassRecordDoc._id),
+              revertedStatus: "Reverted",
+              rollbackReason,
+              rollbackOperator,
+              rollbackStageName,
+              currentSeatKey,
+              nextSeatKey,
+              nextStageName,
+              countersRollbackApplied: {
+                currentStage: adjustment.currentApplied,
+                nextStage: adjustment.nextApplied,
+              },
+            },
+            session,
+          });
+
+          refreshedCarton = await cartonModel
+            .findById(cartonDoc._id)
+            .populate("devices")
+            .session(session)
+            .lean();
+
+          revertedDevice = {
+            id: String(deviceDoc._id),
+            serialNo: normalizeStageText(deviceDoc.serialNo || targetDeviceSerial),
+            currentStage: normalizeStageText(deviceDoc.currentStage),
+            status: normalizeStageText(deviceDoc.status || "Pending"),
+          };
+
+          rollbackSummary = {
+            recordId: String(latestPassRecordDoc._id),
+            status: normalizeStageText(latestPassRecordDoc.status || "Reverted"),
+            reason: rollbackReason,
+            operatorId: rollbackOperator || "",
+          };
+        });
+      } finally {
+        await session.endSession();
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device removed from carton successfully.",
+        carton: refreshedCarton || carton,
+        revertedDevice,
+        rollback: rollbackSummary,
+      });
+    } catch (error) {
+      console.error("Error removing device from carton:", error);
+      const statusCode = Number(error?.status || 500);
+      return res.status(statusCode).json({
+        status: statusCode,
+        message: error?.message || "Error removing device from carton.",
+        error: error.message,
+      });
     }
   },
 
@@ -1379,12 +2444,75 @@ module.exports = {
           .json({ success: false, message: "Carton serial is required" });
       }
 
+      if (!mongoose.Types.ObjectId.isValid(String(processId || ""))) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid process id." });
+      }
+      const processIdMatch = buildProcessIdMatch(processId);
+
+      const process = await ProcessModel.findById(processId);
+      if (!process) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Process not found." });
+      }
+
+      const requesterId = String(req.user?.id || req.user?._id || operatorId || "").trim();
+      let requesterUserType = normalizeRoleToken(req.user?.userType);
+      if (!requesterUserType && requesterId && mongoose.Types.ObjectId.isValid(requesterId)) {
+        const requesterDoc = await userModel
+          .findById(requesterId)
+          .select("userType")
+          .lean();
+        requesterUserType = normalizeRoleToken(requesterDoc?.userType);
+      }
+
+      const productDoc = process?.selectedProduct
+        ? await productModel
+            .findById(process.selectedProduct)
+            .select("stages commonStages")
+            .lean()
+        : null;
+
+      const allowedRoles = resolveKeepInStoreAllowedRoles({
+        processDoc: process,
+        productDoc,
+      });
+      const isAdminRequester = requesterUserType === "admin";
+      const hasRoleAccess =
+        isAdminRequester ||
+        allowedRoles.length === 0 ||
+        allowedRoles.includes(requesterUserType);
+
+      if (!hasRoleAccess) {
+        const allowedRolesLabel = allowedRoles.join(", ");
+        return res.status(403).json({
+          success: false,
+          message: allowedRolesLabel
+            ? `You are not authorized to keep cartons in store. Allowed role(s): ${allowedRolesLabel}.`
+            : "You are not authorized to keep cartons in store.",
+          requiredRoles: allowedRoles,
+        });
+      }
+
       // 1. Fetch the carton by carton serial no
-      const carton = await cartonModel.findOne({ cartonSerial: selectedCarton });
+      const carton = await cartonModel.findOne({
+        cartonSerial: selectedCarton,
+        processId: processIdMatch,
+      });
       if (!carton) {
         return res
           .status(404)
-          .json({ success: false, message: "Carton not found" });
+          .json({ success: false, message: "Carton not found for this process" });
+      }
+
+      const cartonWorkflowStatus = normalizeStageToken(carton?.cartonStatus);
+      if (cartonWorkflowStatus !== "fg to store") {
+        return res.status(409).json({
+          success: false,
+          message: "Keep in Store is allowed only for cartons currently in FG_TO_STORE status.",
+        });
       }
 
       // 2. Fetch all devices in that carton
@@ -1396,12 +2524,16 @@ module.exports = {
       }
 
       const deviceCount = devices.length;
+      const actorOperatorId = requesterId || String(operatorId || "").trim();
+      const resolvedOperatorId = mongoose.Types.ObjectId.isValid(actorOperatorId)
+        ? actorOperatorId
+        : null;
 
       // 3. Create device test entries for each device in the carton
       const testEntries = devices.map((device) => ({
         deviceId: device._id,
         processId,
-        operatorId,
+        operatorId: resolvedOperatorId,
         serialNo: device.serialNo,
         stageName: stageName || "FG to Store",
         status: status || "Pass",
@@ -1411,7 +2543,6 @@ module.exports = {
       await deviceTestModel.insertMany(testEntries);
 
       // 4. Update the count for the consumed kits into the process
-      const process = await ProcessModel.findById(processId);
       if (process) {
         process.consumedKits = (process.consumedKits || 0) + deviceCount;
         process.fgToStore = (process.fgToStore || 0) + deviceCount;
@@ -1485,7 +2616,11 @@ module.exports = {
     try {
       const cartons = await cartonModel.find({
         status: "full",
-        cartonStatus: ""
+        $or: [
+          { cartonStatus: { $in: ["", "LOOSE_CLOSED"] } },
+          { cartonStatus: null },
+          { cartonStatus: { $exists: false } },
+        ],
       }).populate({
         path: 'processId',
         select: 'name processID'
@@ -1717,6 +2852,7 @@ module.exports = {
         action = "existing",
         quantity,
         packagingData = {},
+        cartonLength,
         cartonWidth,
         cartonHeight,
         cartonDepth,
@@ -1761,14 +2897,18 @@ module.exports = {
 
       if (action === "assign-new") {
         const resolvedQty = Number(quantity);
+        const resolvedLength = Number(
+          packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
+        );
         const resolvedWidth = Number(packagingData?.cartonWidth ?? cartonWidth);
         const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
-        const resolvedDepth = Number(packagingData?.cartonDepth ?? cartonDepth);
         const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
         const { processDoc, productDoc } = await getProcessAndProductDocs(carton.processId);
         const looseCartonResolvedPackaging = resolveEffectivePackagingConfig({
           cartonPackagingData: {
             ...(packagingData && typeof packagingData === "object" ? packagingData : {}),
+            cartonLength: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
+            cartonDepth: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
             cartonWeight: packagingData?.cartonWeight ?? cartonWeight,
             cartonWeightTolerance: packagingData?.cartonWeightTolerance ?? cartonWeightTolerance,
             maxCapacity: resolvedQty,
@@ -1792,7 +2932,7 @@ module.exports = {
           });
         }
 
-        if (!resolvedWidth || resolvedWidth <= 0 || !resolvedHeight || resolvedHeight <= 0 || !resolvedDepth || resolvedDepth <= 0) {
+        if (!resolvedWidth || resolvedWidth <= 0 || !resolvedHeight || resolvedHeight <= 0 || !resolvedLength || resolvedLength <= 0) {
           return res.status(400).json({
             status: 400,
             message: "Carton dimensions must be greater than zero.",
@@ -1829,17 +2969,19 @@ module.exports = {
           devices: movedDevices,
           packagingData: {
             ...packagingData,
+            cartonLength: resolvedLength,
             cartonWidth: resolvedWidth,
             cartonHeight: resolvedHeight,
-            cartonDepth: resolvedDepth,
+            cartonDepth: resolvedLength,
             cartonWeight: resolvedWeight,
             cartonWeightTolerance: resolvedTolerance,
             maxCapacity: resolvedQty,
           },
           cartonSize: {
+            length: String(resolvedLength),
             width: String(resolvedWidth),
             height: String(resolvedHeight),
-            depth: String(resolvedDepth),
+            depth: String(resolvedLength),
           },
           maxCapacity: String(resolvedQty),
           status: "full",

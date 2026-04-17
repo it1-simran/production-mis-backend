@@ -53,6 +53,7 @@ const processSchema = new mongoose.Schema({
         isPackagingStatus: { type: Boolean, required: false, default: false },
         packagingData: {
           packagingType: { type: String, required: false, default: "" },
+          cartonLength: { type: Number, required: false, default: 0 },
           cartonWidth: { type: Number, required: false, default: 0 },
           cartonHeight: { type: Number, required: false, default: 0 },
           cartonDepth: { type: Number, required: false, default: 0 },

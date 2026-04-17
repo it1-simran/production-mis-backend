@@ -8,6 +8,10 @@ const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
+const {
+  computePlanInsights,
+  normalizeAssignedStagesPayload,
+} = require("../services/planInsightsService");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 
@@ -999,6 +1003,68 @@ module.exports = {
       return res
         .status(500)
         .json({ message: "Server error", error: error.message });
+    }
+  },
+  getPlanInsights: async (req, res) => {
+    try {
+      const planId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(String(planId || ""))) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid plan id",
+        });
+      }
+
+      const plan = await PlaningAndSchedulingModel.findById(planId).lean();
+      if (!plan) {
+        return res.status(404).json({
+          status: 404,
+          message: "Plan not found",
+        });
+      }
+
+      const process = plan?.selectedProcess
+        ? await ProcessModel.findById(plan.selectedProcess).lean()
+        : null;
+      if (!process) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found",
+        });
+      }
+
+      const shift = plan?.selectedShift
+        ? await ShiftModel.findById(plan.selectedShift).lean()
+        : null;
+
+      const normalizedAssignedStages = normalizeAssignedStagesPayload(
+        safeParseJson(plan?.assignedStages, {}),
+        process?.stages || [],
+        process?.commonStages || [],
+      );
+
+      const insights = await computePlanInsights({
+        planId,
+        processId: process?._id || "",
+        assignedStages: normalizedAssignedStages,
+        processStages: process?.stages || [],
+        commonStages: process?.commonStages || [],
+        selectedProduct: process?.selectedProduct || "",
+        quantity: process?.quantity || 0,
+        shift,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Plan insights fetched successfully",
+        data: insights,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to fetch plan insights",
+        error: error.message,
+      });
     }
   },
   fetchAllPlaningModel: async (req, res) => {

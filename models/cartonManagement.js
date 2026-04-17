@@ -11,6 +11,7 @@ const cartonManagementSchema = new mongoose.Schema(
     devices: [{ type: mongoose.Schema.Types.ObjectId, ref: "devices" }],
     packagingData: {
       packagingType: { type: String, required: false, default: "" },
+      cartonLength: { type: Number, required: false, default: 0 },
       cartonWidth: { type: Number, required: false, default: 0 },
       cartonHeight: { type: Number, required: false, default: 0 },
       cartonDepth: { type: Number, required: false, default: 0 },
@@ -19,6 +20,7 @@ const cartonManagementSchema = new mongoose.Schema(
       cartonWeightTolerance: { type: Number, required: false, default: 0 },
     },
     cartonSize: {
+      length: { type: String, required: false, default: "" },
       width: { type: String, required: false, default: "" },
       height: { type: String, required: false, default: "" },
       depth: { type: String, required: false, default: "" },

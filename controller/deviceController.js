@@ -913,30 +913,35 @@ module.exports = {
       markTiming("seatResolveMs", seatResolveStart);
 
       if (!resolvedSeatContext && isQcOrTrc) {
+        let savedDeviceTestRecord = null;
+        const writeSession = await mongoose.startSession();
         try {
-          const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
-          const ngPayload = {
-            processId: resolvedProcessId || null,
-            userId: data.operatorId || data.userId || null,
-            department: assignedDeviceTo,
-            serialNo: data.serialNo || "",
-            ngStage: normalizeText(data.stageName || data.ngStage || ""),
-            ...(notes ? { notes } : {}),
-          };
-          if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
-            const ngRecord = new NGDevice(ngPayload);
-            await ngRecord.save();
-          }
-        } catch (ngErr) {
-          console.error("Error creating NGDevice record:", ngErr);
+          await writeSession.withTransaction(async () => {
+            const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
+            const ngPayload = {
+              processId: resolvedProcessId || null,
+              userId: data.operatorId || data.userId || null,
+              department: assignedDeviceTo,
+              serialNo: data.serialNo || "",
+              ngStage: normalizeText(data.stageName || data.ngStage || ""),
+              ...(notes ? { notes } : {}),
+            };
+            if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
+              const ngRecord = new NGDevice(ngPayload);
+              await ngRecord.save({ session: writeSession });
+            }
+
+            const recordSaveStart = Date.now();
+            savedDeviceTestRecord = await new deviceTestRecords({
+              ...data,
+              assignedDeviceTo,
+            }).save({ session: writeSession });
+            markTiming("recordSaveMs", recordSaveStart);
+          });
+        } finally {
+          await writeSession.endSession();
         }
 
-        const recordSaveStart = Date.now();
-        const savedDeviceTestRecord = await new deviceTestRecords({
-          ...data,
-          assignedDeviceTo,
-        }).save();
-        markTiming("recordSaveMs", recordSaveStart);
         timings.totalMs = Date.now() - requestStartedAt;
         logOperatorPassTimings(timings, {
           actionStatus: actionMeta.actionStatus,
@@ -1059,6 +1064,7 @@ module.exports = {
       data.assignedParallelGroupKey = nextSeatRouting.assignedParallelGroupKey || data.assignedParallelGroupKey || "";
 
       const currentSeatStageEntry = rawSeatStages[targetStageIdx] || rawSeatStages[0] || {};
+      let pendingNgPayload = null;
       if (actionMeta.actionStatus === "Pass") {
         if (Number(currentSeatStageEntry?.totalUPHA || 0) > 0) {
           currentSeatStageEntry.totalUPHA = Number(currentSeatStageEntry.totalUPHA || 0) - 1;
@@ -1102,23 +1108,15 @@ module.exports = {
 
         data.assignedDeviceTo = assignedDeviceTo;
         if (assignedDeviceTo === "QC" || assignedDeviceTo === "TRC") {
-          try {
-            const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
-            const ngPayload = {
-              processId: resolvedProcessId || null,
-              userId: data.operatorId || data.userId || null,
-              department: assignedDeviceTo,
-              serialNo: data.serialNo || "",
-              ngStage: currentStageName || data.ngStage || "",
-              ...(notes ? { notes } : {}),
-            };
-            if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
-              const ngRecord = new NGDevice(ngPayload);
-              await ngRecord.save();
-            }
-          } catch (ngErr) {
-            console.error("Error creating NGDevice record:", ngErr);
-          }
+          const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
+          pendingNgPayload = {
+            processId: resolvedProcessId || null,
+            userId: data.operatorId || data.userId || null,
+            department: assignedDeviceTo,
+            serialNo: data.serialNo || "",
+            ngStage: currentStageName || data.ngStage || "",
+            ...(notes ? { notes } : {}),
+          };
         } else if (assignedDeviceTo) {
           const targetKey = Object.keys(rawAssignedStages).find((key) => {
             const stageEntries = toStageArray(rawAssignedStages[key]);
@@ -1213,50 +1211,60 @@ module.exports = {
         deviceUpdatePayload.status = "Rework";
         shouldUpdateDevice = true;
       }
+      let savedDeviceTestRecord = null;
+      const writeSession = await mongoose.startSession();
+      try {
+        await writeSession.withTransaction(async () => {
+          const planUpdateStart = Date.now();
+          const updateResult = await planingAndScheduling.updateOne(
+            { _id: data.planId },
+            {
+              $set: {
+                assignedStages: planing.assignedStages,
+                consumedKit: planing.consumedKit,
+                assignedCustomStagesOp: planing.assignedCustomStagesOp,
+              },
+            },
+            { session: writeSession },
+          );
+          markTiming("planUpdateMs", planUpdateStart);
+          if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
+            throw new Error("Error updating planing data.");
+          }
 
-      const planUpdateStart = Date.now();
-      const planUpdatePromise = planingAndScheduling.updateOne(
-        { _id: data.planId },
-        {
-          $set: {
-            assignedStages: planing.assignedStages,
-            consumedKit: planing.consumedKit,
-            assignedCustomStagesOp: planing.assignedCustomStagesOp,
-          },
-        },
-      ).then((result) => {
-        markTiming("planUpdateMs", planUpdateStart);
-        return result;
-      });
-
-      const deviceUpdateStart = Date.now();
-      const deviceUpdatePromise = shouldUpdateDevice
-        ? deviceModel.updateOne({ _id: deviceSnapshot._id }, { $set: deviceUpdatePayload }).then((result) => {
+          const deviceUpdateStart = Date.now();
+          if (shouldUpdateDevice) {
+            const deviceUpdateResult = await deviceModel.updateOne(
+              { _id: deviceSnapshot._id },
+              { $set: deviceUpdatePayload },
+              { session: writeSession },
+            );
             markTiming("deviceUpdateMs", deviceUpdateStart);
-            return result;
-          })
-        : Promise.resolve({ acknowledged: true, matchedCount: 1 }).then((result) => {
+            if (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount) {
+              throw new Error("Error updating device stage.");
+            }
+          } else {
             markTiming("deviceUpdateMs", deviceUpdateStart);
-            return result;
-          });
+          }
 
-      const [updateResult, deviceUpdateResult] = await Promise.all([planUpdatePromise, deviceUpdatePromise]);
-      if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
-        return res.status(500).json({
-          status: 500,
-          message: "Error updating planing data.",
-        });
-      }
-      if (shouldUpdateDevice && (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount)) {
-        return res.status(500).json({
-          status: 500,
-          message: "Error updating device stage.",
-        });
-      }
+          const recordSaveStart = Date.now();
+          savedDeviceTestRecord = await new deviceTestRecords(data).save({ session: writeSession });
+          markTiming("recordSaveMs", recordSaveStart);
 
-      const recordSaveStart = Date.now();
-      const savedDeviceTestRecord = await new deviceTestRecords(data).save();
-      markTiming("recordSaveMs", recordSaveStart);
+          if (
+            pendingNgPayload &&
+            pendingNgPayload.processId &&
+            pendingNgPayload.userId &&
+            pendingNgPayload.serialNo
+          ) {
+            const ngSaveStart = Date.now();
+            await new NGDevice(pendingNgPayload).save({ session: writeSession });
+            markTiming("ngSaveMs", ngSaveStart);
+          }
+        });
+      } finally {
+        await writeSession.endSession();
+      }
 
       if (actionMeta.actionStatus === "NG" && assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
         const attemptFilter = { deviceId: deviceSnapshot._id };
