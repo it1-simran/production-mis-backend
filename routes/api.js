@@ -99,6 +99,7 @@ router.get('/planing/view', authController.authenticateToken, planningAndSchedul
 router.delete('/planing/delete/:id', authController.authenticateToken, planningAndSchedulingController.delete);
 router.post('/planing/delete/multiple', authController.authenticateToken, planningAndSchedulingController.deletePlaningMultiple);
 router.get('/planingAndScheduling/get/:id', authController.authenticateToken, planningAndSchedulingController.getPlaningAnDschedulingByID);
+router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, planningAndSchedulingController.getPlanInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, planningAndSchedulingController.update);
 router.get('/holiday/view', authController.authenticateToken, holidayController.view);
@@ -248,6 +249,7 @@ router.get('/cartons/full', authController.authenticateToken, cartonController.g
 router.post('/carton/updatePrinting', authController.authenticateToken, cartonController.updatePrinting);
 router.put('/carton/updateWeight', authController.authenticateToken, CartonController.updateWeight);
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
+router.put('/carton/removeDevice', authController.authenticateToken, CartonController.removeDevice);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);

@@ -13,6 +13,7 @@ const {
   findDevicesByScanTokensStrict,
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
+const { computePlanInsights } = require("../services/planInsightsService");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -145,6 +146,10 @@ const getLatestStageRecordBySerial = ({ records = [], serialNo = "", stageName =
 };
 
 const getClaimSeatKey = (record = {}) => normalizeValue(record?.assignedSeatKey || record?.seatNumber || "");
+const isRevertedEquivalentStatus = (status = "") => {
+  const normalizedStatus = normalizeKey(status);
+  return normalizedStatus === "reverted" || normalizedStatus === "removed";
+};
 const isTerminalStageStatus = (status = "") => {
   const normalizedStatus = normalizeKey(status);
   return normalizedStatus === "pass" || normalizedStatus === "completed" || normalizedStatus === "ng" || normalizedStatus === "fail";
@@ -188,6 +193,10 @@ const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageN
   });
 
   if (!currentStageRecord) {
+    return true;
+  }
+
+  if (isRevertedEquivalentStatus(currentStageRecord?.status)) {
     return true;
   }
 
@@ -326,7 +335,20 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
       {
         $group: {
           _id: null,
-          totalAttempts: { $sum: 1 },
+          totalAttempts: {
+            $sum: {
+              $cond: [
+                {
+                  $in: [
+                    { $toLower: { $ifNull: ["$status", ""] } },
+                    ["pass", "completed", "ng", "fail"],
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
           totalCompleted: {
             $sum: {
               $cond: [
@@ -374,16 +396,22 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
 };
 
 const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = false }) => {
-  const [plan, assignedTaskDetails] = await Promise.all([
-    planningAndSchedulingModel.findById(planId).lean(),
-    assignedOperatorsToPlanModel.findOne({ userId: operatorId }).lean(),
-  ]);
-
+  const plan = await planningAndSchedulingModel.findById(planId).lean();
   if (!plan) {
     const error = new Error("Planning not found");
     error.status = 404;
     throw error;
   }
+
+  const assignedTaskDetails =
+    (await assignedOperatorsToPlanModel
+      .findOne({ userId: operatorId, processId: plan?.selectedProcess })
+      .sort({ updatedAt: -1 })
+      .lean()) ||
+    (await assignedOperatorsToPlanModel
+      .findOne({ userId: operatorId })
+      .sort({ updatedAt: -1 })
+      .lean());
 
   const process = plan?.selectedProcess
     ? await processModel.findById(plan.selectedProcess).lean()
@@ -440,7 +468,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : currentAssignedStageName
     : undefined;
 
-  const [latestRecords, rawDevices, operatorSummary] = await Promise.all([
+  const [latestRecords, rawDevices, canonicalInsights, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
@@ -455,6 +483,17 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
           .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
           .lean()
       : Promise.resolve([]),
+    computePlanInsights({
+      planId,
+      processId: process?._id || "",
+      operatorId,
+      assignedStages: normalizedAssignedStages,
+      processStages: process?.stages || [],
+      commonStages: process?.commonStages || [],
+      selectedProduct: process?.selectedProduct || "",
+      quantity: process?.quantity || 0,
+      shift,
+    }),
     getOperatorStats(operatorId, includeHistory),
   ]);
 
@@ -470,40 +509,53 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       })
     : [];
 
-  let overallPass = 0;
-  let overallNg = 0;
-  let overallTested = 0;
-  latestRecords.forEach((record) => {
-    const stageName = normalizeValue(record?.stageName);
-    if (!targetStageNames.has(stageName)) return;
-    const status = normalizeKey(record?.status);
-    overallTested += 1;
-    if (status === "pass" || status === "completed") overallPass += 1;
-    if (status === "ng" || status === "fail") overallNg += 1;
-  });
+  const byStage = Array.isArray(canonicalInsights?.byStage) ? canonicalInsights.byStage : [];
+  const bySeatStage = Array.isArray(canonicalInsights?.bySeatStage)
+    ? canonicalInsights.bySeatStage
+    : [];
+  const scopedStages = byStage.filter((row) =>
+    targetStageNames.has(normalizeValue(row?.stageName)),
+  );
+  const scopedSeatStages = seatKey
+    ? bySeatStage.filter(
+        (row) =>
+          String(row?.seatKey || "") === String(seatKey) &&
+          targetStageNames.has(normalizeValue(row?.stageName)),
+      )
+    : [];
 
-  const quantityCap = Number.parseInt(process?.quantity, 10) || 0;
-  if (quantityCap > 0 && overallPass + overallNg > quantityCap) {
-    const cappedPass = Math.min(overallPass, quantityCap);
-    const remaining = Math.max(quantityCap - cappedPass, 0);
-    const cappedNg = Math.min(overallNg, remaining);
-    overallPass = cappedPass;
-    overallNg = cappedNg;
-    overallTested = Math.min(overallTested, quantityCap);
-  }
-
-  const seatStageEntries = Array.isArray(assignUserStage)
-    ? assignUserStage
-    : assignUserStage
-      ? [assignUserStage]
-      : [];
-  const seatProcessedTotal = seatStageEntries.reduce((sum, stageEntry) => {
-    const passed = Number(stageEntry?.passedDevice || 0);
-    const ng = Number(stageEntry?.ngDevice || 0);
-    return sum + (Number.isFinite(passed) ? passed : 0) + (Number.isFinite(ng) ? ng : 0);
-  }, 0);
+  const scopedTotals = scopedStages.reduce(
+    (acc, row) => {
+      acc.overallTotalAttempts += Number(row?.tested || 0);
+      acc.overallTotalCompleted += Number(row?.pass || 0);
+      acc.overallTotalNg += Number(row?.ng || 0);
+      acc.scopedStageWip += Number(row?.wip || 0);
+      return acc;
+    },
+    {
+      overallTotalAttempts: 0,
+      overallTotalCompleted: 0,
+      overallTotalNg: 0,
+      scopedStageWip: 0,
+    },
+  );
+  const scopedSeatWip = scopedSeatStages.reduce(
+    (sum, row) => sum + Number(row?.wip || 0),
+    0,
+  );
+  const resolvedWipKits =
+    seatKey && scopedSeatStages.length > 0
+      ? scopedSeatWip
+      : seatKey && scopedSeatStages.length === 0
+        ? deviceQueue.length
+        : scopedTotals.scopedStageWip;
+  const resolvedLineIssueKits =
+    resolvedWipKits +
+    scopedTotals.overallTotalCompleted +
+    scopedTotals.overallTotalNg;
 
   const { operatorStats, operatorHistory } = operatorSummary;
+  const operatorToday = canonicalInsights?.totals?.operatorToday || operatorStats;
 
   const currentStatus = plan?.processStatus || plan?.status;
   const downTime = typeof plan?.downTime === "string" ? safeJsonParse(plan.downTime, {}) : plan?.downTime || {};
@@ -531,13 +583,28 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     processStagesName: (process?.stages || []).map((stage) => stage?.stageName).filter(Boolean),
     compactQueue: deviceQueue,
     counters: {
-      wipKits: deviceQueue.length,
-      lineIssueKits: deviceQueue.length + seatProcessedTotal,
+      wipKits: resolvedWipKits,
+      lineIssueKits: resolvedLineIssueKits,
       kitsShortage: 0,
-      overallTotalCompleted: overallPass,
-      overallTotalNg: overallNg,
-      overallTotalAttempts: overallTested,
-      ...operatorStats,
+      overallTotalCompleted: scopedTotals.overallTotalCompleted,
+      overallTotalNg: scopedTotals.overallTotalNg,
+      overallTotalAttempts: scopedTotals.overallTotalAttempts,
+      totalAttempts: Number(operatorToday?.totalAttempts || 0),
+      totalCompleted: Number(operatorToday?.totalCompleted || 0),
+      totalNg: Number(operatorToday?.totalNg || 0),
+    },
+    insights: {
+      ...canonicalInsights,
+      operatorScope: {
+        seatKey,
+        stageNames,
+        tested: scopedTotals.overallTotalAttempts,
+        pass: scopedTotals.overallTotalCompleted,
+        ng: scopedTotals.overallTotalNg,
+        wip: resolvedWipKits,
+        lineIssueKits: resolvedLineIssueKits,
+        kitsShortage: 0,
+      },
     },
     downTime: {
       enabled: downTimeEnabled,
@@ -817,7 +884,23 @@ module.exports = {
       }
 
       const history = await deviceTestRecordModel
-        .find({ deviceId: device._id }, { logs: 0 }, { sort: { createdAt: -1 }, limit: 60 })
+        .find(
+          { deviceId: device._id },
+          {
+            serialNo: 1,
+            stageName: 1,
+            status: 1,
+            assignedDeviceTo: 1,
+            ngDescription: 1,
+            logs: 1,
+            flowVersion: 1,
+            flowBoundary: 1,
+            flowType: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          { sort: { createdAt: -1 }, limit: 120 },
+        )
         .lean();
       return res.status(200).json({
         status: 200,
