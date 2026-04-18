@@ -588,6 +588,95 @@ const computePlanInsights = async ({
   };
 };
 
+const computeProcessInsights = async ({
+  processId = "",
+  processStages = [],
+  commonStages = [],
+  selectedProduct = "",
+  quantity = 0,
+}) => {
+  if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) {
+    return {
+      generatedAt: new Date().toISOString(),
+      totals: { tested: 0, pass: 0, ng: 0, wip: 0 },
+      byStage: [],
+    };
+  }
+
+  const stageOrderMap = buildStageOrderMap({ processStages, commonStages });
+
+  const latestMatch = { processId: new mongoose.Types.ObjectId(String(processId)) };
+  const latestRecords = await deviceTestRecordModel
+    .aggregate(buildLatestRecordPipeline(latestMatch))
+    .allowDiskUse(true);
+
+  const byStageMap = new Map();
+  const upsertStage = (stageName) => {
+    const key = normalizeKey(stageName);
+    if (!key) return null;
+    if (!byStageMap.has(key)) {
+      byStageMap.set(key, getDefaultStageRow(stageName));
+    }
+    return byStageMap.get(key);
+  };
+
+  (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
+    const stageName = normalizeValue(
+      record?.stageName ||
+      record?.currentLogicalStage ||
+      record?.currentStage ||
+      record?.nextLogicalStage,
+    );
+    if (!stageName) return;
+    if (isCountableStatus(record?.status)) {
+      const stageRow = upsertStage(stageName);
+      if (stageRow) {
+        stageRow.tested += 1;
+        if (isPassStatus(record?.status)) stageRow.pass += 1;
+        if (isNgStatus(record?.status)) stageRow.ng += 1;
+      }
+    }
+  });
+
+  const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
+  const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
+    ? await deviceModel
+        .find({
+          productType: selectedProduct,
+          processID: new mongoose.Types.ObjectId(String(processId)),
+        })
+        .select("_id serialNo status currentStage processID")
+        .lean()
+    : [];
+
+  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
+    const status = normalizeKey(device?.status);
+    if (status === "ng" || status === "completed") return;
+    const stageName = normalizeValue(device?.currentStage || firstProcessStage);
+    if (!stageName) return;
+    const stageRow = upsertStage(stageName);
+    if (stageRow) stageRow.wip += 1;
+  });
+
+  const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
+  const totals = byStage.reduce(
+    (acc, row) => {
+      acc.tested += Number(row?.tested || 0);
+      acc.pass += Number(row?.pass || 0);
+      acc.ng += Number(row?.ng || 0);
+      acc.wip += Number(row?.wip || 0);
+      return acc;
+    },
+    { tested: 0, pass: 0, ng: 0, wip: 0 },
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totals,
+    byStage,
+  };
+};
+
 module.exports = {
   normalizeValue,
   normalizeKey,
@@ -596,4 +685,5 @@ module.exports = {
   normalizeAssignedStagesPayload,
   getSeatStageEntry,
   computePlanInsights,
+  computeProcessInsights,
 };

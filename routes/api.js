@@ -100,6 +100,7 @@ router.delete('/planing/delete/:id', authController.authenticateToken, planningA
 router.post('/planing/delete/multiple', authController.authenticateToken, planningAndSchedulingController.deletePlaningMultiple);
 router.get('/planingAndScheduling/get/:id', authController.authenticateToken, planningAndSchedulingController.getPlaningAnDschedulingByID);
 router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, planningAndSchedulingController.getPlanInsights);
+router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, planningAndSchedulingController.getProcessInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, planningAndSchedulingController.update);
 router.get('/holiday/view', authController.authenticateToken, holidayController.view);
@@ -329,7 +330,15 @@ router.get('/esim-apn/view/:id', authController.authenticateToken, esimApnContro
 router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
 router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
-router.get("/process/orderconfirmation/:orderConfirmationNo",authController.authenticateToken, processController.getOrderConfirmationByNo);
+router.get("/process/orderconfirmation/:orderConfirmationNo?",authController.authenticateToken, processController.getOrderConfirmationByNo);
+router.get("/process/orderconfirmation/*",authController.authenticateToken, (req, res, next) => {
+  const fullPath = req.params[0];
+  if (fullPath) {
+    req.query.orderConfirmationNo = fullPath;
+  }
+  next();
+}, processController.getOrderConfirmationByNo);
+
 module.exports = router;
 
 

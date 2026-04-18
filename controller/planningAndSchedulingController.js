@@ -10,6 +10,7 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const {
   computePlanInsights,
+  computeProcessInsights,
   normalizeAssignedStagesPayload,
 } = require("../services/planInsightsService");
 
@@ -861,6 +862,8 @@ module.exports = {
                   processID: 1,
                   status: 1,
                   quantity: 1,
+                  issuedKits: 1,
+                  consumedKits: 1,
                   selectedProduct: 1,
                   stages: 1,
                   commonStages: 1,
@@ -952,6 +955,8 @@ module.exports = {
             startTime: "$shiftDetails.startTime",
             processStatus: "$processDetails.status",
             processQuantity: "$processDetails.quantity",
+            processIssuedKits: "$processDetails.issuedKits",
+            processConsumedKits: "$processDetails.consumedKits",
             orderConfirmationNo: "$processDetails.orderConfirmationNo",
             customerName: "$ocDetails.customerName",
             modelName: "$ocDetails.modelName",
@@ -1473,6 +1478,46 @@ module.exports = {
     } catch (error) {
       console.error(" Api Error :", error.message);
       return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getProcessInsights: async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid Process ID" });
+      }
+
+      const process = await ProcessModel.findById(id).lean();
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      const insights = await computeProcessInsights({
+        processId: id,
+        processStages: process.stages || [],
+        commonStages: process.commonStages || [],
+        selectedProduct: process.productType,
+        quantity: Number(process.quantity || 0),
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Process insights fetched successfully",
+        data: {
+          ...insights,
+          process: {
+            _id: process._id,
+            name: process.name,
+            productType: process.productType,
+            quantity: process.quantity,
+            issuedKits: process.issuedKits,
+            consumedKits: process.consumedKits,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Error in getProcessInsights:", error);
+      return res.status(500).json({ status: 500, message: error.message });
     }
   },
   getDowntimeReasons: async (req, res) => {

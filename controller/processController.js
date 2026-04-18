@@ -223,7 +223,7 @@ module.exports = {
   },
   getOrderConfirmationByNo: async (req, res) => {
     try {
-      const { orderConfirmationNo } = req.params;
+      const orderConfirmationNo = req.params.orderConfirmationNo || req.query.orderConfirmationNo;
 
       if (!orderConfirmationNo) {
         return res.status(400).json({
@@ -232,10 +232,12 @@ module.exports = {
         });
       }
 
-      // Use the model directly for a more robust query
+      // Escape regex special characters to treat the string as a literal
+      const escapedNo = orderConfirmationNo.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
       const orderConfirmation = await OrderConfirmationNumberModel.findOne({
         orderConfirmationNo: {
-          $regex: `^${orderConfirmationNo.trim()}$`,
+          $regex: `^${escapedNo}$`,
           $options: "i",
         },
       });
