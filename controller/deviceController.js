@@ -942,7 +942,7 @@ module.exports = {
           await writeSession.endSession();
         }
 
-        timings.totalMs = Date.now() - requestStartedAt;
+        timings.totalMs = Date.now() - requestStartedAt; // Total time
         logOperatorPassTimings(timings, {
           actionStatus: actionMeta.actionStatus,
           planId: data.planId || "",
