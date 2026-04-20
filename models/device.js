@@ -7,6 +7,7 @@ const deviceSchemas = new mongoose.Schema({
   imeiNo: { type: String, required: false, default: "" },
   customFields: { type: Object, required: false, default: {} },
   modelName: { type: String, required: false, default: "" },
+  ccid: { type: String, required: false, default: "" },
   status: { type: String, required: false, default: "" },
   currentStage: { type: String, required: false, default: "" },
   dispatchStatus: {
@@ -62,6 +63,7 @@ deviceSchemas.index({ processID: 1 });
 deviceSchemas.index({ serialNo: 1, processID: 1 });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });
+deviceSchemas.index({ ccid: 1 });
 deviceSchemas.index({ productType: 1, processID: 1, currentStage: 1, status: 1 });
 
 const device = mongoose.model("devices", deviceSchemas);
