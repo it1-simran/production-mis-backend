@@ -234,6 +234,282 @@ const findDevicesByScanTokens = (devices = [], scanTokens = []) => {
   return findDevicesByScanTokensBestEffort(devices, scanTokens);
 };
 
+const DEVICE_LOOKUP_SELECT_FIELDS =
+  "_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt";
+
+const isLikelyImeiToken = (token = "") => /^\d{15}$/.test(String(token || "").trim());
+const isLikelyCcidToken = (token = "") =>
+  /^\d{18,22}[a-z0-9]*$/i.test(String(token || "").trim());
+
+const buildTokenVariants = (token = "") => {
+  const normalized = normalizeValue(token);
+  if (!normalized) return [];
+
+  const variants = new Set([normalized]);
+  if (!/^\d+$/.test(normalized)) {
+    variants.add(normalized.toLowerCase());
+    variants.add(normalized.toUpperCase());
+  }
+  return Array.from(variants);
+};
+
+const resolveLookupFieldAliases = (token = "") => {
+  if (isLikelyImeiToken(token)) {
+    return [
+      "imeiNo",
+      "imei",
+      "imei_no",
+      "IMEI",
+      "imei1",
+      "imei2",
+      "IMEI1",
+      "IMEI2",
+      "imeiNo1",
+      "imeiNo2",
+      "imei_1",
+      "imei_2",
+      "imei1No",
+      "imei2No",
+    ];
+  }
+  if (isLikelyCcidToken(token)) {
+    return ["ccid", "CCID", "iccid", "ICCID", "ccidNo", "CCID1", "CCID2", "iccid1", "iccid2"];
+  }
+  return [
+    "serialNo",
+    "serial_no",
+    "serial",
+    "serialNumber",
+    "serialnumber",
+    "SN",
+    "sn",
+    "SNO",
+    "sno",
+    "imeiNo",
+    "imei",
+    "imei_no",
+    "IMEI",
+    "ccid",
+    "CCID",
+    "iccid",
+    "ICCID",
+    "ccidNo",
+  ];
+};
+
+const resolveRootIndexedAliases = (token = "") => {
+  if (isLikelyImeiToken(token)) return ["imeiNo"];
+  if (isLikelyCcidToken(token)) return ["ccid"];
+  return ["serialNo", "imeiNo", "ccid"];
+};
+
+const buildRootIndexedLookupOrClauses = (scanTokens = []) => {
+  const clauses = [];
+  const seen = new Set();
+
+  (Array.isArray(scanTokens) ? scanTokens : []).forEach((scanToken) => {
+    const variants = buildTokenVariants(scanToken);
+    if (!variants.length) return;
+
+    resolveRootIndexedAliases(scanToken).forEach((field) => {
+      const key = `${field}::${variants.join("|")}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      clauses.push({
+        [field]: variants.length === 1 ? variants[0] : { $in: variants },
+      });
+    });
+  });
+
+  return clauses;
+};
+
+const buildIdentityLookupOrClauses = ({
+  scanTokens = [],
+  currentStageName = "",
+}) => {
+  const pathPrefixes = new Set([""]);
+  pathPrefixes.add("customFields");
+
+  const normalizedCurrentStage = normalizeValue(currentStageName);
+  if (normalizedCurrentStage) {
+    pathPrefixes.add(`customFields.${normalizedCurrentStage}`);
+  }
+
+  const clauses = [];
+  const seen = new Set();
+
+  (Array.isArray(scanTokens) ? scanTokens : []).forEach((scanToken) => {
+    const variants = buildTokenVariants(scanToken);
+    if (!variants.length) return;
+    const fieldAliases = resolveLookupFieldAliases(scanToken);
+
+    fieldAliases.forEach((fieldAlias) => {
+      pathPrefixes.forEach((prefix) => {
+        const path = prefix ? `${prefix}.${fieldAlias}` : fieldAlias;
+        const key = `${path}::${variants.join("|")}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        clauses.push({
+          [path]: variants.length === 1 ? variants[0] : { $in: variants },
+        });
+      });
+    });
+  });
+
+  return clauses;
+};
+
+const resolveMatchFromCandidates = (candidateDevices = [], scanTokens = []) => {
+  const matches = findDevicesByScanTokens(candidateDevices, scanTokens);
+  if (matches.length > 1) return { ambiguous: true, match: null };
+  if (matches.length === 1) return { ambiguous: false, match: matches[0] };
+  return { ambiguous: false, match: null };
+};
+
+const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
+  const plan = await planningAndSchedulingModel
+    .findById(planId)
+    .select(
+      "_id selectedProcess assignedOperators assignedCustomStagesOp assignedStages assignedCustomStages",
+    )
+    .lean();
+  if (!plan) {
+    const error = new Error("Planning not found");
+    error.status = 404;
+    throw error;
+  }
+
+  const assignedTaskDetails =
+    (await assignedOperatorsToPlanModel
+      .findOne({ userId: operatorId, processId: plan?.selectedProcess })
+      .sort({ updatedAt: -1 })
+      .select("_id userId processId stageType")
+      .lean()) ||
+    (await assignedOperatorsToPlanModel
+      .findOne({ userId: operatorId })
+      .sort({ updatedAt: -1 })
+      .select("_id userId processId stageType")
+      .lean());
+
+  const process = plan?.selectedProcess
+    ? await processModel.findById(plan.selectedProcess).select("_id stages selectedProduct").lean()
+    : null;
+
+  const isCommon = assignedTaskDetails?.stageType === "common";
+  const assignedOperatorPayload = safeJsonParse(
+    plan?.[isCommon ? "assignedCustomStagesOp" : "assignedOperators"],
+    {},
+  );
+  const assignedStagePayload = safeJsonParse(
+    plan?.[isCommon ? "assignedCustomStages" : "assignedStages"],
+    {},
+  );
+  const normalizedAssignedStages = isCommon
+    ? assignedStagePayload
+    : normalizeAssignedStagesPayload(assignedStagePayload, process?.stages || []);
+
+  const seatKey =
+    sortSeatKeys(Object.keys(assignedOperatorPayload || {})).find((key) => {
+      const operators = Array.isArray(assignedOperatorPayload?.[key])
+        ? assignedOperatorPayload[key]
+        : assignedOperatorPayload?.[key]
+          ? [assignedOperatorPayload[key]]
+          : [];
+      return operators.some((operator) => {
+        const candidate = String(operator?._id || operator?.userId || "");
+        return candidate === String(operatorId);
+      });
+    }) || "";
+
+  const assignUserStage = seatKey ? normalizedAssignedStages?.[seatKey] || null : null;
+  const currentAssignedStage = Array.isArray(assignUserStage)
+    ? assignUserStage[0]
+    : assignUserStage;
+  const currentAssignedStageName = normalizeValue(
+    currentAssignedStage?.name ||
+      currentAssignedStage?.stageName ||
+      currentAssignedStage?.stage,
+  );
+
+  const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
+  const stageAwareCurrentStage = currentAssignedStageName
+    ? normalizeKey(currentAssignedStageName) === normalizeKey(firstStageName)
+      ? { $in: [currentAssignedStageName, "", null] }
+      : currentAssignedStageName
+    : undefined;
+
+  return {
+    plan,
+    process,
+    selectedProcess: process?._id || plan?.selectedProcess || null,
+    assignedTaskDetails,
+    normalizedAssignedStages,
+    assignUserStage,
+    currentAssignedStageName,
+    stageAwareCurrentStage,
+    seatKey,
+    operatorSeatInfo: seatKey
+      ? {
+          rowNumber: String(seatKey).split("-")[0] || "",
+          seatNumber: String(seatKey).split("-")[1] || "",
+          seatKey,
+        }
+      : null,
+  };
+};
+
+const getLatestSeatRecordForDeviceStage = async ({
+  planId,
+  processId,
+  stageName,
+  device,
+}) => {
+  const base = {};
+  if (mongoose.Types.ObjectId.isValid(String(planId || ""))) {
+    base.planId = new mongoose.Types.ObjectId(planId);
+  }
+  if (processId && mongoose.Types.ObjectId.isValid(String(processId))) {
+    base.processId = new mongoose.Types.ObjectId(processId);
+  }
+  if (stageName) {
+    base.stageName = String(stageName).trim();
+  }
+
+  const projection = {
+    serialNo: 1,
+    stageName: 1,
+    status: 1,
+    seatNumber: 1,
+    assignedSeatKey: 1,
+    createdAt: 1,
+  };
+
+  if (device?._id && mongoose.Types.ObjectId.isValid(String(device._id))) {
+    const byDeviceId = await deviceTestRecordModel
+      .findOne(
+        { ...base, deviceId: new mongoose.Types.ObjectId(String(device._id)) },
+        projection,
+        { sort: { createdAt: -1 } },
+      )
+      .lean();
+    if (byDeviceId) return byDeviceId;
+  }
+
+  const serial = normalizeValue(device?.serialNo || device?.serial_no || "");
+  if (!serial) return null;
+
+  return deviceTestRecordModel
+    .findOne(
+      { ...base, serialNo: serial },
+      projection,
+      { sort: { createdAt: -1 } },
+    )
+    .lean();
+};
+
 const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const match = { planId: new mongoose.Types.ObjectId(planId) };
   if (processId && mongoose.Types.ObjectId.isValid(processId)) {
@@ -761,31 +1037,8 @@ module.exports = {
     try {
       const { planId, operatorId } = req.params;
       const { deviceId, serialNo, scanInput } = req.query || {};
-      const summary = await buildOperatorTaskSummary({ planId, operatorId });
-      const processId = summary?.process?._id || summary?.selectedProcess;
-      const isCommon = summary?.assignedTaskDetails?.stageType === "common";
-      const normalizedAssignedStages = isCommon
-        ? safeJsonParse(summary?.plan?.assignedCustomStages, {})
-        : normalizeAssignedStagesPayload(
-            safeJsonParse(summary?.plan?.assignedStages, {}),
-            summary?.process?.stages || [],
-          );
-      const currentAssignedStage = Array.isArray(summary?.assignUserStage)
-        ? summary.assignUserStage[0]
-        : summary?.assignUserStage;
-      const currentAssignedStageName = normalizeValue(
-        currentAssignedStage?.name || currentAssignedStage?.stageName || currentAssignedStage?.stage,
-      );
-      const seatKey = normalizeValue(
-        summary?.operatorSeatInfo?.seatKey ||
-          (String(summary?.operatorSeatInfo?.rowNumber || "") + "-" + String(summary?.operatorSeatInfo?.seatNumber || "")),
-      );
-      const firstStageName = normalizeValue(summary?.process?.stages?.[0]?.stageName || "");
-      const stageAwareCurrentStage = currentAssignedStageName
-        ? normalizeKey(currentAssignedStageName) === normalizeKey(firstStageName)
-          ? { $in: [currentAssignedStageName, "", null] }
-          : currentAssignedStageName
-        : undefined;
+      const context = await buildOperatorTaskDeviceContext({ planId, operatorId });
+      const processId = context?.process?._id || context?.selectedProcess;
 
       let device = null;
       let matchMeta = null;
@@ -802,60 +1055,91 @@ module.exports = {
       if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
         device = await deviceModel.findById(deviceId).lean();
       } else if (scanTokens.length > 0) {
-        const visibleMatches = findDevicesByScanTokens(summary?.compactQueue || [], scanTokens);
-        if (visibleMatches.length > 1) {
-          return res.status(409).json(ambiguousSearchResponse);
-        }
-        if (visibleMatches.length === 1) {
-          device = visibleMatches[0].device;
-          matchMeta = visibleMatches[0];
-        }
+        const stageScopedFilter =
+          processId && context?.process?.selectedProduct
+            ? {
+                productType: context.process.selectedProduct,
+                processID: processId,
+                status: { $nin: ["NG"] },
+                ...(context.stageAwareCurrentStage !== undefined
+                  ? { currentStage: context.stageAwareCurrentStage }
+                  : {}),
+              }
+            : null;
 
-        if (!device) {
-          const stageScopedDevices = processId && summary?.process?.selectedProduct
-            ? await deviceModel
-                .find({
-                  productType: summary.process.selectedProduct,
-                  processID: processId,
-                  status: { $nin: ["NG"] },
-                  ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
-                })
-                .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
-                .lean()
-            : [];
-          const stageMatches = findDevicesByScanTokens(stageScopedDevices, scanTokens);
-          if (stageMatches.length > 1) {
+        const processScopedFilter =
+          processId && context?.process?.selectedProduct
+            ? {
+                productType: context.process.selectedProduct,
+                processID: processId,
+                status: { $nin: ["NG"] },
+              }
+            : null;
+
+        const rootIndexedClauses = buildRootIndexedLookupOrClauses(scanTokens);
+        const directLookupClauses = buildIdentityLookupOrClauses({
+          scanTokens,
+          currentStageName: context?.currentAssignedStageName || "",
+        });
+
+        const applyMatchResult = (candidateDevices = []) => {
+          const { ambiguous, match } = resolveMatchFromCandidates(
+            candidateDevices,
+            scanTokens,
+          );
+          if (ambiguous) return { ambiguous: true };
+          if (match) {
+            device = match.device;
+            matchMeta = match;
+          }
+          return { ambiguous: false };
+        };
+
+        if (stageScopedFilter && rootIndexedClauses.length > 0) {
+          const stageRootCandidates = await deviceModel
+            .find({ ...stageScopedFilter, $or: rootIndexedClauses })
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(250)
+            .lean();
+          const stageRootResult = applyMatchResult(stageRootCandidates);
+          if (stageRootResult.ambiguous) {
             return res.status(409).json(ambiguousSearchResponse);
           }
-          if (stageMatches.length === 1) {
-            device = stageMatches[0].device;
-            matchMeta = stageMatches[0];
+        }
+
+        if (!device && processScopedFilter && rootIndexedClauses.length > 0) {
+          const processRootCandidates = await deviceModel
+            .find({ ...processScopedFilter, $or: rootIndexedClauses })
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(250)
+            .lean();
+          const processRootResult = applyMatchResult(processRootCandidates);
+          if (processRootResult.ambiguous) {
+            return res.status(409).json(ambiguousSearchResponse);
           }
+        }
 
-          if (!device) {
-            const processScopedDevices = processId && summary?.process?.selectedProduct
-              ? await deviceModel
-                  .find({
-                    productType: summary.process.selectedProduct,
-                    processID: processId,
-                    status: { $nin: ["NG"] },
-                  })
-                  .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
-                  .lean()
-              : [];
+        if (!device && stageScopedFilter && directLookupClauses.length > 0) {
+          const stageDirectCandidates = await deviceModel
+            .find({ ...stageScopedFilter, $or: directLookupClauses })
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(100)
+            .lean();
+          const stageDirectResult = applyMatchResult(stageDirectCandidates);
+          if (stageDirectResult.ambiguous) {
+            return res.status(409).json(ambiguousSearchResponse);
+          }
+        }
 
-            const processMatches = findDevicesByScanTokens(
-              processScopedDevices,
-              scanTokens,
-            );
-
-            if (processMatches.length > 1) {
-              return res.status(409).json(ambiguousSearchResponse);
-            }
-            if (processMatches.length === 1) {
-              device = processMatches[0].device;
-              matchMeta = processMatches[0];
-            }
+        if (!device && processScopedFilter && directLookupClauses.length > 0) {
+          const processDirectCandidates = await deviceModel
+            .find({ ...processScopedFilter, $or: directLookupClauses })
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(100)
+            .lean();
+          const processDirectResult = applyMatchResult(processDirectCandidates);
+          if (processDirectResult.ambiguous) {
+            return res.status(409).json(ambiguousSearchResponse);
           }
         }
       } else if (serialNo) {
@@ -873,19 +1157,26 @@ module.exports = {
         });
       }
 
-      const latestRecords = processId
-        ? await getLatestDeviceTests(planId, processId, currentAssignedStageName ? [currentAssignedStageName] : []).catch(() => [])
-        : [];
+      const latestSeatRecord =
+        context?.currentAssignedStageName && context?.seatKey && processId
+          ? await getLatestSeatRecordForDeviceStage({
+              planId,
+              processId,
+              stageName: context.currentAssignedStageName,
+              device,
+            }).catch(() => null)
+          : null;
+      const latestRecords = latestSeatRecord ? [latestSeatRecord] : [];
 
-      const isVisibleToSeat = currentAssignedStageName && seatKey && processId
+      const isVisibleToSeat = context?.currentAssignedStageName && context?.seatKey && processId
         ? isDeviceVisibleToSeat({
             device,
             latestRecords,
-            operatorStageName: currentAssignedStageName,
+            operatorStageName: context.currentAssignedStageName,
             processId,
-            processStages: summary?.process?.stages || [],
-            normalizedAssignedStages,
-            seatKey,
+            processStages: context?.process?.stages || [],
+            normalizedAssignedStages: context?.normalizedAssignedStages || {},
+            seatKey: context.seatKey,
           })
         : true;
 
@@ -893,10 +1184,14 @@ module.exports = {
         const currentStageRecord = getLatestStageRecordBySerial({
           records: latestRecords,
           serialNo: device?.serialNo || serialNo,
-          stageName: currentAssignedStageName,
+          stageName: context?.currentAssignedStageName,
         });
         const claimedSeatKey = getClaimSeatKey(currentStageRecord);
-        if (claimedSeatKey && claimedSeatKey !== seatKey && !isTerminalStageStatus(currentStageRecord?.status)) {
+        if (
+          claimedSeatKey &&
+          claimedSeatKey !== context?.seatKey &&
+          !isTerminalStageStatus(currentStageRecord?.status)
+        ) {
           return res.status(409).json({
             status: 409,
             message: "Device is already in progress on seat " + claimedSeatKey + ".",
@@ -930,9 +1225,9 @@ module.exports = {
         data: {
           device,
           history,
-          process: summary.process,
-          assignUserStage: summary.assignUserStage,
-          operatorSeatInfo: summary.operatorSeatInfo,
+          process: context?.process,
+          assignUserStage: context?.assignUserStage,
+          operatorSeatInfo: context?.operatorSeatInfo,
           matchedTokens: matchMeta?.matchedTokens,
           matchedFields: matchMeta?.matchedFields,
           matchMode: matchMeta?.matchMode,

@@ -9,6 +9,7 @@ const imeiModel = require("../models/imeiModel");
 const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const OrderConfirmationModel = require("../models/orderConfirmationNumber");
 const DeviceAttempt = require("../models/deviceAttempt");
 const {
   parseStickerScanTokensFromJigFields,
@@ -469,11 +470,22 @@ module.exports = {
         Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
       );
 
+      // Fetch modelName from Order Confirmation for this process
+      let modelNameFromOc = "";
+      const processDoc = await processModel.findById(processID).select("orderConfirmationNo").lean();
+      if (processDoc?.orderConfirmationNo) {
+        const ocDoc = await OrderConfirmationModel.findOne({ orderConfirmationNo: processDoc.orderConfirmationNo }).select("modelName").lean();
+        if (ocDoc?.modelName) {
+          modelNameFromOc = ocDoc.modelName;
+        }
+      }
+
       const documents = serials.map((value) => ({
         productType,
         processID,
         serialNo: value,
         currentStage,
+        modelName: modelNameFromOc,
       }));
 
       const chunkSize = 250;
@@ -829,12 +841,12 @@ module.exports = {
 
       const deviceLookupStart = Date.now();
       const devicePromise = data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)
-        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean().then((result) => {
+        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().then((result) => {
             markTiming("deviceLookupMs", deviceLookupStart);
             return result;
           })
         : serialNo
-          ? deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean().then((result) => {
+          ? deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().then((result) => {
               markTiming("deviceLookupMs", deviceLookupStart);
               return result;
             })
@@ -867,7 +879,7 @@ module.exports = {
 
       if (!deviceSnapshot && serialNo) {
         const fallbackDeviceStart = Date.now();
-        deviceSnapshot = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID").lean();
+        deviceSnapshot = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean();
         markTiming("fallbackDeviceLookupMs", fallbackDeviceStart);
       }
       if (!deviceSnapshot?._id) {
@@ -1209,6 +1221,12 @@ module.exports = {
       } else if (assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
         deviceUpdatePayload.currentStage = assignedDeviceTo;
         deviceUpdatePayload.status = "Rework";
+
+        // Root-level identification persistence on rework/NG assignment
+        if (data.imeiNo) deviceUpdatePayload.imeiNo = String(data.imeiNo).trim();
+        if (data.ccid) deviceUpdatePayload.ccid = String(data.ccid).trim();
+        if (data.modelName) deviceUpdatePayload.modelName = String(data.modelName).trim();
+
         shouldUpdateDevice = true;
       }
       let savedDeviceTestRecord = null;
@@ -1754,10 +1772,27 @@ module.exports = {
     try {
       const serialNo = req.params.serialNo || req.body.serialNo;
       const updates = req.body || {};
-      const device = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage customFields").lean();
+      const device = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage customFields processID modelName").lean();
+
       if (!device?._id) {
         return res.status(404).json({ message: "Device with serial number not found" });
       }
+
+      // Root-level identification fields persistence
+      if (req.body.imeiNo) updates.imeiNo = String(req.body.imeiNo).trim();
+      if (req.body.ccid) updates.ccid = String(req.body.ccid).trim();
+
+      // Auto-populate modelName from Order Confirmation if missing or empty
+      if (!device.modelName && device.processID) {
+        const processDoc = await processModel.findById(device.processID).select("orderConfirmationNo").lean();
+        if (processDoc?.orderConfirmationNo) {
+          const ocDoc = await OrderConfirmationModel.findOne({ orderConfirmationNo: processDoc.orderConfirmationNo }).select("modelName").lean();
+          if (ocDoc?.modelName) {
+            updates.modelName = ocDoc.modelName;
+          }
+        }
+      }
+
 
       if (updates.customFields) {
         let incomingCustomFields = updates.customFields;
@@ -1806,10 +1841,26 @@ module.exports = {
     try {
       const deviceId = req.params.deviceId;
       const updates = req.body || {};
-      const device = await deviceModel.findById(deviceId).select("_id serialNo currentStage customFields").lean();
+      const device = await deviceModel.findById(deviceId).select("_id serialNo currentStage customFields processID modelName").lean();
       if (!device?._id) {
         return res.status(404).json({ message: "Device not found" });
       }
+
+      // Root-level identification fields persistence
+      if (req.body.imeiNo) updates.imeiNo = String(req.body.imeiNo).trim();
+      if (req.body.ccid) updates.ccid = String(req.body.ccid).trim();
+
+      // Auto-populate modelName from Order Confirmation if missing or empty
+      if (!device.modelName && device.processID) {
+        const processDoc = await processModel.findById(device.processID).select("orderConfirmationNo").lean();
+        if (processDoc?.orderConfirmationNo) {
+          const ocDoc = await OrderConfirmationModel.findOne({ orderConfirmationNo: processDoc.orderConfirmationNo }).select("modelName").lean();
+          if (ocDoc?.modelName) {
+            updates.modelName = ocDoc.modelName;
+          }
+        }
+      }
+
 
       if (updates.customFields) {
         let incomingCustomFields = updates.customFields;
