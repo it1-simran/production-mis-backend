@@ -2188,22 +2188,165 @@ module.exports = {
 
       const searchStr = String(query).trim();
 
-      // 1. Search for device by multiple fields
-      const devices = await deviceModel.find({
-        $or: [
-          { serialNo: searchStr },
-          { imeiNo: searchStr },
-          { ccid: searchStr },
-          { cartonSerial: searchStr }
-        ]
-      })
-      .populate("productType", "name")
-      .populate("processID", "processName pid orderConfirmationNo")
-      .lean();
+      // 1. Search for device by multiple fields including nested customFields
+      // We use an aggregation to allow searching within the dynamic keys of customFields
+      let devices = await deviceModel.aggregate([
+        {
+          $match: {
+            $or: [
+              { serialNo: searchStr },
+              { imeiNo: searchStr },
+              { ccid: searchStr },
+              { cartonSerial: searchStr },
+              // Fallback: search within customFields if the string looks like an identifier
+              // We check if any stage in customFields has an IMEI or CCID matching searchStr
+              {
+                $expr: {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: {
+                            $cond: {
+                              if: { $eq: [{ $type: "$customFields" }, "object"] },
+                              then: { $objectToArray: "$customFields" },
+                              else: []
+                            }
+                          },
+                          as: "stage",
+                          cond: {
+                            $gt: [
+                              {
+                                $size: {
+                                  $filter: {
+                                    input: {
+                                      $cond: {
+                                        if: { $eq: [{ $type: "$$stage.v" }, "object"] },
+                                        then: { $objectToArray: "$$stage.v" },
+                                        else: []
+                                      }
+                                    },
+                                    as: "field",
+                                    cond: {
+                                      $and: [
+                                        { $in: ["$$field.k", ["IMEI", "CCID", "imei", "ccid"]] },
+                                        { $eq: ["$$field.v", searchStr] }
+                                      ]
+                                    }
+                                  }
+                                }
+                              },
+                              0
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          $lookup: {
+            from: "products",
+            localField: "productType",
+            foreignField: "_id",
+            as: "productType"
+          }
+        },
+        { $unwind: { path: "$productType", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "processes",
+            localField: "processID",
+            foreignField: "_id",
+            as: "processID"
+          }
+        },
+        { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
+      ]);
+      // 2. If searchStr looks like a carton serial or no devices found yet,
+      // search in CartonManagement collection to find associated devices.
+      if (devices.length === 0 || searchStr.startsWith("CARTON-")) {
+        const carton = await cartonModel.findOne({ cartonSerial: searchStr }).lean();
+        if (carton && Array.isArray(carton.devices) && carton.devices.length > 0) {
+          const cartonDeviceIds = carton.devices.map(id => {
+            try { return new mongoose.Types.ObjectId(id); } catch (e) { return null; }
+          }).filter(Boolean);
+          
+          if (cartonDeviceIds.length > 0) {
+            const existingDeviceIds = new Set(devices.map(d => String(d._id)));
+            const missingDeviceIds = cartonDeviceIds.filter(id => !existingDeviceIds.has(String(id)));
+
+            if (missingDeviceIds.length > 0) {
+              const moreDevices = await deviceModel.aggregate([
+                { $match: { _id: { $in: missingDeviceIds } } },
+                {
+                  $lookup: {
+                    from: "products",
+                    localField: "productType",
+                    foreignField: "_id",
+                    as: "productType"
+                  }
+                },
+                { $unwind: { path: "$productType", preserveNullAndEmptyArrays: true } },
+                {
+                  $lookup: {
+                    from: "processes",
+                    localField: "processID",
+                    foreignField: "_id",
+                    as: "processID"
+                  }
+                },
+                { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
+              ]);
+              devices = [...devices, ...moreDevices];
+            }
+          }
+        }
+      }
 
       if (devices.length === 0) {
         return res.status(404).json({ status: 404, message: "No device found matching the query." });
       }
+
+      // Enrichment helper to find IMEI/CCID in customFields if outer ones are missing
+      const enrichDeviceIdentifiers = (dev) => {
+        let customFields = dev.customFields;
+        if (typeof customFields === "string") {
+          try {
+            customFields = JSON.parse(customFields);
+          } catch {
+            customFields = null;
+          }
+        }
+        
+        if (!customFields || typeof customFields !== "object") return dev;
+        
+        let foundImei = dev.imeiNo;
+        let foundCcid = dev.ccid;
+
+        // Iterate through stages to find missing identifiers
+        Object.values(customFields).forEach(stage => {
+          if (stage && typeof stage === "object") {
+            if (!foundImei && (stage.IMEI || stage.imei)) {
+              foundImei = stage.IMEI || stage.imei;
+            }
+            if (!foundCcid && (stage.CCID || stage.ccid)) {
+              foundCcid = stage.CCID || stage.ccid;
+            }
+          }
+        });
+
+        return {
+          ...dev,
+          imeiNo: foundImei,
+          ccid: foundCcid
+        };
+      };
 
       // If multiple devices found (e.g. searching by cartonSerial), return the list for selection
       if (devices.length > 1) {
@@ -2211,11 +2354,11 @@ module.exports = {
           status: 200,
           message: "Multiple devices found.",
           isMulti: true,
-          data: devices
+          data: devices.map(enrichDeviceIdentifiers)
         });
       }
 
-      const device = devices[0];
+      const device = enrichDeviceIdentifiers(devices[0]);
 
       // 2. Fetch Test History
       const history = await deviceTestRecords.find({
