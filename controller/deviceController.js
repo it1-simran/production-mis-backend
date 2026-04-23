@@ -11,6 +11,7 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 const OrderConfirmationModel = require("../models/orderConfirmationNumber");
 const DeviceAttempt = require("../models/deviceAttempt");
+const cartonModel = require("../models/cartonManagement");
 const {
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
@@ -2174,6 +2175,74 @@ module.exports = {
         recordsInserted: insertResult.length,
       });
     } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  getDeviceComprehensiveHistory: async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query) {
+        return res.status(400).json({ status: 400, message: "Search query is required" });
+      }
+
+      const searchStr = String(query).trim();
+
+      // 1. Search for device by multiple fields
+      const devices = await deviceModel.find({
+        $or: [
+          { serialNo: searchStr },
+          { imeiNo: searchStr },
+          { ccid: searchStr },
+          { cartonSerial: searchStr }
+        ]
+      })
+      .populate("productType", "name")
+      .populate("processID", "processName pid orderConfirmationNo")
+      .lean();
+
+      if (devices.length === 0) {
+        return res.status(404).json({ status: 404, message: "No device found matching the query." });
+      }
+
+      // If multiple devices found (e.g. searching by cartonSerial), return the list for selection
+      if (devices.length > 1) {
+        return res.status(200).json({
+          status: 200,
+          message: "Multiple devices found.",
+          isMulti: true,
+          data: devices
+        });
+      }
+
+      const device = devices[0];
+
+      // 2. Fetch Test History
+      const history = await deviceTestRecords.find({
+        deviceId: device._id
+      })
+      .populate("operatorId", "name employeeCode")
+      .sort({ createdAt: 1 })
+      .lean();
+
+      // 3. Fetch Carton Details if associated
+      let cartonDetails = null;
+      if (device.cartonSerial) {
+        cartonDetails = await cartonModel.findOne({ cartonSerial: device.cartonSerial }).lean();
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device history fetched successfully",
+        isMulti: false,
+        data: {
+          device,
+          history,
+          cartonDetails
+        }
+      });
+    } catch (error) {
+      console.error("Error in getDeviceComprehensiveHistory:", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },

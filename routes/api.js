@@ -184,6 +184,7 @@ router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToke
 router.post('/devices/searchByJigFields', authController.authenticateToken, deviceController.searchByJigFields);
 router.post('/devices/markAsResolved', authController.authenticateToken, deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
+router.get('/devices/search-history', authController.authenticateToken, deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
 router.post('/sticker/fields/create', authController.authenticateToken, stickerController.createStickerField);
