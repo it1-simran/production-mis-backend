@@ -836,7 +836,27 @@ const enrichCartonDevicesForResponse = ({
 
   return (Array.isArray(cartons) ? cartons : []).map((carton) => {
     const cartonModelName = normalizeStageText(carton?.modelName || resolvedFallbackModelName);
-    const enrichedDevices = (Array.isArray(carton?.devices) ? carton.devices : []).map((rawDevice, index) => {
+    const rawDevices = Array.isArray(carton?.devices) ? carton.devices : [];
+    
+    // ✅ Identify if some devices were lost during aggregation/population (e.g. non-existent ObjectIds)
+    const expectedCount = Number(carton?.actualDeviceCount) || 0;
+    const currentCount = rawDevices.length;
+    
+    // ✅ Create placeholders for missing devices to maintain correct "Net Qty" count
+    const paddedDevices = [...rawDevices];
+    if (expectedCount > currentCount) {
+      for (let i = currentCount; i < expectedCount; i++) {
+        paddedDevices.push({
+          _id: null,
+          serialNo: "MISSING DEVICE",
+          isMissing: true,
+          status: "Data Error",
+          currentStage: "N/A"
+        });
+      }
+    }
+
+    const enrichedDevices = paddedDevices.map((rawDevice, index) => {
       const device = rawDevice && typeof rawDevice === "object"
         ? { ...rawDevice }
         : { _id: rawDevice, serialNo: normalizeStageText(rawDevice), status: "", currentStage: "" };
@@ -895,7 +915,7 @@ const enrichCartonDevicesForResponse = ({
         device?.serial ||
         latestRecord?.serialNo ||
         "",
-      ) || normalizeStageText(device?._id || `UNKNOWN-${index + 1}`);
+      ) || normalizeStageText(device?._id || (device?.isMissing ? `MISSING DEVICE (${index + 1})` : `UNKNOWN-${index + 1}`));
 
       return {
         ...device,
@@ -1173,6 +1193,11 @@ module.exports = {
           },
         },
         {
+          $addFields: {
+            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+          },
+        },
+        {
           $lookup: {
             from: "devices",
             localField: "devices",
@@ -1227,6 +1252,7 @@ module.exports = {
             lastPdiNgReasonCode: { $first: "$lastPdiNgReasonCode" },
             lastPdiNgReasonText: { $first: "$lastPdiNgReasonText" },
             lastPdiNgNotes: { $first: "$lastPdiNgNotes" },
+            actualDeviceCount: { $first: "$actualDeviceCount" },
             devices: { $push: "$devices" },
           },
         },
@@ -1262,6 +1288,11 @@ module.exports = {
       }
 
       const cartons = await cartonModel.aggregate([
+        {
+          $addFields: {
+            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+          },
+        },
         {
           $match: {
             processId: processIdMatch,
@@ -1320,6 +1351,7 @@ module.exports = {
             looseCartonAction: { $first: "$looseCartonAction" },
             sourceCartonSerial: { $first: "$sourceCartonSerial" },
             reassignedQuantity: { $first: "$reassignedQuantity" },
+            actualDeviceCount: { $first: "$actualDeviceCount" },
             devices: { $push: "$devices" },
           },
         },
@@ -1359,6 +1391,7 @@ module.exports = {
         },
         {
           $addFields: {
+            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
             normalizedStatus: {
               $toUpper: {
                 $trim: {
@@ -1432,6 +1465,7 @@ module.exports = {
             looseCartonAction: { $first: "$looseCartonAction" },
             sourceCartonSerial: { $first: "$sourceCartonSerial" },
             reassignedQuantity: { $first: "$reassignedQuantity" },
+            actualDeviceCount: { $first: "$actualDeviceCount" },
             devices: { $push: "$devices" },
           },
         },
@@ -1539,15 +1573,35 @@ module.exports = {
       if (!processIdMatch) {
         return res.status(400).json({ message: "Invalid process id." });
       }
-      const carton = await cartonModel
-        .findOne({
-          processId: processIdMatch,
-          status: { $in: ["partial", "empty"] },
-          cartonStatus: { $in: [""] },
-        })
-        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
-        .populate("devices")
-        .lean();
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: processIdMatch,
+            status: { $in: ["partial", "empty"] },
+            cartonStatus: { $in: [""] },
+          },
+        },
+        {
+          $sort: { updatedAt: -1, createdAt: -1, _id: -1 },
+        },
+        {
+          $limit: 1,
+        },
+        {
+          $addFields: {
+            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+      ]);
+      const carton = cartons[0];
       if (!carton) {
         return res.status(404).json({ message: "No open carton found." });
       }
@@ -1574,15 +1628,31 @@ module.exports = {
       if (!processIdMatch) {
         return res.status(400).json({ message: "Invalid process id." });
       }
-      const cartons = await cartonModel
-        .find({
-          processId: processIdMatch,
-          status: { $in: ["partial", "empty"] },
-          cartonStatus: { $in: [""] },
-        })
-        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
-        .populate("devices")
-        .lean();
+      const cartons = await cartonModel.aggregate([
+        {
+          $match: {
+            processId: processIdMatch,
+            status: { $in: ["partial", "empty"] },
+            cartonStatus: { $in: [""] },
+          },
+        },
+        {
+          $sort: { updatedAt: -1, createdAt: -1, _id: -1 },
+        },
+        {
+          $addFields: {
+            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+          },
+        },
+        {
+          $lookup: {
+            from: "devices",
+            localField: "devices",
+            foreignField: "_id",
+            as: "devices",
+          },
+        },
+      ]);
 
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No open cartons found." });
