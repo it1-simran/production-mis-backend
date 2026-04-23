@@ -2270,40 +2270,53 @@ module.exports = {
       ]);
       // 2. If searchStr looks like a carton serial or no devices found yet,
       // search in CartonManagement collection to find associated devices.
+      let devicesInCartonCount = 0;
       if (devices.length === 0 || searchStr.startsWith("CARTON-")) {
         const carton = await cartonModel.findOne({ cartonSerial: searchStr }).lean();
         if (carton && Array.isArray(carton.devices) && carton.devices.length > 0) {
+          devicesInCartonCount = carton.devices.length;
           const cartonDeviceIds = carton.devices.map(id => {
             try { return new mongoose.Types.ObjectId(id); } catch (e) { return null; }
           }).filter(Boolean);
           
           if (cartonDeviceIds.length > 0) {
-            const existingDeviceIds = new Set(devices.map(d => String(d._id)));
-            const missingDeviceIds = cartonDeviceIds.filter(id => !existingDeviceIds.has(String(id)));
+            // Fetch unique devices needed for this carton
+            const moreDevices = await deviceModel.aggregate([
+              { $match: { _id: { $in: cartonDeviceIds } } },
+              {
+                $lookup: {
+                  from: "products",
+                  localField: "productType",
+                  foreignField: "_id",
+                  as: "productType"
+                }
+              },
+              { $unwind: { path: "$productType", preserveNullAndEmptyArrays: true } },
+              {
+                $lookup: {
+                  from: "processes",
+                  localField: "processID",
+                  foreignField: "_id",
+                  as: "processID"
+                }
+              },
+              { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
+            ]);
 
-            if (missingDeviceIds.length > 0) {
-              const moreDevices = await deviceModel.aggregate([
-                { $match: { _id: { $in: missingDeviceIds } } },
-                {
-                  $lookup: {
-                    from: "products",
-                    localField: "productType",
-                    foreignField: "_id",
-                    as: "productType"
-                  }
-                },
-                { $unwind: { path: "$productType", preserveNullAndEmptyArrays: true } },
-                {
-                  $lookup: {
-                    from: "processes",
-                    localField: "processID",
-                    foreignField: "_id",
-                    as: "processID"
-                  }
-                },
-                { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
-              ]);
-              devices = [...devices, ...moreDevices];
+            // Create a map for quick lookup
+            const deviceMap = new Map(moreDevices.map(d => [String(d._id), d]));
+
+            // Reconstruct the devices list to match the carton array exactly (including duplicates)
+            const orderedDevices = carton.devices.map(id => deviceMap.get(String(id))).filter(Boolean);
+            
+            // If we are doing a carton search, replace the devices list with the ordered/duplicated list
+            if (searchStr.startsWith("CARTON-")) {
+              devices = orderedDevices;
+            } else {
+              // For other searches, just append unique missing ones
+              const existingIds = new Set(devices.map(d => String(d._id)));
+              const uniqueMissing = moreDevices.filter(d => !existingIds.has(String(d._id)));
+              devices = [...devices, ...uniqueMissing];
             }
           }
         }
@@ -2353,6 +2366,7 @@ module.exports = {
         return res.status(200).json({
           status: 200,
           message: "Multiple devices found.",
+          totalCount: devicesInCartonCount || devices.length,
           isMulti: true,
           data: devices.map(enrichDeviceIdentifiers)
         });
