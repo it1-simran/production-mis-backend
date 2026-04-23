@@ -2376,7 +2376,7 @@ module.exports = {
 
       // 2. Fetch Test History
       const history = await deviceTestRecords.find({
-        deviceId: device._id
+        $or: [{ deviceId: device._id }, { serialNo: device.serialNo }].filter(c => Object.values(c)[0])
       })
       .populate("operatorId", "name employeeCode")
       .sort({ createdAt: 1 })
