@@ -547,15 +547,7 @@ const computePlanInsights = async ({
     { tested: 0, pass: 0, ng: 0, wip: 0 },
   );
 
-  const quantityCap = Number(quantity || 0);
-  if (quantityCap > 0 && totals.pass + totals.ng > quantityCap) {
-    const cappedPass = Math.min(totals.pass, quantityCap);
-    const remaining = Math.max(quantityCap - cappedPass, 0);
-    const cappedNg = Math.min(totals.ng, remaining);
-    totals.pass = cappedPass;
-    totals.ng = cappedNg;
-    totals.tested = Math.min(totals.tested, quantityCap);
-  }
+  // Return results without capping. Analytics should reflect physical reality even if it exceeds planned quantity.
 
   const targetUpha = getTargetUpha({ processStages, commonStages });
   const productiveHours = getShiftProductiveHours(shift);
