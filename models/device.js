@@ -42,17 +42,69 @@ deviceSchemas.pre('save', function (next) {
       this.customFields = {};
     }
   }
+
+  // Auto-populate imeiNo from customFields if missing
+  if (!this.imeiNo && this.customFields) {
+    const cf = this.customFields;
+    const imei = (cf.Functional && cf.Functional.IMEI) || 
+                 (cf.functional && cf.functional.imei) ||
+                 (cf.Functional && cf.Functional.imei) ||
+                 (cf.functional && cf.functional.IMEI);
+    if (imei) {
+      this.imeiNo = String(imei).trim();
+    }
+  }
   next();
 });
 
 // Middleware for findByIdAndUpdate
-deviceSchemas.pre('findByIdAndUpdate', function (next) {
+deviceSchemas.pre('findOneAndUpdate', function (next) {
   const update = this.getUpdate();
-  if (update && typeof update.$set?.customFields === 'string') {
-    try {
-      update.$set.customFields = JSON.parse(update.$set.customFields);
-    } catch (err) {
-      update.$set.customFields = {};
+  if (update && update.$set) {
+    let cf = update.$set.customFields;
+    if (typeof cf === 'string') {
+      try {
+        cf = JSON.parse(cf);
+        update.$set.customFields = cf;
+      } catch (err) {
+        // ignore
+      }
+    }
+    
+    if (!update.$set.imeiNo && cf) {
+      const imei = (cf.Functional && cf.Functional.IMEI) || 
+                   (cf.functional && cf.functional.imei) ||
+                   (cf.Functional && cf.Functional.imei) ||
+                   (cf.functional && cf.functional.IMEI);
+      if (imei) {
+        update.$set.imeiNo = String(imei).trim();
+      }
+    }
+  }
+  next();
+});
+
+deviceSchemas.pre('updateOne', function (next) {
+  const update = this.getUpdate();
+  if (update && update.$set) {
+    let cf = update.$set.customFields;
+    if (typeof cf === 'string') {
+      try {
+        cf = JSON.parse(cf);
+        update.$set.customFields = cf;
+      } catch (err) {
+        // ignore
+      }
+    }
+    
+    if (!update.$set.imeiNo && cf) {
+      const imei = (cf.Functional && cf.Functional.IMEI) || 
+                   (cf.functional && cf.functional.imei) ||
+                   (cf.Functional && cf.Functional.imei) ||
+                   (cf.functional && cf.functional.IMEI);
+      if (imei) {
+        update.$set.imeiNo = String(imei).trim();
+      }
     }
   }
   next();
