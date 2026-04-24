@@ -436,6 +436,44 @@ const buildActionResponseMeta = (status) => {
     message: readableStatus ? `Device ${readableStatus} saved successfully` : "Device saved successfully",
   };
 };
+const resolveDeviceIdentity = (device) => {
+  if (!device) return device;
+  let imeiNo = device.imeiNo;
+  let ccid = device.ccid;
+
+  let customFields = device.customFields;
+  if (typeof customFields === "string") {
+    try {
+      customFields = JSON.parse(customFields);
+    } catch {
+      customFields = null;
+    }
+  }
+
+  if (customFields && typeof customFields === "object") {
+    // Priority: Functional.IMEI as requested
+    if (!imeiNo && customFields.Functional && (customFields.Functional.IMEI || customFields.Functional.imei)) {
+      imeiNo = customFields.Functional.IMEI || customFields.Functional.imei;
+    }
+
+    // Fallback: search all stages
+    if (!imeiNo || !ccid) {
+      Object.values(customFields).forEach(stage => {
+        if (stage && typeof stage === "object") {
+          if (!imeiNo && (stage.IMEI || stage.imei)) imeiNo = stage.IMEI || stage.imei;
+          if (!ccid && (stage.CCID || stage.ccid)) ccid = stage.CCID || stage.ccid;
+        }
+      });
+    }
+  }
+
+  return {
+    ...device,
+    imeiNo: imeiNo ? String(imeiNo).trim() : device.imeiNo,
+    ccid: ccid ? String(ccid).trim() : device.ccid,
+  };
+};
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -604,7 +642,8 @@ module.exports = {
         });
       }
 
-      const devicesWithHistory = devices.map((device) => {
+      const devicesWithHistory = devices.map((deviceRaw) => {
+        const device = resolveDeviceIdentity(deviceRaw);
         const allHistory = historyByDevice.get(String(device?._id)) || [];
         const activeFlowVersion = Number(device?.flowVersion || 1);
         const currentFlowHistory = allHistory.filter((history) => {
@@ -1515,6 +1554,7 @@ module.exports = {
 
       const deviceTestRecord = await deviceTestRecords
         .find(query, null, { sort: { createdAt: -1 } })
+        .populate("deviceId")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
@@ -1530,7 +1570,14 @@ module.exports = {
       return res.status(200).json({
         status: 200,
         message: "Device records retrieved successfully",
-        data: deviceTestRecord,
+        data: deviceTestRecord.map((record) => {
+          const device = resolveDeviceIdentity(record.deviceId);
+          return {
+            ...record,
+            deviceInfo: device,
+            imeiNo: device?.imeiNo || record.imeiNo,
+          };
+        }),
       });
     } catch (error) {
       return res.status(500).json({
@@ -1564,7 +1611,14 @@ module.exports = {
       return res.status(200).json({
         status: 200,
         message: "Devices Record retrieved successfully",
-        data: deviceTestHistory,
+        data: deviceTestHistory.map((record) => {
+          const device = resolveDeviceIdentity(record.deviceId);
+          return {
+            ...record,
+            deviceInfo: device,
+            imeiNo: device?.imeiNo || record.imeiNo,
+          };
+        }),
       });
     } catch (error) {
       return res.status(500).json({
