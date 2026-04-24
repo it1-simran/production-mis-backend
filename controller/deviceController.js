@@ -2255,6 +2255,11 @@ module.exports = {
         recordsInserted: insertResult.length,
       });
 
+    } catch (error) {
+      console.error("Error in seedStageHistory:", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   getDeviceComprehensiveHistory: async (req, res) => {
     try {
       const { query } = req.query;
@@ -2362,7 +2367,7 @@ module.exports = {
         { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } },
         {
           $lookup: {
-            from: "orderconfirmationnumbers",
+            from: "orderConfirmationNumbers",
             let: { ocNo: "$processID.orderConfirmationNo" },
             pipeline: [
               {
@@ -2448,7 +2453,7 @@ module.exports = {
               { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } },
               {
                 $lookup: {
-                  from: "orderconfirmationnumbers",
+                  from: "orderConfirmationNumbers",
                   let: { ocNo: "$processID.orderConfirmationNo" },
                   pipeline: [
                     {
@@ -2515,26 +2520,27 @@ module.exports = {
       // Enrichment helper to find IMEI/CCID in customFields if outer ones are missing
       // Enrichment helper to find IMEI/CCID in customFields with Functional stage priority
       const enrichDeviceIdentifiers = (dev) => {
-        let customFields = dev.customFields;
+        let customFields = dev.customFields || {};
         if (typeof customFields === "string") {
           try {
             customFields = JSON.parse(customFields);
           } catch {
-            customFields = null;
+            customFields = {};
           }
         }
-        
-        if (!customFields || typeof customFields !== "object") return dev;
         
         let foundImei = dev.imeiNo;
         let foundCcid = dev.ccid;
         let resolvedStatus = dev.status;
 
-        if (customFields && typeof customFields === "object") {
-          const functional = customFields.Functional || customFields.functional || {};
-          if (functional.IMEI || functional.imei) foundImei = functional.IMEI || functional.imei;
-          if (functional.CCID || functional.ccid || functional.ICCID || functional.iccid) foundCcid = functional.CCID || functional.ccid || functional.ICCID || functional.iccid;
+        // Ensure customFields is an object
+        if (!customFields || typeof customFields !== "object" || Array.isArray(customFields)) {
+          customFields = {};
         }
+
+        const functional = customFields.Functional || customFields.functional || {};
+        if (functional.IMEI || functional.imei) foundImei = functional.IMEI || functional.imei;
+        if (functional.CCID || functional.ccid || functional.ICCID || functional.iccid) foundCcid = functional.CCID || functional.ccid || functional.ICCID || functional.iccid;
 
         // Iterate through stages to find missing identifiers and status
         Object.values(customFields).forEach(stage => {
@@ -2557,12 +2563,21 @@ module.exports = {
           resolvedStatus = "Pass";
         }
 
+        // Push identifiers back into customFields for UI display consistency if missing
+        const displayCustomFields = { ...customFields };
+        if (foundImei || foundCcid) {
+          if (!displayCustomFields.Functional) displayCustomFields.Functional = {};
+          if (!displayCustomFields.Functional.IMEI && foundImei) displayCustomFields.Functional.IMEI = foundImei;
+          if (!displayCustomFields.Functional.CCID && foundCcid) displayCustomFields.Functional.CCID = foundCcid;
+        }
+
         return {
           ...dev,
-          modelName: dev.resolvedModelName || dev.modelName || (dev.productType && dev.productType.name) || "N/A",
-          processName: dev.resolvedProcessName || (dev.processID && (dev.processID.name || dev.processID.processName)) || "N/A",
-          imeiNo: foundImei || dev.imeiNo || "N/A",
-          ccid: foundCcid || dev.ccid || "N/A",
+          customFields: displayCustomFields,
+          modelName: dev.resolvedModelName || (dev.modelName && dev.modelName !== "N/A" && dev.modelName !== "Unknown" ? dev.modelName : null) || (dev.productType && dev.productType.name) || "N/A",
+          processName: dev.resolvedProcessName || (dev.processID && (dev.processID.name || dev.processID.processName)) || (dev.processName && dev.processName !== "N/A" ? dev.processName : null) || "N/A",
+          imeiNo: foundImei || (dev.imeiNo && dev.imeiNo !== "N/A" ? dev.imeiNo : "N/A"),
+          ccid: foundCcid || (dev.ccid && dev.ccid !== "N/A" ? dev.ccid : "N/A"),
           status: resolvedStatus || dev.status || "Pending"
         };
       };
