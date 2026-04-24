@@ -1231,6 +1231,32 @@ module.exports = {
 
       const deviceUpdatePayload = { updatedAt: new Date() };
       let shouldUpdateDevice = false;
+
+      // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
+      if (Array.isArray(logs) && logs.length > 0) {
+        logs.forEach(log => {
+          const parsed = log.logData?.parsedData;
+          if (parsed && typeof parsed === "object") {
+            Object.keys(parsed).forEach(k => {
+              const key = String(k || "").toLowerCase();
+              const val = String(parsed[k] || "").trim();
+              if (!val) return;
+
+              if (key === "imei" || key === "imeino") {
+                deviceUpdatePayload.imeiNo = val;
+                shouldUpdateDevice = true;
+              } else if (key === "ccid" || key === "iccid") {
+                deviceUpdatePayload.ccid = val;
+                shouldUpdateDevice = true;
+              } else if (key === "modelname" || key === "model_name") {
+                deviceUpdatePayload.modelName = val;
+                shouldUpdateDevice = true;
+              }
+            });
+          }
+        });
+      }
+
       if (actionMeta.actionStatus === "Pass") {
         let targetStageName = normalizeText(nextSeatRouting.nextLogicalStage || "");
 
@@ -2228,10 +2254,6 @@ module.exports = {
         devicesUpdated: devices.length,
         recordsInserted: insertResult.length,
       });
-    } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
-    }
-  },
 
   getDeviceComprehensiveHistory: async (req, res) => {
     try {
@@ -2313,14 +2335,72 @@ module.exports = {
         },
         { $unwind: { path: "$productType", preserveNullAndEmptyArrays: true } },
         {
+          $addFields: {
+            // Normalize process ID field
+            processLookupId: { $ifNull: ["$processID", "$processId"] }
+          }
+        },
+        {
           $lookup: {
             from: "processes",
-            localField: "processID",
-            foreignField: "_id",
+            let: { pid: "$processLookupId" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $or: [
+                      { $eq: ["$_id", "$$pid"] },
+                      { $eq: ["$processID", "$$pid"] }
+                    ]
+                  }
+                }
+              }
+            ],
             as: "processID"
           }
         },
-        { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
+        { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "orderconfirmationnumbers",
+            let: { ocNo: "$processID.orderConfirmationNo" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $ne: ["$$ocNo", null] },
+                      { $eq: [
+                        { $trim: { input: "$orderConfirmationNo" } },
+                        { $trim: { input: "$$ocNo" } }
+                      ]}
+                    ]
+                  }
+                }
+              }
+            ],
+            as: "ocDetails"
+          }
+        },
+        { $unwind: { path: "$ocDetails", preserveNullAndEmptyArrays: true } },
+        {
+          $addFields: {
+            resolvedModelName: { 
+              $ifNull: [
+                "$ocDetails.modelName", 
+                { $cond: { if: { $and: [{ $ne: ["$modelName", ""] }, { $ne: ["$modelName", "N/A"] }] }, then: "$modelName", else: null } },
+                "$productType.name"
+              ] 
+            },
+            resolvedProcessName: { 
+              $ifNull: [
+                "$processID.name", 
+                "$processID.processName",
+                { $cond: { if: { $and: [{ $ne: ["$processName", ""] }, { $ne: ["$processName", "N/A"] }] }, then: "$processName", else: null } }
+              ] 
+            }
+          }
+        }
       ]);
       // 2. If searchStr looks like a carton serial or no devices found yet,
       // search in CartonManagement collection to find associated devices.
@@ -2349,12 +2429,64 @@ module.exports = {
               {
                 $lookup: {
                   from: "processes",
-                  localField: "processID",
-                  foreignField: "_id",
+                  let: { pid: { $ifNull: ["$processID", "$processId"] } },
+                  pipeline: [
+                    {
+                      $match: {
+                        $expr: {
+                          $or: [
+                            { $eq: ["$_id", "$$pid"] },
+                            { $eq: ["$processID", "$$pid"] }
+                          ]
+                        }
+                      }
+                    }
+                  ],
                   as: "processID"
                 }
               },
-              { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } }
+              { $unwind: { path: "$processID", preserveNullAndEmptyArrays: true } },
+              {
+                $lookup: {
+                  from: "orderconfirmationnumbers",
+                  let: { ocNo: "$processID.orderConfirmationNo" },
+                  pipeline: [
+                    {
+                      $match: {
+                        $expr: {
+                          $and: [
+                            { $ne: ["$$ocNo", null] },
+                            { $eq: [
+                              { $trim: { input: "$orderConfirmationNo" } },
+                              { $trim: { input: "$$ocNo" } }
+                            ]}
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  as: "ocDetails"
+                }
+              },
+              { $unwind: { path: "$ocDetails", preserveNullAndEmptyArrays: true } },
+              {
+                $addFields: {
+                  resolvedModelName: { 
+                    $ifNull: [
+                      "$ocDetails.modelName", 
+                      { $cond: { if: { $and: [{ $ne: ["$modelName", ""] }, { $ne: ["$modelName", "N/A"] }] }, then: "$modelName", else: null } },
+                      "$productType.name"
+                    ] 
+                  },
+                  resolvedProcessName: { 
+                    $ifNull: [
+                      "$processID.name", 
+                      "$processID.processName",
+                      { $cond: { if: { $and: [{ $ne: ["$processName", ""] }, { $ne: ["$processName", "N/A"] }] }, then: "$processName", else: null } }
+                    ] 
+                  }
+                }
+              }
             ]);
 
             // Create a map for quick lookup
@@ -2381,6 +2513,7 @@ module.exports = {
       }
 
       // Enrichment helper to find IMEI/CCID in customFields if outer ones are missing
+      // Enrichment helper to find IMEI/CCID in customFields with Functional stage priority
       const enrichDeviceIdentifiers = (dev) => {
         let customFields = dev.customFields;
         if (typeof customFields === "string") {
@@ -2395,8 +2528,15 @@ module.exports = {
         
         let foundImei = dev.imeiNo;
         let foundCcid = dev.ccid;
+        let resolvedStatus = dev.status;
 
-        // Iterate through stages to find missing identifiers
+        if (customFields && typeof customFields === "object") {
+          const functional = customFields.Functional || customFields.functional || {};
+          if (functional.IMEI || functional.imei) foundImei = functional.IMEI || functional.imei;
+          if (functional.CCID || functional.ccid || functional.ICCID || functional.iccid) foundCcid = functional.CCID || functional.ccid || functional.ICCID || functional.iccid;
+        }
+
+        // Iterate through stages to find missing identifiers and status
         Object.values(customFields).forEach(stage => {
           if (stage && typeof stage === "object") {
             if (!foundImei && (stage.IMEI || stage.imei)) {
@@ -2405,13 +2545,25 @@ module.exports = {
             if (!foundCcid && (stage.CCID || stage.ccid)) {
               foundCcid = stage.CCID || stage.ccid;
             }
+            // If status is missing or default, try to pick from stage
+            if ((!resolvedStatus || resolvedStatus === "" || resolvedStatus === "Pending") && stage.status) {
+              resolvedStatus = stage.status;
+            }
           }
         });
 
+        // Final fallback for status: if in a carton, it's generally passed
+        if ((!resolvedStatus || resolvedStatus === "" || resolvedStatus === "Pending") && dev.cartonSerial) {
+          resolvedStatus = "Pass";
+        }
+
         return {
           ...dev,
-          imeiNo: foundImei,
-          ccid: foundCcid
+          modelName: dev.resolvedModelName || dev.modelName || (dev.productType && dev.productType.name) || "N/A",
+          processName: dev.resolvedProcessName || (dev.processID && (dev.processID.name || dev.processID.processName)) || "N/A",
+          imeiNo: foundImei || dev.imeiNo || "N/A",
+          ccid: foundCcid || dev.ccid || "N/A",
+          status: resolvedStatus || dev.status || "Pending"
         };
       };
 
