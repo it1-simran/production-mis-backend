@@ -238,15 +238,35 @@ module.exports = {
   create: async (req, res) => {
     try {
       const formatDateForMongoose = (dateString) => {
-        if (!dateString) return undefined;
-        if (dateString instanceof Date) return dateString;
-        if (typeof dateString === "string" && dateString.includes("/")) {
-          const [day, month, yearAndTime] = dateString.split("/");
-          const [year, time] = yearAndTime.split(" ");
-          const [hours, minutes, seconds] = time.split(":");
-          return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        if (!dateString || typeof dateString !== "string" || dateString === "Invalid Date" || dateString.includes("NaN")) {
+          return dateString instanceof Date ? (isNaN(dateString.getTime()) ? undefined : dateString) : undefined;
         }
-        return new Date(dateString);
+
+        if (dateString.includes("/")) {
+          const parts = dateString.split("/");
+          if (parts.length < 3) return undefined;
+          const day = parts[0];
+          const month = parts[1];
+          const yearAndTime = parts[2];
+          const [year, time] = yearAndTime.split(" ");
+          
+          if (time) {
+            const [hours, minutes, seconds] = time.split(":");
+            const d = new Date(`20${year.slice(-2)}`, month - 1, day, hours || 0, minutes || 0, seconds || 0);
+            return isNaN(d.getTime()) ? undefined : d;
+          } else {
+            const d = new Date(`20${year.slice(-2)}`, month - 1, day);
+            return isNaN(d.getTime()) ? undefined : d;
+          }
+        }
+
+        if (dateString.includes("-")) {
+          const d = new Date(dateString);
+          return isNaN(d.getTime()) ? undefined : d;
+        }
+
+        const d = new Date(dateString);
+        return isNaN(d.getTime()) ? undefined : d;
       };
       const safeParse = (val, fallback) => {
         if (typeof val === "string") {
@@ -310,15 +330,35 @@ module.exports = {
   update: async (req, res) => {
     try {
       const formatDateForMongoose = (dateString) => {
-        if (!dateString) return undefined;
-        if (dateString instanceof Date) return dateString;
-        if (typeof dateString === "string" && dateString.includes("/")) {
-          const [day, month, yearAndTime] = dateString.split("/");
-          const [year, time] = yearAndTime.split(" ");
-          const [hours, minutes, seconds] = time.split(":");
-          return new Date(`20${year}`, month - 1, day, hours, minutes, seconds);
+        if (!dateString || typeof dateString !== "string" || dateString === "Invalid Date" || dateString.includes("NaN")) {
+          return dateString instanceof Date ? (isNaN(dateString.getTime()) ? undefined : dateString) : undefined;
         }
-        return new Date(dateString);
+
+        if (dateString.includes("/")) {
+          const parts = dateString.split("/");
+          if (parts.length < 3) return undefined;
+          const day = parts[0];
+          const month = parts[1];
+          const yearAndTime = parts[2];
+          const [year, time] = yearAndTime.split(" ");
+          
+          if (time) {
+            const [hours, minutes, seconds] = time.split(":");
+            const d = new Date(`20${year.slice(-2)}`, month - 1, day, hours || 0, minutes || 0, seconds || 0);
+            return isNaN(d.getTime()) ? undefined : d;
+          } else {
+            const d = new Date(`20${year.slice(-2)}`, month - 1, day);
+            return isNaN(d.getTime()) ? undefined : d;
+          }
+        }
+
+        if (dateString.includes("-")) {
+          const d = new Date(dateString);
+          return isNaN(d.getTime()) ? undefined : d;
+        }
+
+        const d = new Date(dateString);
+        return isNaN(d.getTime()) ? undefined : d;
       };
       const id = req.params.id;
       const updatedData = req.body;

@@ -499,72 +499,83 @@ const computePlanInsights = async ({
   });
 
   const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
-  const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
-    ? await deviceModel
-        .find({
-          productType: selectedProduct,
-          processID: new mongoose.Types.ObjectId(String(processId)),
-        })
+  const planSerials = Array.from(latestBySerial.keys());
+  
+  const deviceMatch = { serialNo: { $in: planSerials } };
+  if (processId && mongoose.Types.ObjectId.isValid(String(processId))) {
+    deviceMatch.processID = new mongoose.Types.ObjectId(String(processId));
+  }
+
+  const deviceSnapshots = planSerials.length > 0
+    ? await deviceModel.find(deviceMatch)
         .select("_id serialNo status currentStage processID")
         .lean()
     : [];
 
-  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
-    const status = normalizeKey(device?.status);
-    if (status === "ng" || status === "completed") return;
+  const deviceSnapshotMap = new Map();
+  deviceSnapshots.forEach(d => {
+    const s = normalizeValue(d.serialNo);
+    if (s) deviceSnapshotMap.set(s, d);
+  });
 
-    const stageName = normalizeValue(device?.currentStage || firstProcessStage);
-    if (!stageName) return;
+  const uniquePlanTotals = {
+    tested: 0,
+    pass: 0,
+    ng: 0,
+    wip: 0,
+  };
 
-    const stageRow = upsertStage(stageName);
-    if (!stageRow) return;
-    stageRow.wip += 1;
+  latestBySerial.forEach((record, serial) => {
+    const device = deviceSnapshotMap.get(normalizeValue(serial));
+    if (!device) return;
 
-    const serial = normalizeValue(device?.serialNo);
-    const latestRecord = serial ? latestBySerial.get(serial) : null;
-    const seatKey = getDeviceSeatKeyForStage({
-      latestRecord,
-      stageName,
-      stageSeatFallbackMap,
-    });
-    if (!seatKey) return;
-    const seatStageRow = upsertSeatStage(seatKey, stageName);
-    if (!seatStageRow) return;
-    seatStageRow.wip += 1;
+    uniquePlanTotals.tested += 1;
+    const status = normalizeKey(device.status);
+    const isNg = status === "ng" || status === "fail" || isNgStatus(record?.status);
+    
+    if (isNg) {
+      uniquePlanTotals.ng += 1;
+    } else if (status === "completed") {
+      uniquePlanTotals.pass += 1;
+    } else {
+      uniquePlanTotals.wip += 1;
+      const currentStage = normalizeValue(device.currentStage || firstProcessStage);
+      if (currentStage) {
+        const stageRow = upsertStage(currentStage);
+        if (stageRow) stageRow.wip += 1;
+
+        const seatKey = getDeviceSeatKeyForStage({
+          latestRecord: record,
+          stageName: currentStage,
+          stageSeatFallbackMap,
+        });
+        if (seatKey) {
+          const seatStageRow = upsertSeatStage(seatKey, currentStage);
+          if (seatStageRow) seatStageRow.wip += 1;
+        }
+      }
+    }
   });
 
   const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
   const bySeatStage = sortSeatStageRows(Array.from(bySeatStageMap.values()), stageOrderMap);
 
-  const totals = byStage.reduce(
-    (acc, row) => {
-      acc.tested += Number(row?.tested || 0);
-      acc.pass += Number(row?.pass || 0);
-      acc.ng += Number(row?.ng || 0);
-      acc.wip += Number(row?.wip || 0);
-      return acc;
-    },
-    { tested: 0, pass: 0, ng: 0, wip: 0 },
-  );
-
-  // Return results without capping. Analytics should reflect physical reality even if it exceeds planned quantity.
-
   const targetUpha = getTargetUpha({ processStages, commonStages });
   const productiveHours = getShiftProductiveHours(shift);
   const denominator = targetUpha > 0 && productiveHours > 0 ? targetUpha * productiveHours : 0;
   const todayTested = await getTodayLatestTestedCount({ planId, processId });
-  const processEfficiency = denominator > 0 ? Number(((totals.tested / denominator) * 100).toFixed(2)) : 0;
+  const processEfficiency = denominator > 0 ? Number(((uniquePlanTotals.tested / denominator) * 100).toFixed(2)) : 0;
   const todayEfficiency = denominator > 0 ? Number(((todayTested / denominator) * 100).toFixed(2)) : 0;
   const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
 
   return {
     generatedAt: new Date().toISOString(),
     totals: {
-      tested: totals.tested,
-      pass: totals.pass,
-      ng: totals.ng,
-      wip: totals.wip,
-      lineIssueKits: totals.pass + totals.ng + totals.wip,
+      tested: uniquePlanTotals.tested,
+      pass: uniquePlanTotals.pass,
+      ng: uniquePlanTotals.ng,
+      wip: uniquePlanTotals.wip,
+      lineIssueKits: uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip,
       kitsShortage: 0,
       operatorToday,
       efficiency: {
@@ -636,6 +647,7 @@ const computeProcessInsights = async ({
         .find({
           productType: selectedProduct,
           processID: new mongoose.Types.ObjectId(String(processId)),
+          status: { $nin: ["completed", "ng", "fail", "Completed", "NG", "Fail"] },
         })
         .select("_id serialNo status currentStage processID")
         .lean()
@@ -651,20 +663,27 @@ const computeProcessInsights = async ({
   });
 
   const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
-  const totals = byStage.reduce(
-    (acc, row) => {
-      acc.tested += Number(row?.tested || 0);
-      acc.pass += Number(row?.pass || 0);
-      acc.ng += Number(row?.ng || 0);
-      acc.wip += Number(row?.wip || 0);
-      return acc;
-    },
-    { tested: 0, pass: 0, ng: 0, wip: 0 },
-  );
+  
+  // Calculate unique device totals for the whole process
+  const uniqueProcessTotals = {
+    tested: latestRecords?.length || 0,
+    pass: 0,
+    ng: 0,
+    wip: 0,
+  };
+
+  (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
+    if (isPassStatus(record?.status)) uniqueProcessTotals.pass += 1;
+    if (isNgStatus(record?.status)) uniqueProcessTotals.ng += 1;
+  });
+
+  byStage.forEach((row) => {
+    uniqueProcessTotals.wip += Number(row?.wip || 0);
+  });
 
   return {
     generatedAt: new Date().toISOString(),
-    totals,
+    totals: uniqueProcessTotals,
     byStage,
   };
 };

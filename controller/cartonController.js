@@ -350,7 +350,11 @@ const findDeviceStageForCarton = async (carton) => {
 
 const findLatestCartonHistory = async (cartonSerial) => {
   if (!cartonSerial) return [];
-  return cartonHistoryModel.find({ cartonSerial }).sort({ timestamp: -1, createdAt: -1 }).lean();
+  return cartonHistoryModel
+    .find({ cartonSerial })
+    .populate("performedBy", "name empId")
+    .sort({ timestamp: -1, createdAt: -1 })
+    .lean();
 };
 
 const resolveReturnContextForCarton = async (carton) => {
@@ -431,7 +435,7 @@ const isPackagingOpenCarton = (carton) => {
   const lifecycleStatus = String(carton?.cartonStatus || "").trim();
   const fillStatus = String(carton?.status || "").trim().toLowerCase();
 
-  return lifecycleStatus === "" && ["partial", "empty"].includes(fillStatus);
+  return lifecycleStatus === "" && ["full", "partial", "empty"].includes(fillStatus);
 };
 
 const normalizeStageText = (value) => String(value || "").trim();
@@ -940,7 +944,13 @@ module.exports = {
   createOrUpdate: async (req, res) => {
     try {
       const { processId, devices, packagingData: rawPackagingData, selectedCarton: rawSelectedCarton } = req.body;
-      const deviceIds = Array.isArray(devices) ? devices : [];
+      const deviceIds = Array.from(
+        new Set(
+          (Array.isArray(devices) ? devices : [])
+            .map((deviceId) => String(deviceId || "").trim())
+            .filter(Boolean),
+        ),
+      );
       const selectedCarton = String(rawSelectedCarton || "").trim();
       const incomingPackagingData =
         rawPackagingData && typeof rawPackagingData === "object" ? rawPackagingData : {};
@@ -1074,8 +1084,18 @@ module.exports = {
           };
         }
 
-        existingCarton.devices.push(...deviceIds);
         const resolvedExistingCapacity = resolveCartonMaxCapacity(existingCarton);
+        if (
+          resolvedExistingCapacity > 0 &&
+          existingCarton.devices.length + deviceIds.length > resolvedExistingCapacity
+        ) {
+          return res.status(409).json({
+            status: 409,
+            message: `Carton capacity exceeded. Allowed max is ${resolvedExistingCapacity}.`,
+          });
+        }
+
+        existingCarton.devices.push(...deviceIds);
         existingCarton.status = resolveCartonStatusFromDeviceCount(
           existingCarton.devices.length,
           resolvedExistingCapacity,
@@ -1093,6 +1113,14 @@ module.exports = {
         return res.status(409).json({
           status: 409,
           message: `Device already assigned to carton ${conflict.cartonSerial}.`,
+        });
+      }
+
+      const resolvedNewCartonCapacity = Number(effectivePackagingData.maxCapacity || 0);
+      if (resolvedNewCartonCapacity > 0 && deviceIds.length > resolvedNewCartonCapacity) {
+        return res.status(409).json({
+          status: 409,
+          message: `Carton capacity exceeded. Allowed max is ${resolvedNewCartonCapacity}.`,
         });
       }
 
@@ -1160,7 +1188,7 @@ module.exports = {
       await createCartonHistoryEvent({
         carton: updatedCarton,
         eventType: updatedCarton.isReturnedFromPdi ? "STICKER_REVERIFIED" : "STICKER_VERIFIED",
-        performedBy: req.user?.id,
+        performedBy: req.user?.id || req.user?._id,
         fromCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
         toCartonStatus: String(updatedCarton.cartonStatus || "").trim(),
         fromDeviceStage: currentDeviceStage,
@@ -1184,7 +1212,7 @@ module.exports = {
         {
           $match: {
             processId: processIdMatch,
-            status: "full",
+            status: { $in: ["full", "partial", "empty"] },
             $or: [
               { cartonStatus: { $in: ["", "LOOSE_CLOSED"] } },
               { cartonStatus: null },
@@ -1296,7 +1324,7 @@ module.exports = {
         {
           $match: {
             processId: processIdMatch,
-            status: "full",
+            status: { $in: ["full", "partial", "empty", "FULL", "PARTIAL", "EMPTY"] },
             cartonStatus: "FG_TO_STORE",
           },
         },
@@ -1410,7 +1438,7 @@ module.exports = {
         },
         {
           $match: {
-            normalizedStatus: "FULL",
+            normalizedStatus: { $in: ["FULL", "PARTIAL", "EMPTY"] },
             normalizedCartonStatus: "PDI",
           },
         },
@@ -1603,7 +1631,7 @@ module.exports = {
       ]);
       const carton = cartons[0];
       if (!carton) {
-        return res.status(404).json({ message: "No open carton found." });
+        return res.status(200).json([]);
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const latestRecordByDeviceId = await buildLatestRecordMapByDeviceIds(
@@ -1655,7 +1683,7 @@ module.exports = {
       ]);
 
       if (!cartons || cartons.length === 0) {
-        return res.status(404).json({ message: "No open cartons found." });
+        return res.status(200).json([]);
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const latestRecordByDeviceId = await buildLatestRecordMapByDeviceIds(
@@ -1729,7 +1757,7 @@ module.exports = {
         return res.status(409).json({
           status: 409,
           message:
-            "Device removal is allowed only for cartons that are open in packaging (partial/empty).",
+            "Device removal is allowed only for cartons in packaging state (full/partial/empty).",
         });
       }
 
@@ -1801,17 +1829,99 @@ module.exports = {
         .sort({ createdAt: -1, updatedAt: -1, _id: -1 })
         .lean();
 
-      if (!latestPassRecord?._id && packagingStageNames.length > 0) {
-        return res.status(409).json({
-          status: 409,
-          message:
-            "Unable to rollback carton removal because no packaging-stage pass record was found for this device.",
-        });
-      }
       if (!latestPassRecord?._id) {
-        return res.status(409).json({
-          status: 409,
-          message: "Unable to rollback carton removal because no packaging pass record was found.",
+        // Fallback path: allow packaging carton removal even when historical
+        // packaging pass records are missing. We skip rollback bookkeeping
+        // and only remove from carton safely.
+        let refreshedCarton = null;
+
+        const session = await mongoose.startSession();
+        try {
+          await session.withTransaction(async () => {
+            const cartonDoc = await cartonModel.findOne({
+              _id: carton._id,
+              processId: carton.processId,
+              cartonSerial,
+            }).session(session);
+
+            if (!cartonDoc) {
+              throw buildHttpError(404, "Carton not found for this process.");
+            }
+            if (!isPackagingOpenCarton(cartonDoc)) {
+              throw buildHttpError(
+                409,
+                "Device removal is allowed only for cartons in packaging state (full/partial/empty).",
+              );
+            }
+
+            const beforeDeviceIds = Array.isArray(cartonDoc.devices) ? [...cartonDoc.devices] : [];
+            const deviceExistsInCarton = beforeDeviceIds.some(
+              (cartonDeviceId) => String(cartonDeviceId) === targetDeviceId,
+            );
+            if (!deviceExistsInCarton) {
+              throw buildHttpError(409, "Device is no longer present in the selected carton.");
+            }
+
+            cartonDoc.devices = beforeDeviceIds.filter(
+              (cartonDeviceId) => String(cartonDeviceId) !== targetDeviceId,
+            );
+            const resolvedCapacity = resolveCartonMaxCapacity(cartonDoc);
+            cartonDoc.status = resolveCartonStatusFromDeviceCount(
+              cartonDoc.devices.length,
+              resolvedCapacity,
+            );
+            cartonDoc.isStickerPrinted = false;
+            cartonDoc.isStickerVerified = false;
+            cartonDoc.isWeightVerified = false;
+            await cartonDoc.save({ session });
+
+            let removedDeviceStageName = "";
+            const deviceDoc = await deviceModel.findById(targetDevice._id).session(session);
+            if (deviceDoc) {
+              removedDeviceStageName = normalizeStageText(deviceDoc.currentStage);
+              deviceDoc.cartonSerial = "";
+              deviceDoc.updatedAt = new Date();
+              await deviceDoc.save({ session });
+            }
+
+            await createCartonHistoryEvent({
+              carton: cartonDoc,
+              eventType: "CARTON_DEVICE_REMOVED",
+              performedBy: req.user?.id,
+              fromCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
+              toCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
+              fromDeviceStage: removedDeviceStageName,
+              toDeviceStage: removedDeviceStageName,
+              notes: `Removed device ${targetDeviceSerial} from carton. Rollback skipped because no packaging pass record was found.`,
+              extra: {
+                removedDeviceId: targetDeviceId,
+                removedDeviceSerial: targetDeviceSerial,
+                remainingDeviceCount: Number(cartonDoc.devices.length || 0),
+                maxCapacity: resolvedCapacity,
+                rollbackSkipped: true,
+                rollbackSkipReason: "PACKAGING_PASS_RECORD_MISSING",
+              },
+              session,
+            });
+
+            refreshedCarton = await cartonModel
+              .findById(cartonDoc._id)
+              .populate("devices")
+              .session(session)
+              .lean();
+          });
+        } finally {
+          await session.endSession();
+        }
+
+        return res.status(200).json({
+          status: 200,
+          message: "Device removed from carton successfully.",
+          carton: refreshedCarton || carton,
+          rollback: {
+            skipped: true,
+            reason: "PACKAGING_PASS_RECORD_MISSING",
+          },
         });
       }
 
@@ -1953,7 +2063,7 @@ module.exports = {
           if (!isPackagingOpenCarton(cartonDoc)) {
             throw buildHttpError(
               409,
-              "Device removal is allowed only for cartons that are open in packaging (partial/empty).",
+              "Device removal is allowed only for cartons in packaging state (full/partial/empty).",
             );
           }
 
@@ -2031,6 +2141,7 @@ module.exports = {
           if (!deviceDoc) {
             throw buildHttpError(404, "Device not found while applying rollback.");
           }
+          deviceDoc.cartonSerial = "";
           deviceDoc.currentStage = rollbackStageName;
           deviceDoc.status = "Pending";
           deviceDoc.updatedAt = new Date();
@@ -2052,7 +2163,7 @@ module.exports = {
           await createCartonHistoryEvent({
             carton: cartonDoc,
             eventType: "CARTON_DEVICE_REMOVED",
-            performedBy: req.user?.id,
+            performedBy: req.user?.id || req.user?._id,
             fromCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
             toCartonStatus: normalizeStageText(cartonDoc.cartonStatus),
             fromDeviceStage: rollbackStageName,
@@ -2130,17 +2241,18 @@ module.exports = {
           .status(400)
           .json({ success: false, message: "Carton serial is required" });
       }
-      const carton = await cartonModel.findOneAndUpdate(
-        { cartonSerial: selectedCarton },
-        { $set: { cartonStatus: "FG_TO_STORE" } },
-        { new: true }
-      );
+      const carton = await cartonModel.findOne({ cartonSerial: selectedCarton });
 
       if (!carton) {
         return res
           .status(404)
           .json({ success: false, message: "Carton not found" });
       }
+      const fromCartonStatus = String(carton.cartonStatus || "").trim();
+      const fromDeviceStage = await findDeviceStageForCarton(carton);
+      carton.cartonStatus = "FG_TO_STORE";
+      await carton.save();
+
       const devicesUpdate = await deviceModel.updateMany(
         { _id: { $in: carton.devices } },
         {
@@ -2149,6 +2261,16 @@ module.exports = {
           },
         }
       );
+
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "SHIFT_TO_FG_TO_STORE",
+        performedBy: req.user?.id || req.user?._id,
+        fromCartonStatus,
+        toCartonStatus: "FG_TO_STORE",
+        fromDeviceStage,
+        toDeviceStage: "FG_TO_STORE",
+      });
 
       return res.status(200).json({
         success: true,
@@ -2257,7 +2379,7 @@ module.exports = {
         await createCartonHistoryEvent({
           carton,
           eventType: wasReturnedFromPdi ? "RETURN_TO_PDI" : "SHIFT_TO_PDI",
-          performedBy: req.user?.id,
+          performedBy: req.user?.id || req.user?._id,
           fromCartonStatus,
           toCartonStatus: "PDI",
           fromDeviceStage,
@@ -2363,14 +2485,14 @@ module.exports = {
       await processLogModel.create({
         action: "PDI_CARTON_NG",
         processId: carton.processId,
-        userId: req.user?.id,
+        userId: req.user?.id || req.user?._id,
         description: `Marked carton ${cartonSerial} as NG in PDI for ${reasonText}. Returned to ${returnDeviceStage}.`,
       });
 
       await createCartonHistoryEvent({
         carton,
         eventType: "RETURN_TO_PACKAGING",
-        performedBy: req.user?.id,
+        performedBy: req.user?.id || req.user?._id,
         fromCartonStatus,
         toCartonStatus: returnCartonStatus,
         fromDeviceStage,
@@ -2659,6 +2781,8 @@ module.exports = {
       );
 
       // 8. Update carton status to STOCKED
+      const fromCartonStatus = String(carton.cartonStatus || "").trim();
+      const fromDeviceStage = await findDeviceStageForCarton(carton);
       carton.cartonStatus = "STOCKED";
       carton.dispatchStatus = "READY";
       carton.dispatchInvoiceId = null;
@@ -2668,6 +2792,16 @@ module.exports = {
       carton.reservedAt = null;
       carton.reservedBy = null;
       await carton.save();
+
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "KEEP_IN_STORE",
+        performedBy: req.user?.id,
+        fromCartonStatus,
+        toCartonStatus: "STOCKED",
+        fromDeviceStage,
+        toDeviceStage: "KEEP_IN_STORE",
+      });
 
       return res.status(200).json({
         success: true,
@@ -3065,16 +3199,16 @@ module.exports = {
         });
 
         if (remainingDevices.length === 0) {
-          carton.status = "full";
+          carton.devices = [];
+          carton.status = "empty";
           carton.isLooseCarton = true;
           carton.cartonStatus = "LOOSE_CLOSED";
         } else {
+          carton.devices = [];
           carton.devices = remainingDevices;
-          carton.status = remainingDevices.length >= Number(carton.maxCapacity || remainingDevices.length)
-            ? "full"
-            : "partial";
-          carton.isLooseCarton = false;
-          carton.cartonStatus = "";
+          carton.status = "partial";
+          carton.isLooseCarton = true;
+          carton.cartonStatus = "LOOSE_CLOSED";
         }
         carton.looseCartonAction = "assign-new";
         carton.sourceCartonSerial = carton.cartonSerial;
@@ -3111,6 +3245,357 @@ module.exports = {
       return res.status(500).json({
         status: 500,
         message: "Error closing loose carton.",
+        error: error.message,
+      });
+    }
+  },
+
+  searchCartonForRepackaging: async (req, res) => {
+    try {
+      const { cartonSerial } = req.params;
+      if (!cartonSerial) {
+        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const carton = await cartonModel.findOne({ cartonSerial }).populate("devices").lean();
+      if (!carton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      if (String(carton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
+        return res.status(400).json({
+          status: 400,
+          message: `Carton is in ${carton.cartonStatus || "Packaging"} stage. Repackaging is only allowed for cartons in PDI stage.`,
+        });
+      }
+
+      const latestRecordByDeviceId = await buildLatestRecordMapByDeviceIds(
+        collectCartonDeviceIds([carton])
+      );
+      const fallbackModelName = await getProcessFallbackModelName(carton.processId);
+      const enriched = enrichCartonDevicesForResponse({
+        cartons: [carton],
+        fallbackModelName,
+        latestRecordByDeviceId,
+      });
+
+      const processData = await ProcessModel.findById(carton.processId).lean();
+      const plan = await planingModel.findOne({
+        selectedProcess: carton.processId,
+        startDate: { $lte: new Date() },
+        expectedEndDate: { $gte: new Date() }
+      }).select("_id").lean();
+
+      return res.status(200).json({ 
+        status: 200, 
+        carton: enriched[0],
+        processData,
+        planId: plan?._id || null
+      });
+    } catch (error) {
+      console.error("Error searching carton for repackaging:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error.", error: error.message });
+    }
+  },
+
+  validateDeviceForRepackaging: async (req, res) => {
+    try {
+      const { serialNo } = req.params;
+      if (!serialNo) {
+        return res.status(400).json({ status: 400, message: "Device serial is required." });
+      }
+
+      const device = await deviceModel.findOne({
+        $or: [{ serialNo }, { imeiNo: serialNo }, { ccid: serialNo }],
+      }).lean();
+
+      if (!device) {
+        return res.status(404).json({ status: 404, message: "Device not found." });
+      }
+
+      const currentStage = String(device.currentStage || "").trim().toLowerCase();
+      const allowedStages = ["packaging", "pdi"];
+
+      // Check if already in another carton
+      if (device.cartonSerial) {
+        const otherCarton = await cartonModel.findOne({ cartonSerial: device.cartonSerial }).lean();
+        if (otherCarton && String(otherCarton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
+          return res.status(400).json({
+            status: 400,
+            message: `Device is already in carton ${device.cartonSerial} which is in ${otherCarton.cartonStatus || "Packaging"} stage.`,
+          });
+        }
+      }
+
+      // Fetch stage history
+      const histories = await deviceTestModel
+        .find({ deviceId: device._id })
+        .sort({ createdAt: 1 })
+        .select("stageName status createdAt flowVersion flowType")
+        .lean();
+
+      const latestStatus = histories.length > 0 ? histories[histories.length - 1].status : "Pass";
+      const isFailed = latestStatus === "NG" || latestStatus === "Fail";
+
+      const stageHistory = histories.map((history) => ({
+        stageName: history?.stageName || "Unknown Stage",
+        status: history?.status || "N/A",
+        createdAt: history?.createdAt || null,
+        flowVersion: history?.flowVersion || 1,
+        flowType: history?.flowType || "stage",
+      }));
+
+      let isEligible = allowedStages.includes(currentStage);
+      let message = "";
+
+      if (isFailed) {
+        isEligible = false;
+        message = `Device has a failing status (NG) at ${histories[histories.length - 1]?.stageName || "current stage"}. It cannot be added to a carton until it passes this stage.`;
+      } else if (!isEligible) {
+        message = `Device is at ${device.currentStage || "Initial"} stage. Only devices in Packaging can be moved to PDI.`;
+      }
+
+      // Fetch process data for NG assignment options
+      const processData = await ProcessModel.findById(device.processID).lean();
+
+      // Find the current active plan for this process and the PDI stage
+      // This is needed for createDeviceTestEntry
+      const plan = await planingModel.findOne({
+        selectedProcess: device.processID,
+        startDate: { $lte: new Date() },
+        expectedEndDate: { $gte: new Date() }
+      }).select("_id").lean();
+
+      return res.status(200).json({ 
+        status: 200, 
+        isEligible,
+        message,
+        device: {
+          ...device,
+          stageHistory,
+          processData
+        },
+        planId: plan?._id || null
+      });
+    } catch (error) {
+      console.error("Error validating device for repackaging:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error.", error: error.message });
+    }
+  },
+
+  repackageCarton: async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const { cartonSerial, deviceIds } = req.body;
+      if (!cartonSerial || !Array.isArray(deviceIds)) {
+        return res.status(400).json({ status: 400, message: "Invalid input data." });
+      }
+
+      const carton = await cartonModel.findOne({ cartonSerial }).session(session);
+      if (!carton) {
+        throw new Error("Carton not found.");
+      }
+
+      if (String(carton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
+        throw new Error("Repackaging only allowed for PDI cartons.");
+      }
+
+      const oldDeviceIds = carton.devices.map(id => String(id));
+      const newDeviceIds = deviceIds.map(id => String(id));
+
+      const addedDeviceIds = newDeviceIds.filter(id => !oldDeviceIds.includes(id));
+      const removedDeviceIds = oldDeviceIds.filter(id => !newDeviceIds.includes(id));
+
+      // Update carton
+      // Ensure unique IDs
+      const uniqueDeviceIds = [...new Set(deviceIds.map(id => String(id)))];
+      carton.devices = uniqueDeviceIds;
+      const maxCap = resolveCartonMaxCapacity(carton);
+      carton.status = resolveCartonStatusFromDeviceCount(deviceIds.length, maxCap);
+      await carton.save({ session });
+
+      // Update devices added
+      if (addedDeviceIds.length > 0) {
+        // Remove from any other cartons they might be in
+        await cartonModel.updateMany(
+          { _id: { $ne: carton._id }, devices: { $in: addedDeviceIds } },
+          { $pull: { devices: { $in: addedDeviceIds } } },
+          { session }
+        );
+
+        // Update devices added: If they were in Packaging, move to PDI
+        await deviceModel.updateMany(
+          { _id: { $in: addedDeviceIds }, currentStage: { $regex: /^packaging$/i } },
+          { $set: { cartonSerial: carton.cartonSerial, currentStage: "PDI" } },
+          { session }
+        );
+
+        // For those already in PDI, just update cartonSerial
+        await deviceModel.updateMany(
+          { _id: { $in: addedDeviceIds }, currentStage: { $not: { $regex: /^packaging$/i } } },
+          { $set: { cartonSerial: carton.cartonSerial } },
+          { session }
+        );
+      }
+
+      // Update devices removed
+      if (removedDeviceIds.length > 0) {
+        await deviceModel.updateMany(
+          { _id: { $in: removedDeviceIds } },
+          { $set: { cartonSerial: "" } },
+          { session }
+        );
+      }
+
+      const currentDeviceStage = await findDeviceStageForCarton(carton);
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "REPACKAGE",
+        performedBy: req.user?.id,
+        fromCartonStatus: "PDI",
+        toCartonStatus: "PDI",
+        fromDeviceStage: currentDeviceStage,
+        toDeviceStage: currentDeviceStage,
+        notes: `Repackaged: ${addedDeviceIds.length} added, ${removedDeviceIds.length} removed.`,
+        session,
+      });
+
+      await session.commitTransaction();
+      return res.status(200).json({ status: 200, message: "Carton repackaged successfully." });
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("Error repackaging carton:", error);
+      return res.status(500).json({ status: 500, message: error.message });
+    } finally {
+      session.endSession();
+    }
+  },
+
+  shuffleDevices: async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const { sourceCartonSerial, targetCartonSerial, deviceIdsToMove } = req.body;
+      if (!sourceCartonSerial || !targetCartonSerial || !Array.isArray(deviceIdsToMove)) {
+        return res.status(400).json({ status: 400, message: "Invalid input data." });
+      }
+
+      const sourceCarton = await cartonModel.findOne({ cartonSerial: sourceCartonSerial }).session(session);
+      const targetCarton = await cartonModel.findOne({ cartonSerial: targetCartonSerial }).session(session);
+
+      if (!sourceCarton || !targetCarton) {
+        throw new Error("One or both cartons not found.");
+      }
+
+      if (
+        String(sourceCarton.cartonStatus || "").trim().toUpperCase() !== "PDI" ||
+        String(targetCarton.cartonStatus || "").trim().toUpperCase() !== "PDI"
+      ) {
+        throw new Error("Shuffle only allowed between PDI cartons.");
+      }
+
+      // Remove from source
+      sourceCarton.devices = sourceCarton.devices.filter(id => !deviceIdsToMove.includes(String(id)));
+      sourceCarton.status = resolveCartonStatusFromDeviceCount(sourceCarton.devices.length, resolveCartonMaxCapacity(sourceCarton));
+      await sourceCarton.save({ session });
+
+      // Add to target
+      // Ensure we don't add duplicates
+      const targetExistingIds = new Set(targetCarton.devices.map(id => String(id)));
+      const filteredMoveIds = deviceIdsToMove.filter(id => !targetExistingIds.has(String(id)));
+      
+      if (filteredMoveIds.length > 0) {
+        targetCarton.devices.push(...filteredMoveIds);
+      }
+      
+      targetCarton.status = resolveCartonStatusFromDeviceCount(targetCarton.devices.length, resolveCartonMaxCapacity(targetCarton));
+      await targetCarton.save({ session });
+
+      // Update devices
+      await deviceModel.updateMany(
+        { _id: { $in: deviceIdsToMove } },
+        { $set: { cartonSerial: targetCartonSerial } },
+        { session }
+      );
+
+      const sourceStage = await findDeviceStageForCarton(sourceCarton);
+      const targetStage = await findDeviceStageForCarton(targetCarton);
+
+      await createCartonHistoryEvent({
+        carton: sourceCarton,
+        eventType: "SHUFFLE_OUT",
+        performedBy: req.user?.id,
+        fromCartonStatus: "PDI",
+        toCartonStatus: "PDI",
+        fromDeviceStage: sourceStage,
+        toDeviceStage: sourceStage,
+        notes: `Moved ${deviceIdsToMove.length} devices to ${targetCartonSerial}`,
+        session,
+      });
+
+      await createCartonHistoryEvent({
+        carton: targetCarton,
+        eventType: "SHUFFLE_IN",
+        performedBy: req.user?.id,
+        fromCartonStatus: "PDI",
+        toCartonStatus: "PDI",
+        fromDeviceStage: targetStage,
+        toDeviceStage: targetStage,
+        notes: `Received ${deviceIdsToMove.length} devices from ${sourceCartonSerial}`,
+        session,
+      });
+
+      await session.commitTransaction();
+      return res.status(200).json({ status: 200, message: "Devices shuffled successfully." });
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("Error shuffling devices:", error);
+      return res.status(500).json({ status: 500, message: error.message });
+    } finally {
+      session.endSession();
+    }
+  },
+  discardCarton: async (req, res) => {
+    try {
+      const { cartonSerial } = req.params;
+      if (!cartonSerial) {
+        return res.status(400).json({ status: 400, message: "Carton serial is required." });
+      }
+
+      const carton = await cartonModel.findOne({ cartonSerial });
+      if (!carton) {
+        return res.status(404).json({ status: 404, message: "Carton not found." });
+      }
+
+      if (carton.devices && carton.devices.length > 0) {
+        return res.status(400).json({
+          status: 400,
+          message: "Only empty cartons can be discarded. Please remove all devices first.",
+        });
+      }
+
+      // Create a final history event for audit before deletion
+      await createCartonHistoryEvent({
+        carton,
+        eventType: "DISCARDED",
+        performedBy: req.user?.id,
+        fromCartonStatus: String(carton.cartonStatus || "").trim(),
+        toCartonStatus: "DISCARDED",
+        notes: "Empty carton discarded by operator.",
+      });
+
+      await cartonModel.deleteOne({ _id: carton._id });
+
+      return res.status(200).json({
+        status: 200,
+        message: `Carton ${cartonSerial} has been discarded successfully.`,
+      });
+    } catch (error) {
+      console.error("Error discarding carton:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Error discarding carton.",
         error: error.message,
       });
     }

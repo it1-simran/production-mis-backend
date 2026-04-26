@@ -257,15 +257,25 @@ router.get("/cartons/:processId/partial", authController.authenticateToken, Cart
 router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
 // IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
 router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
+router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
+router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
+// IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
+router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
 router.put('/carton/close-loose', authController.authenticateToken, cartonController.closeLooseCarton);
 router.post("/cartons/shift-to-pdi", authController.authenticateToken, cartonController.shiftToPDI);
 router.post('/cartons/pdi-ng', authController.authenticateToken, cartonController.markPdiCartonNg);
+router.get('/carton/repackage/search/:cartonSerial', authController.authenticateToken, cartonController.searchCartonForRepackaging);
+router.get('/carton/repackage/validate-device/:serialNo', authController.authenticateToken, cartonController.validateDeviceForRepackaging);
+router.post('/carton/repackage/update', authController.authenticateToken, cartonController.repackageCarton);
+router.post('/carton/repackage/shuffle', authController.authenticateToken, cartonController.shuffleDevices);
 router.get('/cartons/:cartonSerial/history', authController.authenticateToken, cartonController.getCartonHistory);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
+router.delete('/carton/discard/:cartonSerial', authController.authenticateToken, cartonController.discardCarton);
+
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
 router.get("/dispatch/cartons/ready", authController.authenticateToken, dispatchController.getReadyCartons);
 router.get("/dispatch/summary/processes", authController.authenticateToken, dispatchController.getProcessDispatchSummaries);
@@ -331,14 +341,7 @@ router.get('/esim-apn/view/:id', authController.authenticateToken, esimApnContro
 router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
 router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
-router.get("/process/orderconfirmation/:orderConfirmationNo?",authController.authenticateToken, processController.getOrderConfirmationByNo);
-router.get("/process/orderconfirmation/*",authController.authenticateToken, (req, res, next) => {
-  const fullPath = req.params[0];
-  if (fullPath) {
-    req.query.orderConfirmationNo = fullPath;
-  }
-  next();
-}, processController.getOrderConfirmationByNo);
+router.get("/process/orderconfirmation/:orderConfirmationNo(*)", authController.authenticateToken, processController.getOrderConfirmationByNo);
 
 module.exports = router;
 

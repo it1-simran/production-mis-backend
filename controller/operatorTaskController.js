@@ -6,6 +6,7 @@ const planningAndSchedulingModel = require("../models/planingAndSchedulingModel"
 const processModel = require("../models/process");
 const productModel = require("../models/Products");
 const shiftModel = require("../models/shiftManagement");
+const userModel = require("../models/User");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
 const {
@@ -34,6 +35,272 @@ const safeJsonParse = (raw, fallback = {}) => {
   } catch {
     return fallback;
   }
+};
+
+const normalizeStageKeyFlexible = (value) =>
+  normalizeValue(value)
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+
+const sortIndexedObjectKeys = (source = {}) =>
+  Object.keys(source || {}).sort((left, right) => {
+    const leftNum = Number(left);
+    const rightNum = Number(right);
+    const leftFinite = Number.isFinite(leftNum);
+    const rightFinite = Number.isFinite(rightNum);
+    if (leftFinite && rightFinite) return leftNum - rightNum;
+    if (leftFinite) return -1;
+    if (rightFinite) return 1;
+    return String(left).localeCompare(String(right));
+  });
+
+const normalizeIndexedSlots = (value) => {
+  const parsed = safeJsonParse(value, []);
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    return sortIndexedObjectKeys(parsed).map((key) => parsed[key]);
+  }
+  return [];
+};
+
+const normalizeCustomOperatorSlot = (slot) => {
+  if (Array.isArray(slot)) return slot.filter(Boolean);
+  if (!slot) return [];
+
+  if (typeof slot === "string") {
+    const trimmed = slot.trim();
+    if (!trimmed) return [];
+    const parsed = safeJsonParse(trimmed, null);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    if (typeof parsed === "string" || typeof parsed === "number") return [parsed];
+    if (parsed && typeof parsed === "object") return normalizeCustomOperatorSlot(parsed);
+    return [trimmed];
+  }
+
+  if (typeof slot === "object") {
+    if (Array.isArray(slot?.operators)) return slot.operators.filter(Boolean);
+    if (slot?._id || slot?.id || slot?.operatorId || slot?.userId || slot?.name) {
+      return [slot];
+    }
+  }
+
+  return [];
+};
+
+const resolveOperatorIdentity = (operatorEntry) => {
+  if (operatorEntry === null || operatorEntry === undefined) return "";
+  if (typeof operatorEntry === "string" || typeof operatorEntry === "number") {
+    return String(operatorEntry).trim();
+  }
+  if (typeof operatorEntry === "object") {
+    return String(
+      operatorEntry?._id ||
+        operatorEntry?.userId ||
+        operatorEntry?.operatorId ||
+        operatorEntry?.id ||
+        operatorEntry?.value ||
+        "",
+    ).trim();
+  }
+  return "";
+};
+
+const extractCustomStageName = (stageEntry) => {
+  if (!stageEntry) return "";
+
+  if (typeof stageEntry === "string") {
+    const trimmed = stageEntry.trim();
+    if (!trimmed) return "";
+    const parsed = safeJsonParse(trimmed, null);
+    if (parsed && typeof parsed === "object") {
+      return extractCustomStageName(parsed);
+    }
+    return normalizeValue(trimmed);
+  }
+
+  if (typeof stageEntry === "object") {
+    return normalizeValue(
+      stageEntry?.stageName ||
+        stageEntry?.name ||
+        stageEntry?.stage ||
+        stageEntry?.label ||
+        stageEntry?.value,
+    );
+  }
+
+  return normalizeValue(stageEntry);
+};
+
+const findStageByNameFlexible = (stages = [], stageName = "") => {
+  const normalizedTarget = normalizeStageKeyFlexible(stageName);
+  if (!normalizedTarget) return null;
+  return (
+    (Array.isArray(stages) ? stages : []).find(
+      (stage) =>
+        normalizeStageKeyFlexible(stage?.stageName || stage?.name || stage?.stage) ===
+        normalizedTarget,
+    ) || null
+  );
+};
+
+const buildStageAliases = (stageName = "") => {
+  const baseStageName = normalizeValue(stageName);
+  if (!baseStageName) return [];
+
+  const aliases = new Set([baseStageName]);
+  const normalized = normalizeStageKeyFlexible(baseStageName);
+
+  if (normalized.includes("fg") && normalized.includes("store")) {
+    ["FG_TO_STORE", "FG to Store", "FG TO STORE", "fg_to_store", "fg to store"].forEach((alias) =>
+      aliases.add(alias),
+    );
+  }
+
+  if (normalized.includes("keep") && normalized.includes("store")) {
+    ["KEEP_IN_STORE", "Keep In Store", "KEPT_IN_STORE", "STOCKED", "stocked"].forEach((alias) =>
+      aliases.add(alias),
+    );
+  }
+
+  return Array.from(aliases).map((value) => normalizeValue(value)).filter(Boolean);
+};
+
+const resolveStageAwareCurrentStage = ({ currentAssignedStageName = "", firstStageName = "" }) => {
+  const normalizedCurrent = normalizeValue(currentAssignedStageName);
+  if (!normalizedCurrent) return undefined;
+
+  const aliases = buildStageAliases(normalizedCurrent);
+  const normalizedFirst = normalizeStageKeyFlexible(firstStageName);
+  const isFirstStage =
+    !!normalizedFirst &&
+    normalizeStageKeyFlexible(normalizedCurrent) === normalizedFirst;
+
+  if (isFirstStage) {
+    return aliases.length > 0 ? { $in: Array.from(new Set([...aliases, "", null])) } : { $in: ["", null] };
+  }
+
+  if (aliases.length > 1) return { $in: aliases };
+  return aliases[0] || normalizedCurrent;
+};
+
+const normalizeRoleToken = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const parseManagedByRoles = (managedBy) => {
+  if (!managedBy) return [];
+
+  let source = managedBy;
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed) || typeof parsed === "string") {
+        source = parsed;
+      } else {
+        source = trimmed;
+      }
+    } catch {
+      source = trimmed;
+    }
+  }
+
+  const rawValues = Array.isArray(source)
+    ? source
+    : String(source || "").split(/[,|;&/]+/);
+
+  return Array.from(
+    new Set(rawValues.map((value) => normalizeRoleToken(value)).filter(Boolean)),
+  );
+};
+
+const isFgToStoreStageName = (stageName = "") => {
+  const normalized = normalizeStageKeyFlexible(stageName);
+  if (!normalized) return false;
+  if (normalized === "fg to store") return true;
+  if (normalized === "keep in store") return true;
+  return normalized.includes("fg") && normalized.includes("store");
+};
+
+const isPdiStageName = (stageName = "") => {
+  const normalized = normalizeStageKeyFlexible(stageName);
+  if (!normalized) return false;
+  return (
+    normalized === "pdi" ||
+    normalized.includes("pdi") ||
+    normalized.includes("quality control") ||
+    normalized.includes("quality check") ||
+    normalized === "qc"
+  );
+};
+
+const collectOperatorRoleTokens = (operatorProfile = null) => {
+  const rawValues = [
+    operatorProfile?.userType,
+    operatorProfile?.role,
+    operatorProfile?.department,
+    operatorProfile?.designation,
+    operatorProfile?.name,
+  ];
+  return new Set(rawValues.map((value) => normalizeRoleToken(value)).filter(Boolean));
+};
+
+const resolveCommonStageByRoleFallback = ({
+  processDoc = null,
+  productDoc = null,
+  operatorProfile = null,
+} = {}) => {
+  const stagePool = [
+    ...(Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : []),
+    ...(Array.isArray(productDoc?.commonStages) ? productDoc.commonStages : []),
+  ];
+  if (stagePool.length === 0) return null;
+
+  const uniqueStages = [];
+  const seenStageNames = new Set();
+  stagePool.forEach((stage) => {
+    const stageName = normalizeValue(stage?.stageName || stage?.name || stage?.stage);
+    if (!stageName) return;
+    const key = normalizeStageKeyFlexible(stageName);
+    if (seenStageNames.has(key)) return;
+    seenStageNames.add(key);
+    uniqueStages.push(stage);
+  });
+  if (uniqueStages.length === 0) return null;
+
+  const operatorRoleTokens = collectOperatorRoleTokens(operatorProfile);
+  const hasStoreRole = Array.from(operatorRoleTokens).some((token) => token.includes("store"));
+  const hasQcRole = Array.from(operatorRoleTokens).some(
+    (token) => token === "qc" || token.includes("quality"),
+  );
+
+  const managedByMatch = uniqueStages.find((stage) => {
+    const roles = parseManagedByRoles(stage?.managedBy);
+    if (!roles.length || operatorRoleTokens.size === 0) return false;
+    return roles.some((role) => operatorRoleTokens.has(role));
+  });
+  if (managedByMatch) return managedByMatch;
+
+  if (hasStoreRole) {
+    const fgStage = uniqueStages.find((stage) =>
+      isFgToStoreStageName(stage?.stageName || stage?.name || stage?.stage),
+    );
+    if (fgStage) return fgStage;
+  }
+
+  if (hasQcRole) {
+    const pdiStage = uniqueStages.find((stage) =>
+      isPdiStageName(stage?.stageName || stage?.name || stage?.stage),
+    );
+    if (pdiStage) return pdiStage;
+  }
+
+  return uniqueStages[0] || null;
 };
 
 const normalizeAssignedStagesPayload = (assignedStages = {}, processStages = []) => {
@@ -153,6 +420,13 @@ const isRevertedEquivalentStatus = (status = "") => {
 const isTerminalStageStatus = (status = "") => {
   const normalizedStatus = normalizeKey(status);
   return normalizedStatus === "pass" || normalizedStatus === "completed" || normalizedStatus === "ng" || normalizedStatus === "fail";
+};
+
+const setNoStoreHeaders = (res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
 };
 
 const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageName = "", processId = "", processStages = [], normalizedAssignedStages = {}, seatKey = "" }) => {
@@ -395,21 +669,77 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
       .lean());
 
   const process = plan?.selectedProcess
-    ? await processModel.findById(plan.selectedProcess).select("_id stages selectedProduct").lean()
+    ? await processModel.findById(plan.selectedProcess).select("_id stages commonStages selectedProduct").lean()
     : null;
 
   const isCommon = assignedTaskDetails?.stageType === "common";
-  const assignedOperatorPayload = safeJsonParse(
-    plan?.[isCommon ? "assignedCustomStagesOp" : "assignedOperators"],
-    {},
+
+  // --- Common-stage path (assignedCustomStagesOp is a parallel array, not a seat-key map) ---
+  if (isCommon) {
+    const operatorProfile = await userModel
+      .findById(operatorId)
+      .select("_id userType role department designation name")
+      .lean()
+      .catch(() => null);
+    const customStagesArr = normalizeIndexedSlots(plan?.assignedCustomStages);
+    const customOpsArr = normalizeIndexedSlots(plan?.assignedCustomStagesOp);
+
+    let commonStageName = "";
+    for (let i = 0; i < customStagesArr.length; i++) {
+      const slotOperators = normalizeCustomOperatorSlot(customOpsArr[i]);
+      const found = slotOperators.some((op) =>
+        resolveOperatorIdentity(op) === String(operatorId),
+      );
+      if (found) {
+        commonStageName = extractCustomStageName(customStagesArr[i]);
+        break;
+      }
+    }
+
+    const processCommonStages = Array.isArray(process?.commonStages) ? process.commonStages : [];
+    let assignUserStage = commonStageName
+      ? findStageByNameFlexible(processCommonStages, commonStageName)
+      : null;
+    if (!assignUserStage) {
+      assignUserStage = resolveCommonStageByRoleFallback({
+        processDoc: process,
+        productDoc: null,
+        operatorProfile,
+      });
+      commonStageName = normalizeValue(
+        assignUserStage?.stageName || assignUserStage?.name || assignUserStage?.stage,
+      );
+    }
+
+    const currentAssignedStageName = commonStageName;
+    const normalizedAssignedStages = {};
+    const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
+
+    return {
+      plan,
+      process,
+      selectedProcess: process?._id || plan?.selectedProcess || null,
+      assignedTaskDetails,
+      normalizedAssignedStages,
+      assignUserStage,
+      currentAssignedStageName,
+      stageAwareCurrentStage: resolveStageAwareCurrentStage({
+        currentAssignedStageName,
+        firstStageName,
+      }),
+      seatKey: "",
+      operatorSeatInfo: null,
+    };
+  }
+
+  // --- Regular (non-common) stage path: assignedOperators is a seat-key keyed object ---
+  const assignedOperatorPayload = safeJsonParse(plan?.assignedOperators, {});
+  const assignedStagePayload = safeJsonParse(plan?.assignedStages, {});
+  const normalizedAssignedStages = normalizeAssignedStagesPayload(
+    assignedStagePayload,
+    process?.stages || [],
+    process?.commonStages || [],
   );
-  const assignedStagePayload = safeJsonParse(
-    plan?.[isCommon ? "assignedCustomStages" : "assignedStages"],
-    {},
-  );
-  const normalizedAssignedStages = isCommon
-    ? assignedStagePayload
-    : normalizeAssignedStagesPayload(assignedStagePayload, process?.stages || []);
 
   const seatKey =
     sortSeatKeys(Object.keys(assignedOperatorPayload || {})).find((key) => {
@@ -419,7 +749,7 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
           ? [assignedOperatorPayload[key]]
           : [];
       return operators.some((operator) => {
-        const candidate = String(operator?._id || operator?.userId || "");
+        const candidate = resolveOperatorIdentity(operator);
         return candidate === String(operatorId);
       });
     }) || "";
@@ -435,11 +765,10 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
   );
 
   const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
-  const stageAwareCurrentStage = currentAssignedStageName
-    ? normalizeKey(currentAssignedStageName) === normalizeKey(firstStageName)
-      ? { $in: [currentAssignedStageName, "", null] }
-      : currentAssignedStageName
-    : undefined;
+  const stageAwareCurrentStage = resolveStageAwareCurrentStage({
+    currentAssignedStageName,
+    firstStageName,
+  });
 
   return {
     plan,
@@ -698,51 +1027,104 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   ]);
 
   const isCommon = assignedTaskDetails?.stageType === "common";
-  const assignedOperatorPayload = safeJsonParse(
-    plan?.[isCommon ? "assignedCustomStagesOp" : "assignedOperators"],
-    {},
-  );
-  const assignedStagePayload = safeJsonParse(
-    plan?.[isCommon ? "assignedCustomStages" : "assignedStages"],
-    {},
-  );
-  const normalizedAssignedStages = isCommon
-    ? assignedStagePayload
-    : normalizeAssignedStagesPayload(assignedStagePayload, process?.stages || []);
 
-  const seatKey = sortSeatKeys(Object.keys(assignedOperatorPayload || {})).find((key) => {
-    const operators = Array.isArray(assignedOperatorPayload?.[key])
-      ? assignedOperatorPayload[key]
-      : assignedOperatorPayload?.[key]
-        ? [assignedOperatorPayload[key]]
-        : [];
-    return operators.some((operator) => {
-      const candidate = String(operator?._id || operator?.userId || "");
-      return candidate === String(operatorId);
-    });
-  }) || "";
+  let seatKey = "";
+  let assignUserStage = null;
+  let normalizedAssignedStages = {};
+  let currentAssignedStageName = "";
 
-  const assignUserStage = seatKey ? normalizedAssignedStages?.[seatKey] || null : null;
-  const currentAssignedStage = Array.isArray(assignUserStage) ? assignUserStage[0] : assignUserStage;
-  const currentAssignedStageName = normalizeValue(
-    currentAssignedStage?.name || currentAssignedStage?.stageName || currentAssignedStage?.stage,
-  );
-  const processAssignUserStage = (process?.stages || []).find(
-    (stage) => normalizeValue(stage?.stageName) === currentAssignedStageName,
-  ) || null;
+  if (isCommon) {
+    const operatorProfile = await userModel
+      .findById(operatorId)
+      .select("_id userType role department designation name")
+      .lean()
+      .catch(() => null);
+    // Common stages: assignedCustomStages is an array of stage name strings,
+    // assignedCustomStagesOp is a parallel array of operator-arrays.
+    const customStagesArr = normalizeIndexedSlots(plan?.assignedCustomStages);
+    const customOpsArr = normalizeIndexedSlots(plan?.assignedCustomStagesOp);
+
+    let matchedStageName = "";
+    for (let i = 0; i < customStagesArr.length; i++) {
+      const slotOperators = normalizeCustomOperatorSlot(customOpsArr[i]);
+      const found = slotOperators.some(
+        (op) => resolveOperatorIdentity(op) === String(operatorId),
+      );
+      if (found) {
+        matchedStageName = extractCustomStageName(customStagesArr[i]);
+        break;
+      }
+    }
+
+    currentAssignedStageName = matchedStageName;
+    const processCommonStages = Array.isArray(process?.commonStages) ? process.commonStages : [];
+    assignUserStage = matchedStageName
+      ? findStageByNameFlexible(processCommonStages, matchedStageName)
+      : null;
+    if (!assignUserStage) {
+      assignUserStage = resolveCommonStageByRoleFallback({
+        processDoc: process,
+        productDoc: product,
+        operatorProfile,
+      });
+      currentAssignedStageName = normalizeValue(
+        assignUserStage?.stageName || assignUserStage?.name || assignUserStage?.stage,
+      );
+    }
+
+  } else {
+    // Regular stages: assignedOperators is a seat-key keyed object.
+    const assignedOperatorPayload = safeJsonParse(plan?.assignedOperators, {});
+    const assignedStagePayload = safeJsonParse(plan?.assignedStages, {});
+    normalizedAssignedStages = normalizeAssignedStagesPayload(
+      assignedStagePayload,
+      process?.stages || [],
+      process?.commonStages || [],
+    );
+
+    seatKey =
+      sortSeatKeys(Object.keys(assignedOperatorPayload || {})).find((key) => {
+        const operators = Array.isArray(assignedOperatorPayload?.[key])
+          ? assignedOperatorPayload[key]
+          : assignedOperatorPayload?.[key]
+            ? [assignedOperatorPayload[key]]
+            : [];
+        return operators.some((operator) => {
+          const candidate = resolveOperatorIdentity(operator);
+          return candidate === String(operatorId);
+        });
+      }) || "";
+
+    const seatStage = seatKey ? normalizedAssignedStages?.[seatKey] || null : null;
+    const currentStageObj = Array.isArray(seatStage) ? seatStage[0] : seatStage;
+    currentAssignedStageName = normalizeValue(
+      currentStageObj?.name || currentStageObj?.stageName || currentStageObj?.stage,
+    );
+    assignUserStage = seatStage;
+  }
+
+  const allProcessStages = [
+    ...(Array.isArray(process?.stages) ? process.stages : []),
+    ...(Array.isArray(process?.commonStages) ? process.commonStages : []),
+  ];
+  const processAssignUserStage = findStageByNameFlexible(allProcessStages, currentAssignedStageName);
+
 
   const targetStageNames = new Set(
-    (Array.isArray(assignUserStage) ? assignUserStage : assignUserStage ? [assignUserStage] : [])
+    [
+      ...(Array.isArray(assignUserStage) ? assignUserStage : assignUserStage ? [assignUserStage] : []),
+      currentAssignedStageName ? { stageName: currentAssignedStageName } : null,
+    ]
+      .filter(Boolean)
       .map((stage) => normalizeValue(stage?.name || stage?.stageName || stage?.stage))
       .filter(Boolean),
   );
   const stageNames = Array.from(targetStageNames);
   const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
-  const stageAwareCurrentStage = currentAssignedStageName
-    ? normalizeValue(currentAssignedStageName) === firstStageName
-      ? { $in: [currentAssignedStageName, "", null] }
-      : currentAssignedStageName
-    : undefined;
+  const stageAwareCurrentStage = resolveStageAwareCurrentStage({
+    currentAssignedStageName,
+    firstStageName,
+  });
 
   const [latestRecords, rawDevices, canonicalInsights, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
@@ -842,7 +1224,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
 
   return {
     plan,
-    assignedTaskDetails,
+    assignedTaskDetails: assignedTaskDetails
+      ? { ...assignedTaskDetails, stageName: currentAssignedStageName }
+      : null,
     operatorSeatInfo: seatKey
       ? {
           rowNumber: String(seatKey).split("-")[0] || "",
@@ -1019,6 +1403,7 @@ module.exports = {
     try {
       const { planId, operatorId } = req.params;
       const payload = await buildOperatorTaskSummary({ planId, operatorId });
+      setNoStoreHeaders(res);
       return res.status(200).json({ status: 200, message: "Operator task bootstrap fetched", data: payload });
     } catch (error) {
       return res.status(error.status || 500).json({ status: error.status || 500, error: error.message });
@@ -1028,6 +1413,7 @@ module.exports = {
     try {
       const { planId, operatorId } = req.params;
       const payload = await buildOperatorTaskSummary({ planId, operatorId });
+      setNoStoreHeaders(res);
       return res.status(200).json({ status: 200, message: "Operator task refresh fetched", data: payload });
     } catch (error) {
       return res.status(error.status || 500).json({ status: error.status || 500, error: error.message });
