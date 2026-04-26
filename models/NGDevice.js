@@ -11,7 +11,7 @@ const NGDeviceSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
-  department: { type: String, enum: ["QC", "TRC"], required: true },
+  department: { type: String, required: true },
   serialNo: { type: String, required: true, trim: true },
   ngStage: { type: String, required: true, trim: true },
   notes: { type: String, default: "" },

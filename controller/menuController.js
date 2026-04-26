@@ -105,6 +105,11 @@ module.exports = {
           children: [{ label: "View Task", route: "/operators/task/" }],
         },
         {
+          icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 16v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5M21 11H3M16 11V3a2 2 0 0 0-2-2H10a2 2 0 0 0-2 2v8M7 11v5m10-5v5" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+          label: "Repackaging",
+          route: "/operators/repackaging",
+        },
+        {
           icon: `<svg class="fill-current" width="18" height="19" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" > <g id="SVGRepo_bgCarrier" stroke-width="0"></g> <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" ></g> <g id="SVGRepo_iconCarrier"> {" "} <g fill-rule="evenodd"> {" "} <path d="M4.82697983,8.78763886 L9.18650994,4.14664044 C9.37017255,3.95111985 9.66794847,3.95111985 9.85161108,4.14664044 L10.862253,5.2225334 C11.0459157,5.41805398 11.0459157,5.73505548 10.862253,5.93057606 L5.39706652,11.7486164 C5.08221633,12.0837945 4.57174332,12.0837945 4.25689314,11.7486164 L1.13774696,8.42808594 C0.954084348,8.23256536 0.954084348,7.91556386 1.13774696,7.72004327 L2.14838892,6.64415031 C2.33205153,6.44862973 2.62982745,6.44862973 2.81349006,6.64415031 L4.82697983,8.78763886 Z M13,4 L14,4 C14.5522847,4 15,4.44771525 15,5 C15,5.55228475 14.5522847,6 14,6 L13,6 C12.4477153,6 12,5.55228475 12,5 C12,4.44771525 12.4477153,4 13,4 Z M13,7 L14,7 C14.5522847,7 15,7.44771525 15,8 C15,8.55228475 14.5522847,9 14,9 L13,9 C12.4477153,9 12,8.55228475 12,8 C12,7.44771525 12.4477153,7 13,7 Z M13,10 L14,10 C14.5522847,10 15,10.4477153 15,11 C15,11.5522847 14.5522847,12 14,12 L13,12 C12.4477153,12 12,11.5522847 12,11 C12,10.4477153 12.4477153,10 13,10 Z"> {" "} </path>{" "} </g>{" "} </g> </svg>`,
           label: "Product Management",
           route: "#",
@@ -199,7 +204,39 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const getMenu = await Menu.find();
+      let getMenu = await Menu.find();
+
+      // Auto-migration: Ensure Repackaging menu exists
+      if (getMenu.length > 0) {
+        const doc = getMenu[0];
+        const menus = Array.isArray(doc.menus) ? doc.menus : [];
+        const repackagingRoute = "/operators/repackaging";
+        const exists = menus.some((m) => m.route === repackagingRoute);
+
+        if (!exists) {
+          const REPACKAGING_MENU = {
+            icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 16v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5M21 11H3M16 11V3a2 2 0 0 0-2-2H10a2 2 0 0 0-2 2v8M7 11v5m10-5v5" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+            label: "Repackaging",
+            route: repackagingRoute,
+          };
+          const taskIndex = menus.findIndex((m) =>
+            String(m?.label || "")
+              .toLowerCase()
+              .includes("task management"),
+          );
+          if (taskIndex !== -1) {
+            menus.splice(taskIndex + 1, 0, REPACKAGING_MENU);
+          } else {
+            menus.push(REPACKAGING_MENU);
+          }
+          doc.menus = menus;
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Added Repackaging menu.");
+          getMenu = [doc];
+        }
+      }
+
       return res.status(200).json({
         status: 200,
         status_msg: "Menus Fetched Sucessfully!!",

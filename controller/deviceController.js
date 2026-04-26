@@ -856,7 +856,7 @@ module.exports = {
       const requestedProcessId = normalizeText(data.processId || "");
       const assignedDeviceTo = normalizeText(data.assignedDeviceTo);
       const actionMeta = buildActionResponseMeta(data.status);
-      const isQcOrTrc = assignedDeviceTo === "QC" || assignedDeviceTo === "TRC";
+      const isAdminNG = !!assignedDeviceTo;
 
       const planStart = Date.now();
       const planPromise = planingAndScheduling
@@ -897,19 +897,13 @@ module.exports = {
 
       let [planing, products, deviceSnapshot] = await Promise.all([planPromise, processPromise, devicePromise]);
 
-      if (!planing) {
-        return res.status(404).json({
-          status: 404,
-          message: "Planing not found",
-        });
-      }
-
-      const resolvedProcessId = normalizeText(planing.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
+      const resolvedProcessId = normalizeText(planing?.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
       if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
         const fallbackProcessStart = Date.now();
         products = await processModel.findById(resolvedProcessId).select("stages commonStages").lean();
         markTiming("fallbackProcessLoadMs", fallbackProcessStart);
       }
+      
       if (!products?._id) {
         return res.status(404).json({
           status: 404,
@@ -943,10 +937,10 @@ module.exports = {
       data.previousFlowVersion = null;
 
       const parseStart = Date.now();
-      const rawAssignedStages = safeParseJson(planing.assignedStages, {}) || {};
+      const rawAssignedStages = safeParseJson(planing?.assignedStages, {}) || {};
       const normalizedAssignedStages = normalizeAssignedStagesPayload(rawAssignedStages, products?.stages || []);
       let assignedCustomStagesOp = [];
-      if (planing.assignedCustomStagesOp) {
+      if (planing?.assignedCustomStagesOp) {
         const parsedCustomStages = safeParseJson(planing.assignedCustomStagesOp, []);
         assignedCustomStagesOp = Array.isArray(parsedCustomStages) ? parsedCustomStages : [];
       }
@@ -955,7 +949,7 @@ module.exports = {
       const seatResolveStart = Date.now();
       const resolvedSeatContext = resolveAssignedSeatContext({
         assignedStages: normalizedAssignedStages,
-        rawAssignedOperators: planing.assignedOperators,
+        rawAssignedOperators: planing?.assignedOperators,
         operatorId: data.operatorId,
         currentSeatKey: data.currentSeatKey,
         currentLogicalStage: data.currentLogicalStage || data.stageName,
@@ -964,7 +958,7 @@ module.exports = {
       });
       markTiming("seatResolveMs", seatResolveStart);
 
-      if (!resolvedSeatContext && isQcOrTrc) {
+      if (!resolvedSeatContext && isAdminNG) {
         let savedDeviceTestRecord = null;
         const writeSession = await mongoose.startSession();
         try {
