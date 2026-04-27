@@ -39,7 +39,7 @@ module.exports = {
   },
   getSkills: async (req, res) => {
     try {
-      let skills = await SkillModel.find();
+      let skills = await SkillModel.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         message: "Skill Fetched successfully!",

@@ -78,6 +78,7 @@ module.exports = {
             assignedKitsToOperator: "$assignKitsToLine.issuedKits",
           },
         },
+        { $sort: { _id: -1 } }
       ]);
 
       return res.status(200).json({
@@ -133,6 +134,7 @@ module.exports = {
             updatedAt: 1,
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       return res.status(200).json({
         status: 200,

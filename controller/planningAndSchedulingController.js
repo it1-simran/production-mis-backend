@@ -8,6 +8,8 @@ const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
+const assignedJigToPlanModel = require("../models/assignJigToPlan");
+
 const {
   computePlanInsights,
   computeProcessInsights,
@@ -170,6 +172,139 @@ const getBottleneckUPH = (processData) => {
   return Math.min(...values);
 };
 
+const syncAssignments = async (plan) => {
+  try {
+    const processId = toObjectId(plan.selectedProcess);
+    if (!processId) return;
+
+    const activeUserIds = [];
+    const activeJigIds = [];
+
+    // 1. Sync Operators (Regular)
+    const assignedOperators = safeParseJson(plan.assignedOperators, {});
+    for (const seatKey in assignedOperators) {
+      const operators = Array.isArray(assignedOperators[seatKey])
+        ? assignedOperators[seatKey]
+        : assignedOperators[seatKey]
+          ? [assignedOperators[seatKey]]
+          : [];
+
+      for (const op of operators) {
+        const userId = toObjectId(op._id || op.userId);
+        if (!userId) continue;
+        activeUserIds.push(userId);
+
+        const parts = String(seatKey).split("-");
+        const rowNumber = parts[0] || "0";
+        const seatNumber = parts[1] || "0";
+
+        const data = {
+          processId,
+          userId,
+          roomName: plan.selectedRoom,
+          seatDetails: { rowNumber, seatNumber },
+          ProcessShiftMappings: plan.ProcessShiftMappings,
+          startDate: plan.startDate,
+          estimatedEndDate: plan.estimatedEndDate,
+          status: "Occupied",
+          updatedAt: new Date(),
+        };
+
+        await assignedOperatorsToPlanModel.findOneAndUpdate(
+          { processId, userId },
+          { $set: data },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
+    // 2. Sync Operators (Common)
+    const customOpsArr = normalizeAssignedCustomStagesOp(plan.assignedCustomStagesOp);
+    for (let i = 0; i < customOpsArr.length; i++) {
+      const operators = customOpsArr[i];
+      for (const op of operators) {
+        const userId = toObjectId(op._id || op.userId);
+        if (!userId) continue;
+        activeUserIds.push(userId);
+
+        const data = {
+          processId,
+          userId,
+          roomName: plan.selectedRoom,
+          seatDetails: {},
+          stageType: "common",
+          ProcessShiftMappings: plan.ProcessShiftMappings,
+          startDate: plan.startDate,
+          estimatedEndDate: plan.estimatedEndDate,
+          status: "Occupied",
+          updatedAt: new Date(),
+        };
+
+        await assignedOperatorsToPlanModel.findOneAndUpdate(
+          { processId, userId },
+          { $set: data },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
+    // 3. Sync Jigs
+    const assignedJigs = safeParseJson(plan.assignedJigs, {});
+    for (const seatKey in assignedJigs) {
+      const jigs = Array.isArray(assignedJigs[seatKey])
+        ? assignedJigs[seatKey]
+        : assignedJigs[seatKey]
+          ? [assignedJigs[seatKey]]
+          : [];
+
+      for (const jig of jigs) {
+        const jigId = toObjectId(jig._id || jig.jigId);
+        if (!jigId) continue;
+        activeJigIds.push(jigId);
+
+        const parts = String(seatKey).split("-");
+        const rowNumber = parts[0] || "0";
+        const seatNumber = parts[1] || "0";
+
+        const data = {
+          processId,
+          jigId,
+          roomName: plan.selectedRoom,
+          seatDetails: { rowNumber, seatNumber },
+          ProcessShiftMappings: plan.ProcessShiftMappings,
+          startDate: plan.startDate,
+          estimatedEndDate: plan.estimatedEndDate,
+          status: "Occupied",
+          updatedAt: new Date(),
+        };
+
+        await assignedJigToPlanModel.findOneAndUpdate(
+          { processId, jigId },
+          { $set: data },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
+    // Optional: Cleanup old assignments for this process that are no longer in the plan
+    if (activeUserIds.length > 0) {
+      await assignedOperatorsToPlanModel.deleteMany({
+        processId,
+        userId: { $nin: activeUserIds }
+      });
+    }
+    if (activeJigIds.length > 0) {
+      await assignedJigToPlanModel.deleteMany({
+        processId,
+        jigId: { $nin: activeJigIds }
+      });
+    }
+
+  } catch (error) {
+    console.error("Error in syncAssignments:", error);
+  }
+};
+
 const recalculatePlanWithOvertime = async (plan) => {
   const summary = getOvertimeSummary(plan);
   plan.overtimeSummary = summary;
@@ -286,6 +421,10 @@ module.exports = {
       data.estimatedEndDate = formatDateForMongoose(data?.estimatedEndDate);
       const newPlanAndScheduling = new PlaningAndSchedulingModel(data);
       await newPlanAndScheduling.save();
+
+      // Trigger backend synchronization of operator/jig assignments
+      await syncAssignments(newPlanAndScheduling);
+
       const processUpdater = await ProcessModel.findByIdAndUpdate(
         planingId,
         {
@@ -295,29 +434,7 @@ module.exports = {
         },
         { new: true }
       );
-      const assignOperator = safeParse(data?.assignedOperators, []);
-      let seatsDetails = {};
-      if (assignOperator.length > 0) {
-        const keys = Object.keys(assignOperator);
-        const roomAndSeatNumber = keys[0].split("-");
-        seatsDetails = {
-          rowNumber: roomAndSeatNumber[0],
-          seatNumber: roomAndSeatNumber[1],
-        };
-        const data1 = {
-          planId: newPlanAndScheduling?._id,
-          userId: assignOperator[keys[0]][0]?._id,
-          roomName: data?.selectedRoom,
-          kitIssued: data?.issuedKits,
-          cartonIssued: data?.issuedCarton,
-          seatDetails: seatsDetails,
-          ProcessShiftMappings: data?.ProcessShiftMappings,
-          startDate: data?.startDate,
-          estimatedEndDate: data?.estimatedEndDate,
-        };
-        const assignOperators = new assignedOperatorsToPlanModel(data1);
-        await assignOperators.save();
-      }
+      
       return res.status(200).json({
         status: 200,
         message: "Planing And Scheduling Created Successfully!!",
@@ -384,7 +501,10 @@ module.exports = {
           runValidators: true,
         });
 
-      if (!updatedPlaningAndScheduling) {
+      if (updatedPlaningAndScheduling) {
+        // Trigger backend synchronization on update
+        await syncAssignments(updatedPlaningAndScheduling);
+      } else {
         return res
           .status(404)
           .json({ message: "Planing and Scheduling not found" });
@@ -444,6 +564,7 @@ module.exports = {
             },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       return res.status(200).json({
         status: 200,
@@ -476,16 +597,59 @@ module.exports = {
             "Room ID, Shift ID, Start Date, and Expected End Date are required.",
         });
       }
-      const parsedStartDate = moment.utc(startDate, "DD/MM/YY HH:mm:ss", true);
-      const parsedEndDate = moment.utc(
-        expectedEndDate,
-        "DD/MM/YY HH:mm:ss",
-        true
-      );
+      const parseFlexibleDateTimeUtc = (value) => {
+        if (value === undefined || value === null) return moment.invalid();
+
+        if (value instanceof Date) {
+          return moment.utc(value);
+        }
+
+        if (typeof value === "number") {
+          const parsedNumeric = moment.utc(value);
+          return parsedNumeric.isValid() ? parsedNumeric : moment.invalid();
+        }
+
+        const normalized = String(value).trim();
+        if (!normalized) return moment.invalid();
+
+        // First try ISO 8601
+        const parsedIso = moment.utc(normalized, moment.ISO_8601, true);
+        if (parsedIso.isValid()) return parsedIso;
+
+        const supportedFormats = [
+          "DD/MM/YY HH:mm:ss",
+          "DD/MM/YYYY HH:mm:ss",
+          "DD-MM-YY HH:mm:ss",
+          "DD-MM-YYYY HH:mm:ss",
+          "YYYY-MM-DD HH:mm:ss",
+          "YYYY-MM-DDTHH:mm:ss",
+          "YYYY-MM-DDTHH:mm:ss.SSS",
+          "DD/MM/YYYY",
+          "DD-MM-YYYY",
+          "YYYY-MM-DD",
+          "DD/MM/YY",
+          "DD-MM-YY"
+        ];
+
+        for (const format of supportedFormats) {
+          const parsed = moment.utc(normalized, format, true);
+          if (parsed.isValid()) return parsed;
+        }
+
+        // Final fallback: non-strict parsing
+        const looseParsed = moment.utc(normalized);
+        if (looseParsed.isValid()) return looseParsed;
+
+        return moment.invalid();
+      };
+
+      const parsedStartDate = parseFlexibleDateTimeUtc(startDate);
+      const parsedEndDate = parseFlexibleDateTimeUtc(expectedEndDate);
       if (!parsedStartDate.isValid() || !parsedEndDate.isValid()) {
         return res.status(400).json({
           status: 400,
-          error: "Invalid date format. Expected format: DD/MM/YY HH:mm:ss.",
+          error:
+            "Invalid date format. Expected format: DD/MM/YY HH:mm:ss.",
         });
       }
       if (parsedStartDate.isAfter(parsedEndDate)) {
@@ -533,20 +697,20 @@ module.exports = {
             $or: [
               {
                 startDate: {
-                  $gte: new Date(parsedStartDate),
-                  $lte: new Date(parsedEndDate),
+                  $gte: parsedStartDate.toDate(),
+                  $lte: parsedEndDate.toDate(),
                 },
               },
               {
                 estimatedEndDate: {
-                  $gte: new Date(parsedStartDate),
-                  $lte: new Date(parsedEndDate),
+                  $gte: parsedStartDate.toDate(),
+                  $lte: parsedEndDate.toDate(),
                 },
               },
               {
                 $and: [
-                  { startDate: { $lte: new Date(parsedStartDate) } },
-                  { estimatedEndDate: { $gte: new Date(parsedEndDate) } },
+                  { startDate: { $lte: parsedStartDate.toDate() } },
+                  { estimatedEndDate: { $gte: parsedEndDate.toDate() } },
                 ],
               },
               { "processDetails.status": "active" }, // Catch-all for active processes
@@ -703,71 +867,6 @@ module.exports = {
       });
     }
   },
-
-  // checkAvailabilityFromCurrentDate: async (req, res) => {
-  //   try {
-  //     const { roomId, shiftId } = req.body;
-  //     if (!roomId || !shiftId) {
-  //       return res.status(400).json({
-  //         status: 400,
-  //         error: "Room ID and Shift ID are required.",
-  //       });
-  //     }
-  //     const currentDate = moment.utc().startOf("day");
-  //     const startISO = currentDate.toISOString();
-  //     const endDate = moment.utc().add(30, "days").toISOString();
-  //     const roomPlan = await RoomPlanModel.findById(roomId);
-  //     if (!roomPlan) {
-  //       return res.status(404).json({
-  //         status: 404,
-  //         error: "Room not found.",
-  //       });
-  //     }
-  //     const totalSeatsInRoom = roomPlan.lines.reduce(
-  //       (totalSeats, line) => totalSeats + line.seats.length,
-  //       0
-  //     );
-  //     const plans = await PlaningAndSchedulingModel.find({
-  //       selectedRoom: new mongoose.Types.ObjectId(roomId),
-  //       selectedShift: new mongoose.Types.ObjectId(shiftId),
-  //       isDrafted: 0,
-  //     });
-  //     const seatAvailability = {};
-  //     plans.forEach((plan) => {
-  //       const planStartDate = moment(plan.startDate).startOf("day");
-  //       const planEndDate = moment(plan.estimatedEndDate).endOf("day");
-  //       let currentDateInRange = planStartDate.clone();
-  //       while (currentDateInRange.isSameOrBefore(planEndDate)) {
-  //         const dateString = currentDateInRange.toISOString().split("T")[0];
-  //         if (!seatAvailability[dateString]) {
-  //           seatAvailability[dateString] = totalSeatsInRoom;
-  //         }
-  //         const assignedStages = Object.keys(
-  //           JSON.parse(plan?.assignedStages || "{}")
-  //         ).length;
-  //         seatAvailability[dateString] -= assignedStages;
-  //         currentDateInRange.add(1, "days");
-  //       }
-  //     });
-  //     const dates = Object.keys(seatAvailability);
-  //     console.log("seatAvailability ==>", seatAvailability);
-  //     return res.status(200).json({
-  //       status: 200,
-  //       message: "Planning and scheduling fetched successfully!",
-  //       seatAvailability,
-  //     });
-  //   } catch (error) {
-  //     console.error(
-  //       "Error in checkAvailabilityFromCurrentDate: ",
-  //       error.message
-  //     );
-  //     return res.status(500).json({
-  //       status: 500,
-  //       error: "Internal server error.",
-  //       details: error.message,
-  //     });
-  //   }
-  // },
   delete: async (req, res) => {
     try {
       const planId = req.params.id;
@@ -824,8 +923,6 @@ module.exports = {
   getPlaningAnDschedulingByID: async (req, res) => {
     try {
       const id = req.params.id;
-      // const PlaningAndScheduling = await PlaningAndSchedulingModel.find({_id
-      //   :id});
       const PlaningAndScheduling = await PlaningAndSchedulingModel.aggregate([
         {
           $match: { _id: new mongoose.Types.ObjectId(id) },
@@ -946,20 +1043,6 @@ module.exports = {
             preserveNullAndEmptyArrays: true,
           },
         },
-        // {
-        //   $lookup: {
-        //     from: "assignpoperatorsplans",
-        //     localField: "selectedProcess",
-        //     foreignField: "processId",
-        //     as: "assignOperatorToPlans"
-        //   }
-        // },
-        // {
-        //   $unwind : {
-        //     path : "$assignOperatorToPlans",
-        //     preserveNullAndEmptyArrays: true
-        //   }
-        // },
         {
           $project: {
             _id: 1,
@@ -993,7 +1076,6 @@ module.exports = {
             assignedCustomStagesOp: 1,
             processStatus: "$processDetails.status",
             startTime: "$shiftDetails.startTime",
-            processStatus: "$processDetails.status",
             processQuantity: "$processDetails.quantity",
             processIssuedKits: "$processDetails.issuedKits",
             processConsumedKits: "$processDetails.consumedKits",
@@ -1002,7 +1084,6 @@ module.exports = {
             modelName: "$ocDetails.modelName",
             endTime: "$shiftDetails.endTime",
             totalBreakTime: "$shiftDetails.totalBreakTime",
-            //stageType: "$assignOperatorToPlans.stageType"
             isActiveProcess: {
               $and: [
                 { $eq: [{ $toLower: "$processDetails.status" }, "active"] },
@@ -1121,7 +1202,7 @@ module.exports = {
         PlaningAndScheduling,
       });
     } catch (error) {
-      return res.status(500).json({ staus: 500, error: error.message });
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   planingAndSchedulingLogs: async (req, res) => {
@@ -1135,7 +1216,7 @@ module.exports = {
         processLogs,
       });
     } catch (error) {
-      return res.status(500).json({ staus: 500, error: error.message });
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getProcessLogsByProcessId: async (req, res) => {
@@ -1173,7 +1254,7 @@ module.exports = {
       }
       return res.status(200).json(processLogs);
     } catch (error) {
-      return res.status(500).json({ staus: 500, error: error.message });
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   updateDownTime: async (req, res) => {
@@ -1279,6 +1360,7 @@ module.exports = {
       });
     } catch (error) {
       console.error("Error in updateProcessStatus:", error);
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getPlaningAndSchedulingDateWise: async (req, res) => {

@@ -1385,6 +1385,7 @@ module.exports = {
             requiredKits: "$processDetails.issuedKits",
           },
         },
+        { $sort: { _id: -1 } },
       ]);
 
       if (!task.length) {

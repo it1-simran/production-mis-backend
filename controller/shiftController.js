@@ -51,7 +51,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const Shifts = await ShiftModel.find();
+      const Shifts = await ShiftModel.find().sort({ _id: -1 });
 
       return res.status(200).json({
         status: 200,

@@ -74,7 +74,7 @@ module.exports = {
     // },
     view: async (req, res) => {
         try {
-            const apns = await EsimApn.find();
+            const apns = await EsimApn.find().sort({ _id: -1 });
             return res.status(200).json({
                 status: 200,
                 message: "ESIM APN records fetched successfully",

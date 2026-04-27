@@ -102,6 +102,7 @@ module.exports = {
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       return res.status(200).json({
         status: 200,
@@ -116,7 +117,7 @@ module.exports = {
     try {
       const Processes = await ProcessModel.find({
         selectedProduct: req.params.id,
-      });
+      }).sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",

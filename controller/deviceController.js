@@ -693,6 +693,7 @@ module.exports = {
         })
         .populate("deviceId")
         .populate("processId")
+        .sort({ _id: -1 })
         .lean();
 
       return res.status(200).json({
@@ -752,6 +753,7 @@ module.exports = {
             productName: "$products.name",
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       return res.status(200).json({
         status: 200,
@@ -818,7 +820,7 @@ module.exports = {
           error: "Invalid Product ID",
         });
       }
-      const devices = await deviceModel.find({ productType: id });
+      const devices = await deviceModel.find({ productType: id }).sort({ _id: -1 });
       if (devices.length === 0) {
         return res.status(404).json({
           status: 404,

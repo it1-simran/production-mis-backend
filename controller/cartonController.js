@@ -432,10 +432,38 @@ const resolveCartonStatusFromDeviceCount = (deviceCount, maxCapacity) => {
 };
 
 const isPackagingOpenCarton = (carton) => {
-  const lifecycleStatus = String(carton?.cartonStatus || "").trim();
+  const lifecycleStatus = String(carton?.cartonStatus || "")
+    .trim()
+    .toUpperCase();
   const fillStatus = String(carton?.status || "").trim().toLowerCase();
 
-  return lifecycleStatus === "" && ["full", "partial", "empty"].includes(fillStatus);
+  return (
+    (lifecycleStatus === "" || lifecycleStatus === "LOOSE_CLOSED") &&
+    ["full", "partial", "empty"].includes(fillStatus)
+  );
+};
+
+const resolveRepackagingCartonStage = (cartonStatus) => {
+  const normalized = normalizeStageToken(cartonStatus);
+  if (normalized === "pdi") return "PDI";
+  if (normalized === "fg to store") return "FG_TO_STORE";
+  if (normalized === "stocked" || normalized === "kept in store") return "STOCKED";
+  return "";
+};
+
+const isRepackagingCartonStage = (cartonStatus) => {
+  return Boolean(resolveRepackagingCartonStage(cartonStatus));
+};
+
+const isRepackagingEligibleDeviceStage = (stageName) => {
+  const normalized = normalizeStageToken(stageName);
+  return (
+    normalized === "packaging" ||
+    normalized === "pdi" ||
+    normalized === "fg to store" ||
+    normalized === "stocked" ||
+    normalized === "kept in store"
+  );
 };
 
 const normalizeStageText = (value) => String(value || "").trim();
@@ -1255,6 +1283,7 @@ module.exports = {
           $group: {
             _id: "$_id",
             cartonSize: { $first: "$cartonSize" },
+            packagingData: { $first: "$packagingData" },
             cartonSerial: { $first: "$cartonSerial" },
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
@@ -1284,6 +1313,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
 
       if (!cartons || cartons.length === 0) {
@@ -1354,6 +1384,7 @@ module.exports = {
           $group: {
             _id: "$_id",
             cartonSize: { $first: "$cartonSize" },
+            packagingData: { $first: "$packagingData" },
             cartonSerial: { $first: "$cartonSerial" },
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
@@ -1383,6 +1414,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
@@ -1468,6 +1500,7 @@ module.exports = {
           $group: {
             _id: "$_id",
             cartonSize: { $first: "$cartonSize" },
+            packagingData: { $first: "$packagingData" },
             cartonSerial: { $first: "$cartonSerial" },
             processId: { $first: "$processId" },
             maxCapacity: { $first: "$maxCapacity" },
@@ -1497,6 +1530,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
@@ -2825,7 +2859,7 @@ module.exports = {
           { cartonStatus: null },
           { cartonStatus: { $exists: false } },
         ],
-      }).populate({
+      }).sort({ _id: -1 }).populate({
         path: 'processId',
         select: 'name processID'
       });
@@ -3262,10 +3296,10 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Carton not found." });
       }
 
-      if (String(carton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
+      if (!isRepackagingCartonStage(carton?.cartonStatus)) {
         return res.status(400).json({
           status: 400,
-          message: `Carton is in ${carton.cartonStatus || "Packaging"} stage. Repackaging is only allowed for cartons in PDI stage.`,
+          message: `Carton is in ${carton.cartonStatus || "Packaging"} stage. Repackaging is allowed only for cartons in PDI or FG_TO_STORE stage.`,
         });
       }
 
@@ -3313,13 +3347,12 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Device not found." });
       }
 
-      const currentStage = String(device.currentStage || "").trim().toLowerCase();
-      const allowedStages = ["packaging", "pdi"];
+      const currentStage = normalizeStageToken(device.currentStage);
 
       // Check if already in another carton
       if (device.cartonSerial) {
         const otherCarton = await cartonModel.findOne({ cartonSerial: device.cartonSerial }).lean();
-        if (otherCarton && String(otherCarton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
+        if (otherCarton && !isRepackagingCartonStage(otherCarton?.cartonStatus)) {
           return res.status(400).json({
             status: 400,
             message: `Device is already in carton ${device.cartonSerial} which is in ${otherCarton.cartonStatus || "Packaging"} stage.`,
@@ -3345,14 +3378,14 @@ module.exports = {
         flowType: history?.flowType || "stage",
       }));
 
-      let isEligible = allowedStages.includes(currentStage);
+      let isEligible = isRepackagingEligibleDeviceStage(currentStage);
       let message = "";
 
       if (isFailed) {
         isEligible = false;
         message = `Device has a failing status (NG) at ${histories[histories.length - 1]?.stageName || "current stage"}. It cannot be added to a carton until it passes this stage.`;
       } else if (!isEligible) {
-        message = `Device is at ${device.currentStage || "Initial"} stage. Only devices in Packaging can be moved to PDI.`;
+        message = `Device is at ${device.currentStage || "Initial"} stage. Only devices in Packaging, PDI, or FG_TO_STORE can be repackaged.`;
       }
 
       // Fetch process data for NG assignment options
@@ -3387,7 +3420,7 @@ module.exports = {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      const { cartonSerial, deviceIds } = req.body;
+      const { cartonSerial, deviceIds, weightCarton, maxCapacity, cartonSize } = req.body;
       if (!cartonSerial || !Array.isArray(deviceIds)) {
         return res.status(400).json({ status: 400, message: "Invalid input data." });
       }
@@ -3397,8 +3430,21 @@ module.exports = {
         throw new Error("Carton not found.");
       }
 
-      if (String(carton.cartonStatus || "").trim().toUpperCase() !== "PDI") {
-        throw new Error("Repackaging only allowed for PDI cartons.");
+      const cartonWorkflowStage = resolveRepackagingCartonStage(carton?.cartonStatus);
+      if (!cartonWorkflowStage) {
+        throw new Error("Repackaging is allowed only for cartons in PDI, FG_TO_STORE, or STOCKED stage.");
+      }
+
+      // Update carton details if provided
+      if (weightCarton !== undefined) carton.weightCarton = String(weightCarton);
+      if (maxCapacity !== undefined) carton.maxCapacity = String(maxCapacity);
+      if (cartonSize && typeof cartonSize === "object") {
+        carton.cartonSize = {
+          length: String(cartonSize.length || carton.cartonSize?.length || ""),
+          width: String(cartonSize.width || carton.cartonSize?.width || ""),
+          height: String(cartonSize.height || carton.cartonSize?.height || ""),
+          depth: String(cartonSize.depth || carton.cartonSize?.depth || ""),
+        };
       }
 
       const oldDeviceIds = carton.devices.map(id => String(id));
@@ -3424,17 +3470,10 @@ module.exports = {
           { session }
         );
 
-        // Update devices added: If they were in Packaging, move to PDI
+        // Align added devices to the target carton workflow stage.
         await deviceModel.updateMany(
-          { _id: { $in: addedDeviceIds }, currentStage: { $regex: /^packaging$/i } },
-          { $set: { cartonSerial: carton.cartonSerial, currentStage: "PDI" } },
-          { session }
-        );
-
-        // For those already in PDI, just update cartonSerial
-        await deviceModel.updateMany(
-          { _id: { $in: addedDeviceIds }, currentStage: { $not: { $regex: /^packaging$/i } } },
-          { $set: { cartonSerial: carton.cartonSerial } },
+          { _id: { $in: addedDeviceIds } },
+          { $set: { cartonSerial: carton.cartonSerial, currentStage: cartonWorkflowStage } },
           { session }
         );
       }
@@ -3453,8 +3492,8 @@ module.exports = {
         carton,
         eventType: "REPACKAGE",
         performedBy: req.user?.id,
-        fromCartonStatus: "PDI",
-        toCartonStatus: "PDI",
+        fromCartonStatus: cartonWorkflowStage,
+        toCartonStatus: cartonWorkflowStage,
         fromDeviceStage: currentDeviceStage,
         toDeviceStage: currentDeviceStage,
         notes: `Repackaged: ${addedDeviceIds.length} added, ${removedDeviceIds.length} removed.`,
@@ -3476,7 +3515,14 @@ module.exports = {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      const { sourceCartonSerial, targetCartonSerial, deviceIdsToMove } = req.body;
+      const { 
+        sourceCartonSerial, 
+        targetCartonSerial, 
+        deviceIdsToMove,
+        sourceWeight, sourceCapacity, sourceSize,
+        targetWeight, targetCapacity, targetSize
+      } = req.body;
+      
       if (!sourceCartonSerial || !targetCartonSerial || !Array.isArray(deviceIdsToMove)) {
         return res.status(400).json({ status: 400, message: "Invalid input data." });
       }
@@ -3488,11 +3534,37 @@ module.exports = {
         throw new Error("One or both cartons not found.");
       }
 
-      if (
-        String(sourceCarton.cartonStatus || "").trim().toUpperCase() !== "PDI" ||
-        String(targetCarton.cartonStatus || "").trim().toUpperCase() !== "PDI"
-      ) {
-        throw new Error("Shuffle only allowed between PDI cartons.");
+      const sourceWorkflowStage = resolveRepackagingCartonStage(sourceCarton?.cartonStatus);
+      const targetWorkflowStage = resolveRepackagingCartonStage(targetCarton?.cartonStatus);
+      if (!sourceWorkflowStage || !targetWorkflowStage) {
+        throw new Error("Shuffle is allowed only for cartons in PDI, FG_TO_STORE, or STOCKED stage.");
+      }
+      if (sourceWorkflowStage !== targetWorkflowStage) {
+        throw new Error("Shuffle is allowed only between cartons in the same stage.");
+      }
+
+      // Update source details if provided
+      if (sourceWeight !== undefined) sourceCarton.weightCarton = String(sourceWeight);
+      if (sourceCapacity !== undefined) sourceCarton.maxCapacity = String(sourceCapacity);
+      if (sourceSize && typeof sourceSize === "object") {
+        sourceCarton.cartonSize = {
+          length: String(sourceSize.length || sourceCarton.cartonSize?.length || ""),
+          width: String(sourceSize.width || sourceCarton.cartonSize?.width || ""),
+          height: String(sourceSize.height || sourceCarton.cartonSize?.height || ""),
+          depth: String(sourceSize.depth || sourceCarton.cartonSize?.depth || ""),
+        };
+      }
+
+      // Update target details if provided
+      if (targetWeight !== undefined) targetCarton.weightCarton = String(targetWeight);
+      if (targetCapacity !== undefined) targetCarton.maxCapacity = String(targetCapacity);
+      if (targetSize && typeof targetSize === "object") {
+        targetCarton.cartonSize = {
+          length: String(targetSize.length || targetCarton.cartonSize?.length || ""),
+          width: String(targetSize.width || targetCarton.cartonSize?.width || ""),
+          height: String(targetSize.height || targetCarton.cartonSize?.height || ""),
+          depth: String(targetSize.depth || targetCarton.cartonSize?.depth || ""),
+        };
       }
 
       // Remove from source
@@ -3501,7 +3573,6 @@ module.exports = {
       await sourceCarton.save({ session });
 
       // Add to target
-      // Ensure we don't add duplicates
       const targetExistingIds = new Set(targetCarton.devices.map(id => String(id)));
       const filteredMoveIds = deviceIdsToMove.filter(id => !targetExistingIds.has(String(id)));
       
@@ -3515,7 +3586,7 @@ module.exports = {
       // Update devices
       await deviceModel.updateMany(
         { _id: { $in: deviceIdsToMove } },
-        { $set: { cartonSerial: targetCartonSerial } },
+        { $set: { cartonSerial: targetCartonSerial, currentStage: targetWorkflowStage } },
         { session }
       );
 
@@ -3526,8 +3597,8 @@ module.exports = {
         carton: sourceCarton,
         eventType: "SHUFFLE_OUT",
         performedBy: req.user?.id,
-        fromCartonStatus: "PDI",
-        toCartonStatus: "PDI",
+        fromCartonStatus: sourceWorkflowStage,
+        toCartonStatus: sourceWorkflowStage,
         fromDeviceStage: sourceStage,
         toDeviceStage: sourceStage,
         notes: `Moved ${deviceIdsToMove.length} devices to ${targetCartonSerial}`,
@@ -3538,8 +3609,8 @@ module.exports = {
         carton: targetCarton,
         eventType: "SHUFFLE_IN",
         performedBy: req.user?.id,
-        fromCartonStatus: "PDI",
-        toCartonStatus: "PDI",
+        fromCartonStatus: targetWorkflowStage,
+        toCartonStatus: targetWorkflowStage,
         fromDeviceStage: targetStage,
         toDeviceStage: targetStage,
         notes: `Received ${deviceIdsToMove.length} devices from ${sourceCartonSerial}`,
