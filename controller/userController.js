@@ -117,7 +117,7 @@ module.exports = {
   },
   getUsers: async (req, res) => {
     try {
-      const users = await User.find({ userType: { $ne: "admin" } }).select("-password");
+      const users = await User.find({ userType: { $ne: "admin" } }).select("-password").sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Users Fetched Sucessfully!!",

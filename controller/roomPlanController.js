@@ -22,7 +22,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const RoomPlan = await RoomPlanModel.find();
+      const RoomPlan = await RoomPlanModel.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Jigs Fetched Sucessfully!!",

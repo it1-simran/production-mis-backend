@@ -24,7 +24,7 @@ module.exports = {
         try {
             const makes = await EsimMake.find()
                 .select("_id simId name activeStatus remarks createdAt updatedAt")
-                .sort({ name: 1 })
+                .sort({ _id: -1 })
                 .lean();
             return res.status(200).json({
                 status: 200,

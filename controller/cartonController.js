@@ -1284,6 +1284,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
 
       if (!cartons || cartons.length === 0) {
@@ -1383,6 +1384,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
@@ -1497,6 +1499,7 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
+        { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
         return res.status(404).json({ message: "No Carton Found" });
@@ -2825,7 +2828,7 @@ module.exports = {
           { cartonStatus: null },
           { cartonStatus: { $exists: false } },
         ],
-      }).populate({
+      }).sort({ _id: -1 }).populate({
         path: 'processId',
         select: 'name processID'
       });

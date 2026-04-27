@@ -22,7 +22,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const userRoles = await UserRoles.find();
+      const userRoles = await UserRoles.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Users Roles Fetched Sucessfully!!",
@@ -115,7 +115,7 @@ module.exports = {
   },
   getUserType: async (req, res) => {
     try {
-      let userType = await UserTypes.find();
+      let userType = await UserTypes.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Users Roles Fetched Sucessfully!!",
@@ -127,7 +127,7 @@ module.exports = {
   },
   getUserTypeByType: async (req, res) => {
     try {
-      let userType = await UserRoles.find();
+      let userType = await UserRoles.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Users Roles Fetched Sucessfully!!",

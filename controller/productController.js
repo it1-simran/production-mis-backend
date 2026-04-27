@@ -67,7 +67,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const Products = await Product.find();
+      const Products = await Product.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Products Fetched Sucessfully!!",

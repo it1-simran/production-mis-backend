@@ -87,7 +87,8 @@ module.exports = {
                     status:"$processesDetails.status",
                     updatedAt:"$processesDetails.updatedAt",
                 }
-            }
+            },
+            { $sort: { _id: -1 } }
         ]);
         return res.status(200).json({status: 200,message: "Return Kit Store Data Retrieved Successfully!!",kits:kitsEntry});
     } catch(error) {
