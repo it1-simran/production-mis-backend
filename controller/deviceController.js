@@ -1163,6 +1163,9 @@ module.exports = {
             department: assignedDeviceTo,
             serialNo: data.serialNo || "",
             ngStage: currentStageName || data.ngStage || "",
+            ngDescription: data.ngDescription || "",
+            reason: data.reason || "",
+            logData: data.logData || null,
             ...(notes ? { notes } : {}),
           };
         } else if (assignedDeviceTo) {
@@ -1499,6 +1502,10 @@ module.exports = {
         stageName: 1,
         status: 1,
         assignedDeviceTo: 1,
+        reason: 1,
+        ngDescription: 1,
+        logData: 1,
+
         createdAt: 1,
         updatedAt: 1,
       };
