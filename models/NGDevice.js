@@ -15,6 +15,9 @@ const NGDeviceSchema = new mongoose.Schema({
   serialNo: { type: String, required: true, trim: true },
   ngStage: { type: String, required: true, trim: true },
   notes: { type: String, default: "" },
+  ngDescription: { type: String, default: "" },
+  reason: { type: String, default: "" },
+  logData: { type: mongoose.Schema.Types.Mixed, required: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

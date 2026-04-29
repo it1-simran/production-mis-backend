@@ -30,6 +30,10 @@ const deviceTestSchema = new mongoose.Schema({
   assignedDeviceTo: { type: String, required: false },
   // Free-form operator-provided description captured at NG time.
   ngDescription: { type: String, required: false, default: "" },
+  // Captured failure reason (e.g. from jig validation)
+  reason: { type: String, required: false },
+  // Top-level snapshot of log data for quick access in reports
+  logData: { type: mongoose.Schema.Types.Mixed, required: false },
   flowVersion: { type: Number, required: false, default: 1 },
   flowBoundary: { type: Boolean, required: false, default: false },
   flowType: { type: String, required: false, default: "stage" },
