@@ -689,7 +689,7 @@ module.exports = {
       const ngDevices = await deviceTestRecords
         .find({
           processId: new mongoose.Types.ObjectId(processId),
-          status: { $regex: /^NG$/i },
+          status: { $regex: /^NG$|RESOLVED/i },
         })
         .populate("deviceId")
         .populate("processId")
@@ -1505,6 +1505,7 @@ module.exports = {
         reason: 1,
         ngDescription: 1,
         logData: 1,
+        trcRemarks: 1,
 
         createdAt: 1,
         updatedAt: 1,
