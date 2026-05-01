@@ -2609,8 +2609,23 @@ module.exports = {
 
       // 3. Fetch Carton Details if associated
       let cartonDetails = null;
-      if (device.cartonSerial) {
+      if (device.cartonSerial && device.cartonSerial !== "" && device.cartonSerial !== "N/A") {
         cartonDetails = await cartonModel.findOne({ cartonSerial: device.cartonSerial }).lean();
+      }
+
+      // Fallback: If not found on device or not in DB, search by device ID or Serial in the devices array
+      if (!cartonDetails) {
+        cartonDetails = await cartonModel.findOne({ 
+          $or: [
+            { devices: device._id },
+            { devices: String(device._id) },
+            { devices: device.serialNo }
+          ]
+        }).lean();
+        
+        if (cartonDetails && !device.cartonSerial) {
+          device.cartonSerial = cartonDetails.cartonSerial;
+        }
       }
 
       return res.status(200).json({
