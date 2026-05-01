@@ -12,6 +12,7 @@ const mongoose = require("mongoose");
 const OrderConfirmationModel = require("../models/orderConfirmationNumber");
 const DeviceAttempt = require("../models/deviceAttempt");
 const cartonModel = require("../models/cartonManagement");
+const AssignNgDevice = require("../models/assignNgDevice");
 const {
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
@@ -1294,6 +1295,33 @@ module.exports = {
 
         shouldUpdateDevice = true;
       }
+
+      // 4. Strict Uniqueness Validation for IMEI and CCID (Critical Data Integrity Check)
+      if (shouldUpdateDevice && (deviceUpdatePayload.imeiNo || deviceUpdatePayload.ccid)) {
+        const conflictQuery = { _id: { $ne: deviceSnapshot._id } };
+        const conflictConditions = [];
+        if (deviceUpdatePayload.imeiNo) conflictConditions.push({ imeiNo: deviceUpdatePayload.imeiNo });
+        if (deviceUpdatePayload.ccid) conflictConditions.push({ ccid: deviceUpdatePayload.ccid });
+
+        if (conflictConditions.length > 0) {
+          conflictQuery.$or = conflictConditions;
+          const duplicate = await deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
+          if (duplicate) {
+            let conflictMsg = "Data Integrity Error: ";
+            if (duplicate.imeiNo === deviceUpdatePayload.imeiNo) {
+              conflictMsg += `IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}. `;
+            }
+            if (duplicate.ccid === deviceUpdatePayload.ccid) {
+              conflictMsg += `CCID ${deviceUpdatePayload.ccid} is already linked to device ${duplicate.serialNo}. `;
+            }
+            return res.status(409).json({
+              status: 409,
+              message: conflictMsg.trim(),
+            });
+          }
+        }
+      }
+
       let savedDeviceTestRecord = null;
       const writeSession = await mongoose.startSession();
       try {
@@ -1867,6 +1895,29 @@ module.exports = {
       if (req.body.imeiNo) updates.imeiNo = String(req.body.imeiNo).trim();
       if (req.body.ccid) updates.ccid = String(req.body.ccid).trim();
 
+      // Uniqueness validation for IMEI and CCID (Critical Data Integrity Check)
+      if (updates.imeiNo || updates.ccid) {
+        const conflictQuery = { _id: { $ne: device._id } };
+        const conflictConditions = [];
+        if (updates.imeiNo) conflictConditions.push({ imeiNo: updates.imeiNo });
+        if (updates.ccid) conflictConditions.push({ ccid: updates.ccid });
+
+        if (conflictConditions.length > 0) {
+          conflictQuery.$or = conflictConditions;
+          const duplicate = await deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
+          if (duplicate) {
+            let conflictMsg = "Duplicate identification detected: ";
+            if (duplicate.imeiNo === updates.imeiNo) conflictMsg += `IMEI ${updates.imeiNo} belongs to ${duplicate.serialNo}. `;
+            if (duplicate.ccid === updates.ccid) conflictMsg += `CCID ${updates.ccid} belongs to ${duplicate.serialNo}. `;
+            return res.status(409).json({
+              status: 409,
+              message: conflictMsg.trim(),
+            });
+          }
+        }
+      }
+
+
       // Auto-populate modelName from Order Confirmation if missing or empty
       if (!device.modelName && device.processID) {
         const processDoc = await processModel.findById(device.processID).select("orderConfirmationNo").lean();
@@ -1934,6 +1985,29 @@ module.exports = {
       // Root-level identification fields persistence
       if (req.body.imeiNo) updates.imeiNo = String(req.body.imeiNo).trim();
       if (req.body.ccid) updates.ccid = String(req.body.ccid).trim();
+
+      // Uniqueness validation for IMEI and CCID (Critical Data Integrity Check)
+      if (updates.imeiNo || updates.ccid) {
+        const conflictQuery = { _id: { $ne: device._id } };
+        const conflictConditions = [];
+        if (updates.imeiNo) conflictConditions.push({ imeiNo: updates.imeiNo });
+        if (updates.ccid) conflictConditions.push({ ccid: updates.ccid });
+
+        if (conflictConditions.length > 0) {
+          conflictQuery.$or = conflictConditions;
+          const duplicate = await deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
+          if (duplicate) {
+            let conflictMsg = "Duplicate identification detected: ";
+            if (duplicate.imeiNo === updates.imeiNo) conflictMsg += `IMEI ${updates.imeiNo} belongs to ${duplicate.serialNo}. `;
+            if (duplicate.ccid === updates.ccid) conflictMsg += `CCID ${updates.ccid} belongs to ${duplicate.serialNo}. `;
+            return res.status(409).json({
+              status: 409,
+              message: conflictMsg.trim(),
+            });
+          }
+        }
+      }
+
 
       // Auto-populate modelName from Order Confirmation if missing or empty
       if (!device.modelName && device.processID) {
@@ -2599,13 +2673,46 @@ module.exports = {
 
       const device = enrichDeviceIdentifiers(devices[0]);
 
-      // 2. Fetch Test History
-      const history = await deviceTestRecords.find({
-        $or: [{ deviceId: device._id }, { serialNo: device.serialNo }].filter(c => Object.values(c)[0])
-      })
-      .populate("operatorId", "name employeeCode")
-      .sort({ createdAt: 1 })
-      .lean();
+      // 2. Fetch Histories from multiple sources
+      const [testHistory, ngRecords, assignmentRecords] = await Promise.all([
+        deviceTestRecords.find({
+          $or: [{ deviceId: device._id }, { serialNo: device.serialNo }].filter(c => Object.values(c)[0])
+        })
+        .populate("operatorId", "name employeeCode")
+        .lean(),
+
+        NGDevice.find({ serialNo: device.serialNo })
+        .populate("userId", "name employeeCode")
+        .lean(),
+
+        AssignNgDevice.find({
+          $or: [{ deviceId: device._id }, { serialNo: device.serialNo }].filter(c => Object.values(c)[0])
+        })
+        .populate("operatorId", "name employeeCode")
+        .lean()
+      ]);
+
+      // 3. Normalize and Combine Histories
+      const history = [
+        ...testHistory,
+        ...ngRecords.map(ng => ({
+          ...ng,
+          stageName: `${ng.ngStage || 'Unknown Stage'} (NG Detail)`,
+          status: "NG",
+          operatorId: ng.userId,
+          isNGDetail: true
+        })),
+        ...assignmentRecords.map(ass => ({
+          ...ass,
+          stageName: `Movement: Assigned to ${ass.assignDepartment}`,
+          status: ass.status || "Assigned",
+          operatorId: ass.operatorId,
+          isAssignment: true
+        }))
+      ];
+
+      // Sort by creation time
+      history.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
       // 3. Fetch Carton Details if associated
       let cartonDetails = null;
