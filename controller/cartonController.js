@@ -1129,6 +1129,12 @@ module.exports = {
           resolvedExistingCapacity,
         );
         await existingCarton.save();
+        
+        // ✅ Sync cartonSerial to devices
+        await deviceModel.updateMany(
+          { _id: { $in: deviceIds } },
+          { $set: { cartonSerial: existingCarton.cartonSerial } }
+        );
         return res.status(200).json({
           status: 200,
           message: "Device added to existing carton",
@@ -1179,6 +1185,12 @@ module.exports = {
       });
 
       await newCarton.save();
+
+      // ✅ Sync cartonSerial to devices
+      await deviceModel.updateMany(
+        { _id: { $in: deviceIds } },
+        { $set: { cartonSerial: newCarton.cartonSerial } }
+      );
 
       return res.status(201).json({
         status: 201,
