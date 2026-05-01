@@ -2618,8 +2618,7 @@ module.exports = {
         cartonDetails = await cartonModel.findOne({ 
           $or: [
             { devices: device._id },
-            { devices: String(device._id) },
-            { devices: device.serialNo }
+            { devices: String(device._id) }
           ]
         }).lean();
         
