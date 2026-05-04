@@ -821,7 +821,34 @@ module.exports = {
           error: "Invalid Product ID",
         });
       }
-      const devices = await deviceModel.find({ productType: id }).sort({ _id: -1 });
+      const terminalDevicesInProcess = await deviceTestRecords.aggregate([
+        { $match: { productId: new mongoose.Types.ObjectId(id) } },
+        { $sort: { createdAt: -1 } },
+        { 
+          $group: { 
+            _id: "$deviceId", 
+            latestStatus: { $first: "$status" },
+            latestAssignedTo: { $first: "$assignedDeviceTo" }
+          } 
+        },
+        { 
+          $match: { 
+            $or: [
+              { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+              { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+            ]
+          } 
+        }
+      ]);
+
+      const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
+
+      const devices = await deviceModel.find({
+        productType: new mongoose.Types.ObjectId(id),
+        status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
+        _id: { $nin: excludedIds }
+      }).sort({ _id: -1 }).lean();
+      
       if (devices.length === 0) {
         return res.status(404).json({
           status: 404,
@@ -939,6 +966,34 @@ module.exports = {
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
 
+      const deviceUpdatePayload = { updatedAt: new Date() };
+      let shouldUpdateDevice = false;
+
+      // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
+      if (Array.isArray(data.logs) && data.logs.length > 0) {
+        data.logs.forEach(log => {
+          const parsed = log.logData?.parsedData;
+          if (parsed && typeof parsed === "object") {
+            Object.keys(parsed).forEach(k => {
+              const key = String(k || "").toLowerCase();
+              const val = String(parsed[k] || "").trim();
+              if (!val) return;
+
+              if (key === "imei" || key === "imeino") {
+                deviceUpdatePayload.imeiNo = val;
+                shouldUpdateDevice = true;
+              } else if (key === "ccid" || key === "iccid") {
+                deviceUpdatePayload.ccid = val;
+                shouldUpdateDevice = true;
+              } else if (key === "modelname" || key === "model_name") {
+                deviceUpdatePayload.modelName = val;
+                shouldUpdateDevice = true;
+              }
+            });
+          }
+        });
+      }
+
       const parseStart = Date.now();
       const rawAssignedStages = safeParseJson(planing?.assignedStages, {}) || {};
       const normalizedAssignedStages = normalizeAssignedStagesPayload(rawAssignedStages, products?.stages || []);
@@ -966,6 +1021,16 @@ module.exports = {
         const writeSession = await mongoose.startSession();
         try {
           await writeSession.withTransaction(async () => {
+            const upperAssignedTo = String(assignedDeviceTo || "").trim().toUpperCase();
+            if (upperAssignedTo === "TRC" || upperAssignedTo === "QC") {
+              deviceUpdatePayload.currentStage = upperAssignedTo;
+              deviceUpdatePayload.status = "NG";
+            } else {
+              deviceUpdatePayload.currentStage = assignedDeviceTo;
+              deviceUpdatePayload.status = "Rework";
+            }
+            shouldUpdateDevice = true;
+
             const notes = normalizeText(data.ngDescription || data?.logData?.description || "");
             const ngPayload = {
               processId: resolvedProcessId || null,
@@ -978,6 +1043,14 @@ module.exports = {
             if (ngPayload.processId && ngPayload.userId && ngPayload.serialNo) {
               const ngRecord = new NGDevice(ngPayload);
               await ngRecord.save({ session: writeSession });
+            }
+
+            if (shouldUpdateDevice) {
+              await deviceModel.updateOne(
+                { _id: deviceSnapshot._id },
+                { $set: deviceUpdatePayload },
+                { session: writeSession },
+              );
             }
 
             const recordSaveStart = Date.now();
@@ -1229,33 +1302,7 @@ module.exports = {
         return "";
       };
 
-      const deviceUpdatePayload = { updatedAt: new Date() };
-      let shouldUpdateDevice = false;
-
-      // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
-      if (Array.isArray(data.logs) && data.logs.length > 0) {
-        data.logs.forEach(log => {
-          const parsed = log.logData?.parsedData;
-          if (parsed && typeof parsed === "object") {
-            Object.keys(parsed).forEach(k => {
-              const key = String(k || "").toLowerCase();
-              const val = String(parsed[k] || "").trim();
-              if (!val) return;
-
-              if (key === "imei" || key === "imeino") {
-                deviceUpdatePayload.imeiNo = val;
-                shouldUpdateDevice = true;
-              } else if (key === "ccid" || key === "iccid") {
-                deviceUpdatePayload.ccid = val;
-                shouldUpdateDevice = true;
-              } else if (key === "modelname" || key === "model_name") {
-                deviceUpdatePayload.modelName = val;
-                shouldUpdateDevice = true;
-              }
-            });
-          }
-        });
-      }
+      markTiming("planParseMs", parseStart);
 
       if (actionMeta.actionStatus === "Pass") {
         let targetStageName = normalizeText(nextSeatRouting.nextLogicalStage || "");
@@ -1282,11 +1329,26 @@ module.exports = {
 
         if (targetStageName) {
           deviceUpdatePayload.currentStage = targetStageName;
+          // Reset status to "" (active) on pass, ensuring resolved units transition back to normal flow
+          deviceUpdatePayload.status = "";
           shouldUpdateDevice = true;
         }
-      } else if (assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
-        deviceUpdatePayload.currentStage = assignedDeviceTo;
-        deviceUpdatePayload.status = "Rework";
+      } else {
+        // It's an NG or Fail result
+        const upperAssignedTo = String(assignedDeviceTo || "").trim().toUpperCase();
+        if (upperAssignedTo && upperAssignedTo !== "QC" && upperAssignedTo !== "TRC") {
+          // Assigned to a specific rework stage/seat
+          deviceUpdatePayload.currentStage = assignedDeviceTo;
+          deviceUpdatePayload.status = "Rework";
+        } else {
+          // Assigned to TRC, QC, or no explicit assignment - mark as NG
+          // Also update currentStage to reflect the department if specified, 
+          // effectively removing it from the active production stage WIP.
+          if (upperAssignedTo === "TRC" || upperAssignedTo === "QC") {
+             deviceUpdatePayload.currentStage = upperAssignedTo;
+          }
+          deviceUpdatePayload.status = "NG";
+        }
 
         // Root-level identification persistence on rework/NG assignment
         if (data.imeiNo) deviceUpdatePayload.imeiNo = String(data.imeiNo).trim();
