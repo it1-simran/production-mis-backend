@@ -137,9 +137,9 @@ const getDefaultSeatStageRow = (seatKey, stageName) => ({
   wip: 0,
 });
 
-const COUNTABLE_STATUS_SET = new Set(["pass", "completed", "ng", "fail"]);
+const COUNTABLE_STATUS_SET = new Set(["pass", "completed", "ng", "fail", "qc", "trc", "rework"]);
 const PASS_STATUS_SET = new Set(["pass", "completed"]);
-const NG_STATUS_SET = new Set(["ng", "fail"]);
+const NG_STATUS_SET = new Set(["ng", "fail", "qc", "trc", "rework"]);
 
 const isRevertedEquivalentStatus = (status) => {
   const normalized = normalizeKey(status);
@@ -265,29 +265,8 @@ const buildLatestRecordPipeline = (match = {}) => [
       currentStage: 1,
       createdAt: 1,
       updatedAt: 1,
-      deviceKey: {
-        $ifNull: [
-          { $toString: "$deviceId" },
-          { $ifNull: ["$serialNo", { $toString: "$_id" }] },
-        ],
-      },
-      normalizedStageName: {
-        $trim: { input: { $ifNull: ["$stageName", ""] } },
-      },
     },
   },
-  {
-    $group: {
-      _id: {
-        planId: "$planId",
-        stageName: "$normalizedStageName",
-        deviceKey: "$deviceKey",
-      },
-      latest: { $first: "$$ROOT" },
-    },
-  },
-  { $replaceRoot: { newRoot: "$latest" } },
-  { $project: { normalizedStageName: 0, deviceKey: 0 } },
 ];
 
 const getOperatorTodayStats = async ({ operatorId = "", planId = "", processId = "" }) => {
@@ -421,9 +400,13 @@ const computePlanInsights = async ({
   const stageOrderMap = buildStageOrderMap({ processStages, commonStages });
   const stageSeatFallbackMap = getStageSeatFallbackMap(normalizedAssignedStages);
 
-  const latestMatch = { planId: new mongoose.Types.ObjectId(String(planId)) };
+  // Prioritize processId to match historical records exactly.
+  // Many records might be created without a specific planId during testing or migration.
+  const latestMatch = {};
   if (processId && mongoose.Types.ObjectId.isValid(String(processId))) {
     latestMatch.processId = new mongoose.Types.ObjectId(String(processId));
+  } else if (planId && mongoose.Types.ObjectId.isValid(String(planId))) {
+    latestMatch.planId = new mongoose.Types.ObjectId(String(planId));
   }
   const latestRecords = await deviceTestRecordModel
     .aggregate(buildLatestRecordPipeline(latestMatch))
@@ -431,7 +414,6 @@ const computePlanInsights = async ({
 
   const byStageMap = new Map();
   const bySeatStageMap = new Map();
-  const latestBySerial = new Map();
 
   const upsertStage = (stageName) => {
     const key = normalizeKey(stageName);
@@ -453,48 +435,84 @@ const computePlanInsights = async ({
     return bySeatStageMap.get(key);
   };
 
+  const latestByDeviceStage = new Map();
+  const latestBySerial = new Map();
+  
   (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
-    const stageName = normalizeValue(
-      record?.stageName ||
-      record?.currentLogicalStage ||
-      record?.currentStage ||
-      record?.nextLogicalStage,
-    );
+    const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
+    const stageKey = normalizeKey(record?.stageName || record?.currentStage || "");
+    if (!deviceId || !stageKey) return;
+    
+    // 1. DEDUPE: Only keep the LATEST record per device PER STAGE
+    // Since latestRecords is sorted by createdAt DESC, the first one we find is the newest.
+    const dsKey = `${deviceId}:${stageKey}`;
+    if (!latestByDeviceStage.has(dsKey)) {
+      latestByDeviceStage.set(dsKey, record);
+    }
+    
+    // 2. Latest per device overall (for process-wide totals)
+    const serial = normalizeValue(record?.serialNo || deviceId);
+    if (!latestBySerial.has(serial)) {
+       latestBySerial.set(serial, record);
+    }
+  });
+
+  const dedupedRecords = Array.from(latestByDeviceStage.values());
+  const processedDeviceIds = new Set();
+
+  dedupedRecords.forEach((record) => {
+    const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
+    if (deviceId) processedDeviceIds.add(deviceId);
+
+    const stageName = normalizeValue(record?.stageName || record?.currentStage || "");
     if (!stageName) return;
-    const isCountable = isCountableStatus(record?.status);
+
+    const status = normalizeKey(record?.status);
+    const isCountable = isCountableStatus(status);
+    
     if (isCountable) {
       const stageRow = upsertStage(stageName);
-      if (!stageRow) return;
+      if (stageRow) {
+        stageRow.tested += 1;
+        if (isPassStatus(status)) stageRow.pass += 1;
+        if (isNgStatus(status)) stageRow.ng += 1;
+      }
 
-      stageRow.tested += 1;
-      if (isPassStatus(record?.status)) stageRow.pass += 1;
-      if (isNgStatus(record?.status)) stageRow.ng += 1;
-    }
+      const seatKey = normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+      if (seatKey) {
+        const seatStageRow = upsertSeatStage(seatKey, stageName);
+        if (seatStageRow) {
+          seatStageRow.tested += 1;
+          if (isPassStatus(status)) seatStageRow.pass += 1;
+          if (isNgStatus(status)) seatStageRow.ng += 1;
+        }
+      }
+    } else if (status.includes("resolved")) {
+      // Resolved NG devices should be counted as WIP for the stage they returned to
+      const stageRow = upsertStage(stageName);
+      if (stageRow) stageRow.wip += 1;
 
-    const seatKey = normalizeValue(
-      record?.seatNumber ||
-      record?.currentSeatKey ||
-      record?.assignedSeatKey,
-    );
-    if (isCountable && seatKey) {
-      const seatStageRow = upsertSeatStage(seatKey, stageName);
-      if (seatStageRow) {
-        seatStageRow.tested += 1;
-        if (isPassStatus(record?.status)) seatStageRow.pass += 1;
-        if (isNgStatus(record?.status)) seatStageRow.ng += 1;
+      const seatKey = normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+      if (seatKey) {
+        const seatStageRow = upsertSeatStage(seatKey, stageName);
+        if (seatStageRow) seatStageRow.wip += 1;
       }
     }
 
-    if (isRevertedEquivalentStatus(record?.status)) return;
+    // Handle Stage Transition: Pass -> Next Stage WIP
+    if (isPassStatus(status)) {
+       const nextStageName = normalizeValue(record?.nextLogicalStage || "");
+       if (nextStageName) {
+          const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
+          const nextStageKey = normalizeKey(nextStageName);
+          const dsKey = `${deviceId}:${nextStageKey}`;
 
-    const serial = normalizeValue(record?.serialNo);
-    if (serial) {
-      const previous = latestBySerial.get(serial);
-      const currentTs = new Date(record?.createdAt || 0).getTime();
-      const previousTs = new Date(previous?.createdAt || 0).getTime();
-      if (!previous || currentTs >= previousTs) {
-        latestBySerial.set(serial, record);
-      }
+          // Only count as WIP for the next stage if the device hasn't started that stage yet
+          if (deviceId && !latestByDeviceStage.has(dsKey)) {
+            const nextStageRow = upsertStage(nextStageName);
+            if (nextStageRow) nextStageRow.wip += 1;
+          }
+       }
     }
   });
 
@@ -508,7 +526,7 @@ const computePlanInsights = async ({
 
   const deviceSnapshots = planSerials.length > 0
     ? await deviceModel.find(deviceMatch)
-        .select("_id serialNo status currentStage processID")
+        .select("_id serialNo status currentStage processID imei imeiNo ccid")
         .lean()
     : [];
 
@@ -525,36 +543,81 @@ const computePlanInsights = async ({
     wip: 0,
   };
 
-  latestBySerial.forEach((record, serial) => {
-    const device = deviceSnapshotMap.get(normalizeValue(serial));
-    if (!device) return;
-
-    uniquePlanTotals.tested += 1;
-    const status = normalizeKey(device.status);
-    const isNg = status === "ng" || status === "fail" || isNgStatus(record?.status);
-    
-    if (isNg) {
-      uniquePlanTotals.ng += 1;
-    } else if (status === "completed") {
-      uniquePlanTotals.pass += 1;
-    } else {
-      uniquePlanTotals.wip += 1;
-      const currentStage = normalizeValue(device.currentStage || firstProcessStage);
-      if (currentStage) {
-        const stageRow = upsertStage(currentStage);
-        if (stageRow) stageRow.wip += 1;
-
-        const seatKey = getDeviceSeatKeyForStage({
-          latestRecord: record,
-          stageName: currentStage,
-          stageSeatFallbackMap,
-        });
-        if (seatKey) {
-          const seatStageRow = upsertSeatStage(seatKey, currentStage);
-          if (seatStageRow) seatStageRow.wip += 1;
-        }
-      }
+  // Identify terminal units to exclude from active WIP
+  const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
+    { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
+    { $sort: { createdAt: -1 } },
+    { 
+      $group: { 
+        _id: "$deviceId", 
+        latestStatus: { $first: "$status" },
+        latestAssignedTo: { $first: "$assignedDeviceTo" }
+      } 
+    },
+    { 
+      $match: { 
+        $or: [
+          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+          { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+        ]
+      } 
     }
+  ]);
+
+  const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
+
+  const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
+    ? await deviceModel
+        .find({
+          productType: selectedProduct,
+          processID: new mongoose.Types.ObjectId(String(processId)),
+          _id: { $nin: excludedIds }
+        })
+        .select("_id serialNo status currentStage processID imei imeiNo ccid")
+        .lean()
+    : [];
+
+  // Count active WIP (those without any test in this process yet)
+  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
+     const deviceId = String(device?._id || "");
+     if (processedDeviceIds.has(deviceId)) return;
+
+     const status = normalizeKey(device?.status);
+     const stageName = normalizeValue(device?.currentStage || firstProcessStage);
+     if (!stageName) return;
+
+     const stageRow = upsertStage(stageName);
+     if (!stageRow) return;
+
+      if (status === "ng" || status === "fail" || status === "qc" || status === "trc" || status === "rework" || status === "rejected") {
+        stageRow.tested += 1;
+        stageRow.ng += 1;
+      } else if (status === "completed" || status === "dispatched") {
+        stageRow.tested += 1;
+        stageRow.pass += 1;
+      } else {
+         stageRow.wip += 1;
+         
+         // Find seat assignment for this active unit
+         const seatKey = getDeviceSeatKeyForStage({
+           latestRecord: latestBySerial.get(normalizeValue(device.serialNo)),
+           stageName: stageName,
+           stageSeatFallbackMap,
+         });
+         if (seatKey) {
+            const seatRow = upsertSeatStage(seatKey, stageName);
+            if (seatRow) seatRow.wip += 1;
+         }
+      }
+  });
+
+  // Calculate process-level summary totals
+  latestBySerial.forEach((record, serial) => {
+    uniquePlanTotals.tested += 1;
+    const status = normalizeKey(record?.status);
+    if (isPassStatus(status)) uniquePlanTotals.pass += 1;
+    else if (isNgStatus(status)) uniquePlanTotals.ng += 1;
+    else uniquePlanTotals.wip += 1;
   });
 
   const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
@@ -623,58 +686,163 @@ const computeProcessInsights = async ({
     return byStageMap.get(key);
   };
 
-  (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
-    const stageName = normalizeValue(
-      record?.stageName ||
-      record?.currentLogicalStage ||
-      record?.currentStage ||
-      record?.nextLogicalStage,
-    );
-    if (!stageName) return;
-    if (isCountableStatus(record?.status)) {
-      const stageRow = upsertStage(stageName);
-      if (stageRow) {
-        stageRow.tested += 1;
-        if (isPassStatus(record?.status)) stageRow.pass += 1;
-        if (isNgStatus(record?.status)) stageRow.ng += 1;
-      }
-    }
-  });
-
   const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
+
+  // Identify terminal devices to exclude from WIP
+  const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
+    { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
+    { $sort: { createdAt: -1 } },
+    { 
+      $group: { 
+        _id: "$deviceId", 
+        latestStatus: { $first: "$status" },
+        latestAssignedTo: { $first: "$assignedDeviceTo" }
+      } 
+    },
+    { 
+      $match: { 
+        $or: [
+          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+          { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+        ]
+      } 
+    }
+  ]);
+
+  const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
+
   const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
     ? await deviceModel
         .find({
           productType: selectedProduct,
           processID: new mongoose.Types.ObjectId(String(processId)),
-          status: { $nin: ["completed", "ng", "fail", "Completed", "NG", "Fail"] },
+          _id: { $nin: excludedIds }
         })
-        .select("_id serialNo status currentStage processID")
+        .select("_id serialNo status currentStage processID imei imeiNo ccid")
         .lean()
     : [];
 
-  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
-    const status = normalizeKey(device?.status);
-    if (status === "ng" || status === "completed") return;
-    const stageName = normalizeValue(device?.currentStage || firstProcessStage);
-    if (!stageName) return;
-    const stageRow = upsertStage(stageName);
-    if (stageRow) stageRow.wip += 1;
+  const bySeatStageMap = new Map();
+  const upsertSeatStage = (seatKey, stageName) => {
+    const seat = String(seatKey || "").trim();
+    const stage = normalizeKey(stageName);
+    if (!seat || !stage) return null;
+    const key = `${seat}:${stage}`;
+    if (!bySeatStageMap.has(key)) {
+      bySeatStageMap.set(key, getDefaultSeatStageRow(seat, stageName));
+    }
+    return bySeatStageMap.get(key);
+  };
+
+  // Use a Map to keep track of the LATEST record per device PER STAGE
+  // This ensures we match the history modal's logic exactly.
+  const latestByDeviceStage = new Map();
+  
+  (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
+    const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
+    const stageKey = normalizeKey(record?.stageName || record?.currentStage || "");
+    if (!deviceId || !stageKey) return;
+    
+    // DEDUPE: Only keep the LATEST record per device PER STAGE
+    const key = `${deviceId}:${stageKey}`;
+    if (!latestByDeviceStage.has(key)) {
+      latestByDeviceStage.set(key, record);
+    }
   });
 
-  const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
+  const processedDeviceIds = new Set();
+  const dedupedRecords = Array.from(latestByDeviceStage.values());
   
+  // 1. Process all test records (Pass/NG/QC/TRC)
+  dedupedRecords.forEach((record) => {
+    const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
+    if (deviceId) processedDeviceIds.add(deviceId);
+
+    const currentStageName = normalizeValue(record?.stageName || record?.currentStage || "");
+    if (!currentStageName) return;
+
+    const status = normalizeKey(record?.status);
+    const seatKey = String(record?.seatNumber || "").trim();
+    
+    // Increment tested/pass/ng for the stage where the test happened
+    if (isCountableStatus(status)) {
+      const stageRow = upsertStage(currentStageName);
+      if (stageRow) {
+        stageRow.tested += 1;
+        if (isPassStatus(status)) stageRow.pass += 1;
+        if (isNgStatus(status)) stageRow.ng += 1;
+      }
+      
+      if (seatKey) {
+        const seatRow = upsertSeatStage(seatKey, currentStageName);
+        if (seatRow) {
+          seatRow.tested += 1;
+          if (isPassStatus(status)) seatRow.pass += 1;
+          if (isNgStatus(status)) seatRow.ng += 1;
+        }
+      }
+    } else if (status.includes("resolved")) {
+      // Resolved NG devices should be counted as WIP for the stage they returned to
+      const stageRow = upsertStage(currentStageName);
+      if (stageRow) stageRow.wip += 1;
+
+      if (seatKey) {
+        const seatRow = upsertSeatStage(seatKey, currentStageName);
+        if (seatRow) seatRow.wip += 1;
+      }
+    }
+  });
+
+  // 2. Process all other active devices (those without test records yet)
+  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
+    const deviceId = String(device?._id || "");
+    if (processedDeviceIds.has(deviceId)) return;
+
+    const status = normalizeKey(device?.status);
+    const stageName = normalizeValue(device?.currentStage || firstProcessStage);
+    if (!stageName) return;
+
+    const stageRow = upsertStage(stageName);
+    if (!stageRow) return;
+
+    if (status === "ng" || status === "fail" || status === "qc" || status === "trc" || status === "rework" || status === "rejected") {
+       stageRow.tested += 1;
+       stageRow.ng += 1;
+    } else if (status === "completed" || status === "dispatched" || status === "pass") {
+       stageRow.tested += 1;
+       stageRow.pass += 1;
+    } else {
+      stageRow.wip += 1;
+    }
+  });
+
   // Calculate unique device totals for the whole process
   const uniqueProcessTotals = {
-    tested: latestRecords?.length || 0,
+    tested: dedupedRecords?.length || 0,
     pass: 0,
     ng: 0,
     wip: 0,
   };
 
-  (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
+  dedupedRecords.forEach((record) => {
     if (isPassStatus(record?.status)) uniqueProcessTotals.pass += 1;
     if (isNgStatus(record?.status)) uniqueProcessTotals.ng += 1;
+
+    // Determine if this device should contribute to WIP of the NEXT stage
+    if (isPassStatus(record?.status)) {
+      const nextStageName = normalizeValue(record?.nextLogicalStage || "");
+      if (nextStageName) {
+        const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
+        const nextStageKey = normalizeKey(nextStageName);
+        const dsKey = `${deviceId}:${nextStageKey}`;
+
+        // Only count as WIP for the next stage if the device hasn't started that stage yet
+        if (deviceId && !latestByDeviceStage.has(dsKey)) {
+          const nextStageRow = upsertStage(nextStageName);
+          if (nextStageRow) nextStageRow.wip += 1;
+        }
+      }
+    }
   });
 
   byStage.forEach((row) => {
@@ -685,6 +853,7 @@ const computeProcessInsights = async ({
     generatedAt: new Date().toISOString(),
     totals: uniqueProcessTotals,
     byStage,
+    bySeatStage,
   };
 };
 
