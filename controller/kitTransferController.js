@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const KitTransferRequest = require("../models/kitTransferRequest");
 const ProcessModel = require("../models/process");
 const DeviceModel = require("../models/device");
@@ -100,20 +101,24 @@ const getCurrentDeviceStageIndex = (device, stageSequence = [], highestIndex = -
   return getStageIndex(stageSequence, fallbackStage);
 };
 
-const buildRequestQuery = (query = {}) => {
-  const filter = {};
+const buildRequestQuery = (req, query = {}) => {
+  const filter = getDataAccessFilter(req, { createdByField: "requesterId" });
 
   if (query.status && query.status !== "all") {
     filter.status = String(query.status).trim().toUpperCase();
   }
   if (query.processId) {
-    filter.$or = [
-      { fromProcessId: query.processId },
-      { toProcessId: query.processId },
-    ];
+    const pId = new mongoose.Types.ObjectId(query.processId);
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        { fromProcessId: pId },
+        { toProcessId: pId },
+      ]
+    });
   }
   if (query.requesterId) {
-    filter.requesterId = query.requesterId;
+    filter.requesterId = new mongoose.Types.ObjectId(query.requesterId);
   }
   if (query.fromDate || query.toDate) {
     filter.createdAt = {};
@@ -333,6 +338,7 @@ module.exports = {
         remarks: String(remarks || "").trim(),
         requesterId: actorId,
         requesterName: getActorLabel(requesterUser) || getActorLabel(req.user),
+        department: req.user?.department || "",
       });
 
       console.log(">>> [DEBUG_TRACE] 21: Done!");
@@ -354,7 +360,7 @@ module.exports = {
 
   listRequests: async (req, res) => {
     try {
-      const requests = await KitTransferRequest.find(buildRequestQuery(req.query))
+      const requests = await KitTransferRequest.find(buildRequestQuery(req, req.query))
         .sort({ createdAt: -1 })
         .lean();
 

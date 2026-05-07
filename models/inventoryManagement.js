@@ -7,6 +7,12 @@ const inventorySchema = new mongoose.Schema({
   status: { type: String, enum: ["In Stock", "Out of Stock", "Reserved"], default: "Out of Stock" },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: false,
+  },
+  department: { type: String, required: false },
 });
 
 const inventory = mongoose.model("inventory", inventorySchema);

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const moment = require("moment");
 const momentTz = require("moment-timezone");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -9,6 +10,7 @@ const ShiftModel = require("../models/shiftManagement");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const assignedJigToPlanModel = require("../models/assignJigToPlan");
+const assignKitsToLineModel = require("../models/assignKitsToLine");
 
 const {
   computePlanInsights,
@@ -419,6 +421,11 @@ module.exports = {
       data.ProcessShiftMappings = safeParse(data?.ProcessShiftMappings, []);
       data.startDate = formatDateForMongoose(data?.startDate);
       data.estimatedEndDate = formatDateForMongoose(data?.estimatedEndDate);
+      
+      // Set ownership fields
+      data.createdBy = req.user?.id;
+      data.department = req.user?.department || "";
+
       const newPlanAndScheduling = new PlaningAndSchedulingModel(data);
       await newPlanAndScheduling.save();
 
@@ -521,7 +528,11 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       let plans = await PlaningAndSchedulingModel.aggregate([
+        {
+          $match: filter
+        },
         {
           $lookup: {
             from: "processes",
@@ -1117,7 +1128,9 @@ module.exports = {
   getPlaningAnDschedulingByProcessId: async (req, res) => {
     try {
       const id = req.params.id;
+      const filter = getDataAccessFilter(req);
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
+        ...filter,
         selectedProcess: id,
       });
       if (!PlaningAndScheduling) {
@@ -1140,8 +1153,8 @@ module.exports = {
           message: "Invalid plan id",
         });
       }
-
-      const plan = await PlaningAndSchedulingModel.findById(planId).lean();
+      const filter = getDataAccessFilter(req);
+      const plan = await PlaningAndSchedulingModel.findOne({ _id: planId, ...filter }).lean();
       if (!plan) {
         return res.status(404).json({
           status: 404,
@@ -1169,6 +1182,8 @@ module.exports = {
         process?.commonStages || [],
       );
 
+      const ka = await assignKitsToLineModel.findOne({ planId, processId: process?._id }).lean().catch(() => null);
+
       const insights = await computePlanInsights({
         planId,
         processId: process?._id || "",
@@ -1178,6 +1193,7 @@ module.exports = {
         selectedProduct: process?.selectedProduct || "",
         quantity: process?.quantity || 0,
         shift,
+        issuedKits: ka?.issuedKits || 0,
       });
 
       return res.status(200).json({
@@ -1195,7 +1211,8 @@ module.exports = {
   },
   fetchAllPlaningModel: async (req, res) => {
     try {
-      const PlaningAndScheduling = await PlaningAndSchedulingModel.find();
+      const filter = getDataAccessFilter(req);
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find(filter);
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",
@@ -1388,9 +1405,11 @@ module.exports = {
         filterEndDate = today.clone().endOf("isoWeek").toDate();
       }
 
+      const filter = getDataAccessFilter(req);
       const response = await PlaningAndSchedulingModel.aggregate([
         {
           $match: {
+            ...filter,
             startDate: {
               $gte: filterStartDate,
               $lte: filterEndDate,

@@ -9,6 +9,7 @@ const shiftModel = require("../models/shiftManagement");
 const userModel = require("../models/User");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
+const assignKitsToLineModel = require("../models/assignKitsToLine");
 const {
   parseStickerScanTokens,
   findDevicesByScanTokensStrict,
@@ -1126,7 +1127,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     firstStageName,
   });
 
-  const [latestRecords, rawDevices, canonicalInsights, operatorSummary] = await Promise.all([
+  const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
@@ -1141,19 +1142,31 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
           .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
           .lean()
       : Promise.resolve([]),
-    computePlanInsights({
-      planId,
-      processId: process?._id || "",
-      operatorId,
-      assignedStages: normalizedAssignedStages,
-      processStages: process?.stages || [],
-      commonStages: process?.commonStages || [],
-      selectedProduct: process?.selectedProduct || "",
-      quantity: process?.quantity || 0,
-      shift,
-    }),
+    assignKitsToLineModel.findOne({ planId, processId: process?._id }).lean().catch(() => null),
     getOperatorStats(operatorId, includeHistory),
   ]);
+
+  let seatIssuedKits = 0;
+  if (kitAssignment && seatKey) {
+    const [row, seat] = String(seatKey).split("-");
+    const match = (kitAssignment.seatDetails || []).find(
+      (s) => String(s.rowNumber) === String(row) && String(s.seatNumber) === String(seat),
+    );
+    if (match) seatIssuedKits = Number(match.issuedKits || 0);
+  }
+
+  const canonicalInsights = await computePlanInsights({
+    planId,
+    processId: process?._id || "",
+    operatorId,
+    assignedStages: normalizedAssignedStages,
+    processStages: process?.stages || [],
+    commonStages: process?.commonStages || [],
+    selectedProduct: process?.selectedProduct || "",
+    quantity: process?.quantity || 0,
+    shift,
+    issuedKits: seatIssuedKits,
+  });
 
   const deviceQueue = seatKey && currentAssignedStageName && process
     ? filterDevicesForSeat({
@@ -1182,6 +1195,17 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       )
     : [];
 
+  const seatTotals = scopedSeatStages.reduce(
+    (acc, row) => {
+      acc.pass += Number(row?.pass || 0);
+      acc.ng += Number(row?.ng || 0);
+      acc.wip += Number(row?.wip || 0);
+      acc.tested += Number(row?.tested || 0);
+      return acc;
+    },
+    { pass: 0, ng: 0, wip: 0, tested: 0 },
+  );
+
   const scopedTotals = scopedStages.reduce(
     (acc, row) => {
       acc.overallTotalAttempts += Number(row?.tested || 0);
@@ -1197,20 +1221,15 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       scopedStageWip: 0,
     },
   );
-  const scopedSeatWip = scopedSeatStages.reduce(
-    (sum, row) => sum + Number(row?.wip || 0),
-    0,
+
+  const seatAccountedFor = seatTotals.pass + seatTotals.ng;
+  const resolvedWipKits = Math.max(
+    seatTotals.wip,
+    seatIssuedKits > 0 ? seatIssuedKits - seatAccountedFor : (seatKey && scopedSeatStages.length === 0 ? deviceQueue.length : 0),
   );
-  const resolvedWipKits =
-    seatKey && scopedSeatStages.length > 0
-      ? scopedSeatWip
-      : seatKey && scopedSeatStages.length === 0
-        ? deviceQueue.length
-        : scopedTotals.scopedStageWip;
-  const resolvedLineIssueKits =
-    resolvedWipKits +
-    scopedTotals.overallTotalCompleted +
-    scopedTotals.overallTotalNg;
+  const resolvedLineIssueKits = seatIssuedKits || resolvedWipKits + seatAccountedFor;
+  const resolvedKitsShortage = Math.max(0, resolvedLineIssueKits - (resolvedWipKits + seatAccountedFor));
+
 
   const { operatorStats, operatorHistory } = operatorSummary;
   const operatorToday = canonicalInsights?.totals?.operatorToday || operatorStats;
@@ -1245,10 +1264,10 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     counters: {
       wipKits: resolvedWipKits,
       lineIssueKits: resolvedLineIssueKits,
-      kitsShortage: 0,
-      overallTotalCompleted: scopedTotals.overallTotalCompleted,
-      overallTotalNg: scopedTotals.overallTotalNg,
-      overallTotalAttempts: scopedTotals.overallTotalAttempts,
+      kitsShortage: resolvedKitsShortage,
+      overallTotalCompleted: seatTotals.pass,
+      overallTotalNg: seatTotals.ng,
+      overallTotalAttempts: seatTotals.tested,
       totalAttempts: Number(operatorToday?.totalAttempts || 0),
       totalCompleted: Number(operatorToday?.totalCompleted || 0),
       totalNg: Number(operatorToday?.totalNg || 0),
@@ -1258,12 +1277,12 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       operatorScope: {
         seatKey,
         stageNames,
-        tested: scopedTotals.overallTotalAttempts,
-        pass: scopedTotals.overallTotalCompleted,
-        ng: scopedTotals.overallTotalNg,
+        tested: seatTotals.tested,
+        pass: seatTotals.pass,
+        ng: seatTotals.ng,
         wip: resolvedWipKits,
         lineIssueKits: resolvedLineIssueKits,
-        kitsShortage: 0,
+        kitsShortage: resolvedKitsShortage,
       },
     },
     downTime: {

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const ProcessModel = require("../models/process");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
 const DeviceTestModel = require("../models/deviceTestModel");
@@ -7,8 +8,9 @@ const moment = require("moment-timezone");
 module.exports = {
   getProcesses: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       let Processes = await ProcessModel.aggregate([
-        // { $match: {status: "Waiting_Kits_approval"}},
+        { $match: filter },
         {
           $lookup: {
             from: "planingandschedulings",
@@ -31,7 +33,12 @@ module.exports = {
             as: "productDetails",
           },
         },
-        { $unwind: "$productDetails" },
+        {
+          $unwind: {
+            path: "$productDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
         {
           $lookup: {
             from: "assignkitstolines",
@@ -96,8 +103,9 @@ module.exports = {
   },
   getRemainingKitFromCompletedProcess: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       let Processes = await ProcessModel.aggregate([
-        { $match: { status: "completed" } },
+        { $match: { ...filter, status: "completed" } },
         {
           $lookup: {
             from: "returnkittostores",
@@ -305,6 +313,7 @@ module.exports = {
   },
   getMesProductionDashboard: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       const { processId, timezone } = req.query || {};
       const tz = timezone || "UTC";
 
@@ -316,7 +325,7 @@ module.exports = {
       const startMs = startDate.getTime();
       const endMs = endDate.getTime();
 
-      let plans = await PlaningAndSchedulingModel.find({}).lean();
+      let plans = await PlaningAndSchedulingModel.find(filter).lean();
 
       const planInRange = (p) => {
         const s = p?.startDate ? new Date(p.startDate).getTime() : null;
@@ -329,7 +338,7 @@ module.exports = {
         plans = plans.filter((p) => String(p?.selectedProcess || "") === String(processId));
       }
 
-      const processesAll = await ProcessModel.find({ status: "active" }).lean();
+      const processesAll = await ProcessModel.find({ ...filter, status: "active" }).lean();
       let processes = processesAll;
 
       const processIds = [

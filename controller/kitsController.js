@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const kitsModel = require("../models/returnKitToStore");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
@@ -49,9 +50,10 @@ module.exports = {
   },
   viewReturnKitStore: async (req, res) => {
     try {
+        const filter = getDataAccessFilter(req, { createdByField: "userId" });
         const kitsEntry = await kitsModel.aggregate([
             {
-                $match:{status: "SEND_TO_STORE"}
+                $match: { ...filter, status: "SEND_TO_STORE" }
             },
             {
                 $lookup : {

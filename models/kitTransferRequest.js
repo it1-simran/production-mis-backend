@@ -45,6 +45,7 @@ const kitTransferRequestSchema = new mongoose.Schema(
     approverName: { type: String, default: "" },
     approvedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
+    department: { type: String, default: "" },
   },
   { timestamps: true }
 );

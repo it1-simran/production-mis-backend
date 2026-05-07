@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const UserRoles = require("../models/userRoles");
 const UserTypes = require("../models/userType");
+console.log(">>> [DEBUG] UserTypes Model Loaded:", !!UserTypes, typeof UserTypes);
 const bcrypt = require("bcrypt");
 module.exports = {
   create: async (req, res) => {
@@ -78,63 +79,100 @@ module.exports = {
   getUserRolesByID: async (req, res) => {
     try {
       const id = req.params.id;
-      const userRole = await UserRoles.findById(id);
-      if (!userRole) {
-        return res.status(404).json({ error: "User Roles not found" });
+      console.log(`>>> [DEBUG] Fetching role by ID: ${id}`);
+      
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        console.error(`>>> [ERROR] Invalid ObjectId format: ${id}`);
+        return res.status(400).json({ error: "Invalid role ID format" });
       }
-      return res.status(200).json(userRole);
+
+      const role = await UserTypes.findById(id);
+      
+      if (!role) {
+        console.warn(`>>> [WARN] Role not found in database for ID: ${id}`);
+        return res.status(404).json({ error: "User Role not found in database" });
+      }
+
+      console.log(`>>> [DEBUG] Role found: ${role.name}`);
+      return res.status(200).json({ 
+        roles: role.permissions || {}, 
+        name: role.name 
+      });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      console.error(`>>> [CRITICAL] getUserRolesByID exception:`, error);
+      return res.status(500).json({ 
+        error: "RBAC_CONTROLLER_ERROR", 
+        details: error.message,
+        path: "/user-roles/get/" + req.params.id
+      });
     }
   },
   update: async (req, res) => {
     try {
       const id = req.params.id;
-      const updatedData = {roles:req.body};
-      const updatedRoomPlan = await UserRoles.findByIdAndUpdate(
+      // We are now updating permissions directly on the UserType (Role)
+      const updatedUserType = await UserTypes.findByIdAndUpdate(
         id,
-        updatedData,
+        { $set: { permissions: req.body, updatedAt: Date.now() } },
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
 
-      if (!updatedRoomPlan) {
-        return res.status(404).json({ message: "Users Role not found" });
+      if (!updatedUserType) {
+        return res.status(404).json({ message: "Role not found" });
       }
 
       return res.status(200).json({
         status: 200,
-        message: "Users Role updated successfully",
-        roomPlan: updatedRoomPlan,
+        message: "Role permissions updated successfully",
+        role: updatedUserType,
       });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      console.error(`>>> [CRITICAL] update permissions exception:`, error);
+      return res.status(500).json({ 
+        error: "RBAC_UPDATE_ERROR", 
+        details: error.message 
+      });
     }
   },
   getUserType: async (req, res) => {
     try {
-      let userType = await UserTypes.find().sort({ _id: -1 });
+      // Auto-cleanup: Remove legacy production_process permission from all roles
+      await UserTypes.updateMany({}, { $unset: { "permissions.production_process": "" } });
+      
+      let userType = await UserTypes.find({ 
+        name: { $nin: ["ADMIN", "ADMINISTRATOR", "admin", "administrator"] } 
+      }).sort({ name: 1 });
       return res.status(200).json({
         status: 200,
-        status_msg: "Users Roles Fetched Sucessfully!!",
+        status_msg: "User Roles Fetched Successfully!!",
         userType,
       });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      console.error(`>>> [ERROR] RBAC method failure:`, error);
+      return res.status(500).json({ 
+        error: "RBAC_INTERNAL_METHOD_ERROR", 
+        details: error.message 
+      });
     }
   },
   getUserTypeByType: async (req, res) => {
     try {
-      let userType = await UserRoles.find().sort({ _id: -1 });
+      const { type } = req.query;
+      const userType = await UserTypes.findOne({ name: new RegExp(`^${type}$`, "i") });
+      
+      if (!userType) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+
       return res.status(200).json({
         status: 200,
-        status_msg: "Users Roles Fetched Sucessfully!!",
-        userType,
+        status_msg: "Role Permissions Fetched Successfully!!",
+        userType: [userType], // Return as array to maintain compatibility
       });
     } catch (error) {
-
       return res.status(500).json({ status: 500, error: error.message });
     }
   },

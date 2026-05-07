@@ -372,6 +372,7 @@ const computePlanInsights = async ({
   selectedProduct = "",
   quantity = 0,
   shift = null,
+  issuedKits = 0,
 }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) {
     return {
@@ -511,6 +512,16 @@ const computePlanInsights = async ({
           if (deviceId && !latestByDeviceStage.has(dsKey)) {
             const nextStageRow = upsertStage(nextStageName);
             if (nextStageRow) nextStageRow.wip += 1;
+
+            const nextSeatKey = getDeviceSeatKeyForStage({
+              latestRecord: record,
+              stageName: nextStageName,
+              stageSeatFallbackMap,
+            });
+            if (nextSeatKey) {
+              const nextSeatStageRow = upsertSeatStage(nextSeatKey, nextStageName);
+              if (nextSeatStageRow) nextSeatStageRow.wip += 1;
+            }
           }
        }
     }
@@ -592,11 +603,16 @@ const computePlanInsights = async ({
       if (status === "ng" || status === "fail" || status === "qc" || status === "trc" || status === "rework" || status === "rejected") {
         stageRow.tested += 1;
         stageRow.ng += 1;
+        uniquePlanTotals.tested += 1;
+        uniquePlanTotals.ng += 1;
       } else if (status === "completed" || status === "dispatched") {
         stageRow.tested += 1;
         stageRow.pass += 1;
+        uniquePlanTotals.tested += 1;
+        uniquePlanTotals.pass += 1;
       } else {
          stageRow.wip += 1;
+         uniquePlanTotals.wip += 1;
          
          // Find seat assignment for this active unit
          const seatKey = getDeviceSeatKeyForStage({
@@ -631,6 +647,9 @@ const computePlanInsights = async ({
   const todayEfficiency = denominator > 0 ? Number(((todayTested / denominator) * 100).toFixed(2)) : 0;
   const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
 
+  const lineIssueKitsCount = Number(issuedKits) || (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip);
+  const kitsShortageCount = Math.max(0, lineIssueKitsCount - (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip));
+
   return {
     generatedAt: new Date().toISOString(),
     totals: {
@@ -638,8 +657,8 @@ const computePlanInsights = async ({
       pass: uniquePlanTotals.pass,
       ng: uniquePlanTotals.ng,
       wip: uniquePlanTotals.wip,
-      lineIssueKits: uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip,
-      kitsShortage: 0,
+      lineIssueKits: lineIssueKitsCount,
+      kitsShortage: kitsShortageCount,
       operatorToday,
       efficiency: {
         process: processEfficiency,

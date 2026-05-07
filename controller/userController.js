@@ -18,7 +18,7 @@ module.exports = {
         .json({ status: 200, status_msg: "User Fetched Sucessfully!!", user });
     } catch (error) {
       console.error("Error fetching user details:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ error: "USER_CONTROLLER_INTERNAL_ERROR", details: error.message });
     }
   },
   uploadProfilePicture: async (req, res) => {

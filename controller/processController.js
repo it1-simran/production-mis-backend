@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -21,6 +22,8 @@ module.exports = {
         descripition: data?.descripition,
         stages: JSON.parse(data?.stages),
         commonStages: JSON.parse(data?.commonStages),
+        createdBy: req.user?.id,
+        department: req.user?.department || "",
       };
       const newProcess = new ProcessModel(bindData);
       await newProcess.save();
@@ -35,11 +38,13 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
+
       if (
         String(req.query?.lite || "").toLowerCase() === "true" ||
         req.query?.lite === "1"
       ) {
-        const Processes = await ProcessModel.find({})
+        const Processes = await ProcessModel.find(filter)
           .select(
             "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt",
           )
@@ -54,6 +59,7 @@ module.exports = {
       }
 
       const Processes = await ProcessModel.aggregate([
+        { $match: filter },
         {
           $lookup: {
             from: "products",
@@ -62,7 +68,12 @@ module.exports = {
             as: "productDetails",
           },
         },
-        { $unwind: "$productDetails" },
+        {
+          $unwind: {
+            path: "$productDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
         {
           $lookup: {
             from: "planingandschedulings",
@@ -115,7 +126,9 @@ module.exports = {
   },
   getProcessesByProductId: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       const Processes = await ProcessModel.find({
+        ...filter,
         selectedProduct: req.params.id,
       }).sort({ _id: -1 });
       return res.status(200).json({
@@ -264,7 +277,8 @@ module.exports = {
   getProcessByID: async (req, res) => {
     try {
       const id = req.params.id;
-      const process = await ProcessModel.findById(id);
+      const filter = getDataAccessFilter(req);
+      const process = await ProcessModel.findOne({ _id: id, ...filter });
       if (!process) {
         return res.status(404).json({ error: "Process not found" });
       }
