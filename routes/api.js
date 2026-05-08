@@ -189,6 +189,7 @@ router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticate
 router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, deviceMultipartParser.any(), deviceController.updateStageByDeviceId);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, deviceController.searchByJigFields);
+router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
 router.post('/devices/markAsResolved', authController.authenticateToken, deviceMultipartParser.any(), deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, deviceController.getDeviceComprehensiveHistory);
