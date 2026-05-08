@@ -15,6 +15,7 @@ const holidayController = require('../controller/holidayController');
 const assignedOperatorsToPlan = require('../controller/operatorTaskController');
 const operatorWorkController = require('../controller/operatorWorkController');
 const deviceController = require(`../controller/deviceController`);
+const multer = require('multer');
 const connectDB = require('../config/db');
 const RoomPlan = require('../models/roomPlan');
 const reportController = require('../controller/reportController');
@@ -34,6 +35,12 @@ const esimProfileController = require('../controller/esimProfileController');
 const dispatchController = require('../controller/dispatchController');
 const device = require('../models/device');
 connectDB();
+
+/** Parses multipart fields for device PATCH/POST routes that may send FormData (e.g. TRC resolve + photo). */
+const deviceMultipartParser = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 router.get('/items', authController.getItems);
 router.get('/product/view', authController.authenticateToken, productController.view);
 router.get('/product/get/:id', authController.authenticateToken, productController.getProductByID);
@@ -179,10 +186,10 @@ router.get('/getOverallDeviceTestEntry', authController.authenticateToken, devic
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, deviceController.getDeviceTestHistoryByDeviceId);
-router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, deviceController.updateStageByDeviceId);
+router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, deviceMultipartParser.any(), deviceController.updateStageByDeviceId);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, deviceController.searchByJigFields);
-router.post('/devices/markAsResolved', authController.authenticateToken, deviceController.markAsResolved);
+router.post('/devices/markAsResolved', authController.authenticateToken, deviceMultipartParser.any(), deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);
