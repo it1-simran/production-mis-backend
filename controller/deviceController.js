@@ -1116,7 +1116,7 @@ module.exports = {
 
       const eligibilityStart = Date.now();
       const eligibility = await resolvePreviousStageEligibility({
-        processStages: products?.stages || [],
+        processStages: [...(products?.stages || []), ...(products?.commonStages || [])],
         currentStageName,
         serialNo: data.serialNo,
         deviceCurrentStage: deviceSnapshot?.currentStage || "",
