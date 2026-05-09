@@ -1228,9 +1228,12 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   );
 
   const seatAccountedFor = seatTotals.pass + seatTotals.ng;
+  const queueDerivedWip = Array.isArray(deviceQueue) ? deviceQueue.length : 0;
+  const issuedMinusAccounted = seatIssuedKits > 0 ? seatIssuedKits - seatAccountedFor : 0;
   const resolvedWipKits = Math.max(
     seatTotals.wip,
-    seatIssuedKits > 0 ? seatIssuedKits - seatAccountedFor : (seatKey && scopedSeatStages.length === 0 ? deviceQueue.length : 0),
+    issuedMinusAccounted,
+    queueDerivedWip,
   );
   const resolvedLineIssueKits = seatIssuedKits || resolvedWipKits + seatAccountedFor;
   const resolvedKitsShortage = Math.max(0, resolvedLineIssueKits - (resolvedWipKits + seatAccountedFor));
