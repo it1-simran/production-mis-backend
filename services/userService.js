@@ -30,9 +30,16 @@ class UserService {
           message: "Password does not match",
         };
       }
-      const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, {
-        expiresIn: "24h",
-      });
+      const token = jwt.sign(
+        { 
+          id: user._id, 
+          email: user.email, 
+          userType: user.userType, 
+          department: user.department || "" 
+        }, 
+        JWT_SECRET, 
+        { expiresIn: "24h" }
+      );
 
       user.password = undefined;
       return {

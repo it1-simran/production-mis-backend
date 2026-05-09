@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
@@ -81,6 +82,11 @@ module.exports = {
       data.quantity = quantity;
       data.cartonQuantity = deriveCartonsFromQuantity(quantity, packagingData?.maxCapacity);
       data.status = quantity > 0 ? "In Stock" : "Out of Stock";
+      
+      // Set ownership fields
+      data.createdBy = req.user?.id;
+      data.department = req.user?.department || "";
+
       const newInventoryModel = new InventoryModel(data);
       await newInventoryModel.save();
       return res.status(201).json({
@@ -99,7 +105,8 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const Inventory = await InventoryModel.find().sort({ _id: -1 });
+      const filter = getDataAccessFilter(req);
+      const Inventory = await InventoryModel.find(filter).sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Inventory Fetched Sucessfully!!",
@@ -112,7 +119,11 @@ module.exports = {
   },
   getProcessInventory: async (req, res) => {
     try {
+      const filter = getDataAccessFilter(req);
       const data = await ProcessModel.aggregate([
+        {
+          $match: filter
+        },
         {
           $lookup: {
             from: "inventories",

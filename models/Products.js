@@ -150,6 +150,12 @@ const productSchema = new mongoose.Schema({
   ],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: false,
+  },
+  department: { type: String, required: false },
 });
 
 // Creating the model from schema

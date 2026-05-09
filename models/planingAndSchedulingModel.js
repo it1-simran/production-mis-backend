@@ -91,6 +91,12 @@ const planingAndSchedulingSchema = new mongoose.Schema({
       lastUpdatedAt: null,
     },
   },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: false,
+  },
+  department: { type: String, required: false },
 });
 
 planingAndSchedulingSchema.index({ selectedProcess: 1 });

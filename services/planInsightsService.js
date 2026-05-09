@@ -208,6 +208,10 @@ const getDeviceSeatKeyForStage = ({ latestRecord = null, stageName = "", stageSe
   return "";
 };
 
+/** Seat attribution on test records (same precedence everywhere). */
+const getRecordSeatKey = (record) =>
+  normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+
 const buildStageOrderMap = ({ processStages = [], commonStages = [] }) => {
   const order = new Map();
   [...(Array.isArray(processStages) ? processStages : []), ...(Array.isArray(commonStages) ? commonStages : [])]
@@ -372,6 +376,7 @@ const computePlanInsights = async ({
   selectedProduct = "",
   quantity = 0,
   shift = null,
+  issuedKits = 0,
 }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) {
     return {
@@ -478,7 +483,7 @@ const computePlanInsights = async ({
         if (isNgStatus(status)) stageRow.ng += 1;
       }
 
-      const seatKey = normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+      const seatKey = getRecordSeatKey(record);
       if (seatKey) {
         const seatStageRow = upsertSeatStage(seatKey, stageName);
         if (seatStageRow) {
@@ -487,12 +492,12 @@ const computePlanInsights = async ({
           if (isNgStatus(status)) seatStageRow.ng += 1;
         }
       }
-    } else if (status.includes("resolved")) {
+    } else if (normalizeKey(record?.status) === "resolved") {
       // Resolved NG devices should be counted as WIP for the stage they returned to
       const stageRow = upsertStage(stageName);
       if (stageRow) stageRow.wip += 1;
 
-      const seatKey = normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+      const seatKey = getRecordSeatKey(record);
       if (seatKey) {
         const seatStageRow = upsertSeatStage(seatKey, stageName);
         if (seatStageRow) seatStageRow.wip += 1;
@@ -511,6 +516,16 @@ const computePlanInsights = async ({
           if (deviceId && !latestByDeviceStage.has(dsKey)) {
             const nextStageRow = upsertStage(nextStageName);
             if (nextStageRow) nextStageRow.wip += 1;
+
+            const nextSeatKey = getDeviceSeatKeyForStage({
+              latestRecord: record,
+              stageName: nextStageName,
+              stageSeatFallbackMap,
+            });
+            if (nextSeatKey) {
+              const nextSeatStageRow = upsertSeatStage(nextSeatKey, nextStageName);
+              if (nextSeatStageRow) nextSeatStageRow.wip += 1;
+            }
           }
        }
     }
@@ -592,11 +607,16 @@ const computePlanInsights = async ({
       if (status === "ng" || status === "fail" || status === "qc" || status === "trc" || status === "rework" || status === "rejected") {
         stageRow.tested += 1;
         stageRow.ng += 1;
+        uniquePlanTotals.tested += 1;
+        uniquePlanTotals.ng += 1;
       } else if (status === "completed" || status === "dispatched") {
         stageRow.tested += 1;
         stageRow.pass += 1;
+        uniquePlanTotals.tested += 1;
+        uniquePlanTotals.pass += 1;
       } else {
          stageRow.wip += 1;
+         uniquePlanTotals.wip += 1;
          
          // Find seat assignment for this active unit
          const seatKey = getDeviceSeatKeyForStage({
@@ -631,6 +651,9 @@ const computePlanInsights = async ({
   const todayEfficiency = denominator > 0 ? Number(((todayTested / denominator) * 100).toFixed(2)) : 0;
   const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
 
+  const lineIssueKitsCount = Number(issuedKits) || (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip);
+  const kitsShortageCount = Math.max(0, lineIssueKitsCount - (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip));
+
   return {
     generatedAt: new Date().toISOString(),
     totals: {
@@ -638,8 +661,8 @@ const computePlanInsights = async ({
       pass: uniquePlanTotals.pass,
       ng: uniquePlanTotals.ng,
       wip: uniquePlanTotals.wip,
-      lineIssueKits: uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip,
-      kitsShortage: 0,
+      lineIssueKits: lineIssueKitsCount,
+      kitsShortage: kitsShortageCount,
       operatorToday,
       efficiency: {
         process: processEfficiency,
@@ -762,8 +785,8 @@ const computeProcessInsights = async ({
     if (!currentStageName) return;
 
     const status = normalizeKey(record?.status);
-    const seatKey = String(record?.seatNumber || "").trim();
-    
+    const seatKey = getRecordSeatKey(record);
+
     // Increment tested/pass/ng for the stage where the test happened
     if (isCountableStatus(status)) {
       const stageRow = upsertStage(currentStageName);
@@ -772,7 +795,7 @@ const computeProcessInsights = async ({
         if (isPassStatus(status)) stageRow.pass += 1;
         if (isNgStatus(status)) stageRow.ng += 1;
       }
-      
+
       if (seatKey) {
         const seatRow = upsertSeatStage(seatKey, currentStageName);
         if (seatRow) {
@@ -781,7 +804,7 @@ const computeProcessInsights = async ({
           if (isNgStatus(status)) seatRow.ng += 1;
         }
       }
-    } else if (status.includes("resolved")) {
+    } else if (normalizeKey(record?.status) === "resolved") {
       // Resolved NG devices should be counted as WIP for the stage they returned to
       const stageRow = upsertStage(currentStageName);
       if (stageRow) stageRow.wip += 1;
@@ -816,7 +839,7 @@ const computeProcessInsights = async ({
     }
   });
 
-  // Calculate unique device totals for the whole process
+  // Totals: pass/ng from latest row per device-stage combo; wip = sum of stage-level wip buckets
   const uniqueProcessTotals = {
     tested: dedupedRecords?.length || 0,
     pass: 0,
@@ -845,9 +868,13 @@ const computeProcessInsights = async ({
     }
   });
 
-  byStage.forEach((row) => {
-    uniqueProcessTotals.wip += Number(row?.wip || 0);
-  });
+  const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
+  const bySeatStage = sortSeatStageRows(Array.from(bySeatStageMap.values()), stageOrderMap);
+
+  uniqueProcessTotals.wip = byStage.reduce(
+    (sum, row) => sum + Number(row?.wip || 0),
+    0,
+  );
 
   return {
     generatedAt: new Date().toISOString(),

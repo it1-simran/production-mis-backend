@@ -17,13 +17,9 @@ module.exports = {
         {
           icon: `<svg class="fill-current" width="18" height="19" viewBox="0 0 52 52" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" > <path d="M38.3,27.2A11.4,11.4,0,1,0,49.7,38.6,11.46,11.46,0,0,0,38.3,27.2Zm2,12.4a2.39,2.39,0,0,1-.9-.2l-4.3,4.3a1.39,1.39,0,0,1-.9.4,1,1,0,0,1-.9-.4,1.39,1.39,0,0,1,0-1.9l4.3-4.3a2.92,2.92,0,0,1-.2-.9,3.47,3.47,0,0,1,3.4-3.8,2.39,2.39,0,0,1,.9.2c.2,0,.2.2.1.3l-2,1.9a.28.28,0,0,0,0,.5L41.1,37a.38.38,0,0,0,.6,0l1.9-1.9c.1-.1.4-.1.4.1a3.71,3.71,0,0,1,.2.9A3.57,3.57,0,0,1,40.3,39.6Z" /> <circle cx="21.7" cy="14.9" r="12.9" /> <path d="M25.2,49.8c2.2,0,1-1.5,1-1.5h0a15.44,15.44,0,0,1-3.4-9.7,15,15,0,0,1,1.4-6.4.77.77,0,0,1,.2-.3c.7-1.4-.7-1.5-.7-1.5h0a12.1,12.1,0,0,0-1.9-.1A19.69,19.69,0,0,0,2.4,47.1c0,1,.3,2.8,3.4,2.8H24.9C25.1,49.8,25.1,49.8,25.2,49.8Z" /> </svg>`,
           label: "User Roles",
-          route: "/roles/edit/67136494a1308ac71e00853b",
+          route: "/roles/view",
         },
-        {
-          icon: `<svg width="18px" height="19px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M9 16C9.85038 16.6303 10.8846 17 12 17C13.1154 17 14.1496 16.6303 15 16" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> <ellipse cx="15" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <ellipse cx="9" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <path d="M15 22H12C7.28595 22 4.92893 22 3.46447 20.5355C2 19.0711 2 16.714 2 12C2 7.28595 2 4.92893 3.46447 3.46447C4.92893 2 7.28595 2 12 2C16.714 2 19.0711 2 20.5355 3.46447C21.5093 4.43821 21.8356 5.80655 21.9449 8M15 22C18.866 22 22 18.866 22 15M15 22C15 20.1387 15 19.2081 15.2447 18.4549C15.7393 16.9327 16.9327 15.7393 18.4549 15.2447C19.2081 15 20.1387 15 22 15M22 12V15" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> </g></svg>`,
-          label: "Production Process",
-          route: "/production-manager/process",
-        },
+
         {
           icon: `<svg width="18px" height="19px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M9 16C9.85038 16.6303 10.8846 17 12 17C13.1154 17 14.1496 16.6303 15 16" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> <ellipse cx="15" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <ellipse cx="9" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <path d="M15 22H12C7.28595 22 4.92893 22 3.46447 20.5355C2 19.0711 2 16.714 2 12C2 7.28595 2 4.92893 3.46447 3.46447C4.92893 2 7.28595 2 12 2C16.714 2 19.0711 2 20.5355 3.46447C21.5093 4.43821 21.8356 5.80655 21.9449 8M15 22C18.866 22 22 18.866 22 15M15 22C15 20.1387 15 19.2081 15.2447 18.4549C15.7393 16.9327 16.9327 15.7393 18.4549 15.2447C19.2081 15 20.1387 15 22 15M22 12V15" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> </g></svg>`,
           label: "Sticker Management",
@@ -94,7 +90,7 @@ module.exports = {
             },
             {
               label: "FG to Store",
-              route: "/inventory/fgToStore",
+              route: "/fg-to-store/view",
             },
           ],
         },
@@ -120,7 +116,7 @@ module.exports = {
         },
         {
           icon: `<svg class="fill-current" width="18" height="19" version="1.1" id="Capa_1" viewBox="0 0 412.879 412.879" > <g id="SVGRepo_bgCarrier" stroke-width="0"></g> <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" ></g> <g id="SVGRepo_iconCarrier"> {" "} <g> {" "} <g> {" "} <path d="M199.982,176.808c-2.065-4.935-7.03-8.097-11.772-10.043l-32.049-14.755l-15.397-12.985l-24.678,24.546l10.333,69.083 c0.037,0.24-0.024,0.486-0.167,0.682l-10.92,14.943c-0.174,0.238-0.451,0.381-0.746,0.381s-0.572-0.143-0.746-0.381 l-10.919-14.943c-0.144-0.195-0.203-0.441-0.168-0.682l10.333-69.083l-24.677-24.547L73.012,152.01l-32.048,14.755 c-4.743,1.946-10.426,6.39-11.773,10.043c0,0-34.834,82.937-15.94,82.937h202.673 C234.816,259.745,199.982,176.808,199.982,176.808z"></path>{" "} <path d="M114.585,138.558c32.776,0,57.236-30.539,57.794-81.752C172.734,21.268,155.809,0,114.585,0 C73.359,0,56.431,21.268,56.793,56.806C57.348,108.019,81.807,138.558,114.585,138.558z"></path>{" "} <path d="M383.687,329.941c-2.064-4.936-7.03-8.098-11.771-10.043l-32.05-14.756l-15.396-12.984l-24.692,24.562l10.348,69.186 c0.036,0.238-0.023,0.484-0.167,0.682l-10.92,14.943c-0.174,0.238-0.45,0.379-0.746,0.379c-0.295,0-0.571-0.141-0.745-0.379 l-10.918-14.943c-0.145-0.195-0.204-0.441-0.168-0.682l10.348-69.186l-24.692-24.562l-15.397,12.984l-32.048,14.756 c-4.743,1.945-10.207,6.34-11.772,10.043c0,0-34.834,82.938-15.94,82.938h202.674 C418.521,412.877,383.687,329.941,383.687,329.941z"></path>{" "} <path d="M240.498,209.939c0.557,51.213,25.015,81.752,57.792,81.752s57.236-30.539,57.795-81.752 c0.355-35.539-16.57-56.807-57.795-56.807C257.064,153.133,240.135,174.401,240.498,209.939z"></path>{" "} <path d="M162.375,383.572c-41.489,0-78.795-23.887-96.431-60.586l9.228-1.771c2.342-0.45,4.265-2.112,5.047-4.366 c0.781-2.252,0.302-4.748-1.259-6.554l-27.263-31.512c-1.28-1.479-3.129-2.308-5.045-2.308c-0.418,0-0.839,0.039-1.259,0.119 c-2.34,0.449-4.265,2.114-5.047,4.366l-13.663,39.367c-0.781,2.254-0.302,4.751,1.259,6.554c1.56,1.805,3.966,2.639,6.303,2.188 l11.476-2.202c19.917,46.272,65.62,76.724,116.654,76.724c5.528,0,10.01-4.48,10.01-10.01 C172.384,388.053,167.903,383.572,162.375,383.572z"></path>{" "} <path d="M201.348,31.93c41.489,0,78.794,23.886,96.431,60.586l-9.229,1.771c-2.341,0.449-4.266,2.112-5.046,4.365 c-0.781,2.252-0.303,4.75,1.258,6.554l27.264,31.512c1.279,1.48,3.129,2.307,5.045,2.307c0.418,0,0.839-0.038,1.258-0.119 c2.342-0.449,4.266-2.114,5.049-4.366l13.662-39.366c0.781-2.253,0.302-4.751-1.259-6.554c-1.56-1.804-3.966-2.639-6.304-2.188 l-11.475,2.203c-19.918-46.272-65.622-76.724-116.655-76.724c-5.529,0-10.011,4.48-10.011,10.01 C191.337,27.449,195.819,31.93,201.348,31.93z"></path>{" "} </g>{" "} </g>{" "} </g> </svg>`,
-          label: "Shift Mangement",
+          label: "Shift Management",
           route: "#",
           children: [
             { label: "Holiday Management", route: "/shift-management/holiday" },
@@ -130,7 +126,7 @@ module.exports = {
         },
         {
           icon: `<svg class="fill-current" width="18" height="19" version="1.1" id="Capa_1" viewBox="0 0 412.879 412.879" > <g id="SVGRepo_bgCarrier" stroke-width="0"></g> <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" ></g> <g id="SVGRepo_iconCarrier"> {" "} <g> {" "} <g> {" "} <path d="M199.982,176.808c-2.065-4.935-7.03-8.097-11.772-10.043l-32.049-14.755l-15.397-12.985l-24.678,24.546l10.333,69.083 c0.037,0.24-0.024,0.486-0.167,0.682l-10.92,14.943c-0.174,0.238-0.451,0.381-0.746,0.381s-0.572-0.143-0.746-0.381 l-10.919-14.943c-0.144-0.195-0.203-0.441-0.168-0.682l10.333-69.083l-24.677-24.547L73.012,152.01l-32.048,14.755 c-4.743,1.946-10.426,6.39-11.773,10.043c0,0-34.834,82.937-15.94,82.937h202.673 C234.816,259.745,199.982,176.808,199.982,176.808z"></path>{" "} <path d="M114.585,138.558c32.776,0,57.236-30.539,57.794-81.752C172.734,21.268,155.809,0,114.585,0 C73.359,0,56.431,21.268,56.793,56.806C57.348,108.019,81.807,138.558,114.585,138.558z"></path>{" "} <path d="M383.687,329.941c-2.064-4.936-7.03-8.098-11.771-10.043l-32.05-14.756l-15.396-12.984l-24.692,24.562l10.348,69.186 c0.036,0.238-0.023,0.484-0.167,0.682l-10.92,14.943c-0.174,0.238-0.45,0.379-0.746,0.379c-0.295,0-0.571-0.141-0.745-0.379 l-10.918-14.943c-0.145-0.195-0.204-0.441-0.168-0.682l10.348-69.186l-24.692-24.562l-15.397,12.984l-32.048,14.756 c-4.743,1.945-10.207,6.34-11.772,10.043c0,0-34.834,82.938-15.94,82.938h202.674 C418.521,412.877,383.687,329.941,383.687,329.941z"></path>{" "} <path d="M240.498,209.939c0.557,51.213,25.015,81.752,57.792,81.752s57.236-30.539,57.795-81.752 c0.355-35.539-16.57-56.807-57.795-56.807C257.064,153.133,240.135,174.401,240.498,209.939z"></path>{" "} <path d="M162.375,383.572c-41.489,0-78.795-23.887-96.431-60.586l9.228-1.771c2.342-0.45,4.265-2.112,5.047-4.366 c0.781-2.252,0.302-4.748-1.259-6.554l-27.263-31.512c-1.28-1.479-3.129-2.308-5.045-2.308c-0.418,0-0.839,0.039-1.259,0.119 c-2.34,0.449-4.265,2.114-5.047,4.366l-13.663,39.367c-0.781,2.254-0.302,4.751,1.259,6.554c1.56,1.805,3.966,2.639,6.303,2.188 l11.476-2.202c19.917,46.272,65.62,76.724,116.654,76.724c5.528,0,10.01-4.48,10.01-10.01 C172.384,388.053,167.903,383.572,162.375,383.572z"></path>{" "} <path d="M201.348,31.93c41.489,0,78.794,23.886,96.431,60.586l-9.229,1.771c-2.341,0.449-4.266,2.112-5.046,4.365 c-0.781,2.252-0.303,4.75,1.258,6.554l27.264,31.512c1.279,1.48,3.129,2.307,5.045,2.307c0.418,0,0.839-0.038,1.258-0.119 c2.342-0.449,4.266-2.114,5.049-4.366l13.662-39.366c0.781-2.253,0.302-4.751-1.259-6.554c-1.56-1.804-3.966-2.639-6.304-2.188 l-11.475,2.203c-19.918-46.272-65.622-76.724-116.655-76.724c-5.529,0-10.011,4.48-10.011,10.01 C191.337,27.449,195.819,31.93,201.348,31.93z"></path>{" "} </g>{" "} </g>{" "} </g> </svg>`,
-          label: "SKill Mangement",
+          label: "Skill Management",
           route: "#",
           children: [
             { label: "View Skills", route: "/skill/view" },
@@ -147,7 +143,7 @@ module.exports = {
         },
         {
           icon: `<svg class="fill-current" width="18" height="19" version="1.1" id="Layer_1" viewBox="0 0 490 490" > <g id="SVGRepo_bgCarrier" stroke-width="0"></g> <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round" ></g> <g id="SVGRepo_iconCarrier"> {" "} <g> {" "} <g> {" "} <g> {" "} <path d="M10,372.5h405c2.602-0.001,5.159-1.016,7.071-2.929l65-65c1.912-1.913,2.904-4.47,2.905-7.071H490v-245 c0-5.522-4.477-10-10-10H10c-5.523,0-10,4.478-10,10v310C0,368.022,4.477,372.5,10,372.5z M425,338.357V307.5h30.858L425,338.357 z M20,62.5h450v225h-55c-5.523,0-10,4.478-10,10v55H20V62.5z"></path>{" "} <path d="M350,92.5H250c-5.523,0-10,4.478-10,10v15h-25c-5.523,0-10,4.478-10,10v75h-80v-35h55c5.523,0,10-4.478,10-10v-60 c0-5.522-4.477-10-10-10H60c-5.523,0-10,4.478-10,10v60c0,5.522,4.477,10,10,10h45v45c0,5.522,4.477,10,10,10h90v70 c0,5.522,4.477,10,10,10h25v10c0,5.522,4.477,10,10,10h100c5.523,0,10-4.478,10-10v-50c0-5.522-4.477-10-10-10H250 c-5.523,0-10,4.478-10,10v20h-15v-60h15v10c0,5.522,4.477,10,10,10h100c5.523,0,10-4.478,10-10v-50c0-5.522-4.477-10-10-10H250 c-5.523,0-10,4.478-10,10v20h-15v-65h15v15c0,5.522,4.477,10,10,10h100c5.523,0,10-4.478,10-10v-50 C360,96.978,355.523,92.5,350,92.5z M70,147.5v-40h100v40H70z M260,272.5h80v30h-80V272.5z M260,192.5h80v30h-80V192.5z M340,142.5h-80v-30h80V142.5z"></path>{" "} <rect x="50" y="247.5" width="75" height="20"></rect>{" "} <rect x="50" y="277.5" width="75" height="20"></rect>{" "} <rect x="50" y="307.5" width="130" height="20"></rect>{" "} <rect x="135" y="247.5" width="20" height="20"></rect>{" "} <rect x="380" y="92.5" width="25" height="20"></rect>{" "} <rect x="420" y="92.5" width="25" height="20"></rect>{" "} <rect x="380" y="122.5" width="25" height="20"></rect>{" "} <rect x="420" y="122.5" width="25" height="20"></rect>{" "} <rect x="380" y="152.5" width="25" height="20"></rect>{" "} <rect x="420" y="152.5" width="25" height="20"></rect>{" "} <rect x="380" y="182.5" width="25" height="20"></rect>{" "} <rect x="420" y="182.5" width="25" height="20"></rect>{" "} <path d="M483.162,408.013l-60-20c-1.033-0.344-2.1-0.498-3.162-0.498V387.5H10c-5.523,0-10,4.478-10,10v40 c0,5.522,4.477,10,10,10h410h0.001c1.061,0,2.129-0.169,3.161-0.513l60-20c4.083-1.361,6.838-5.183,6.838-9.487 C490,413.196,487.246,409.374,483.162,408.013z M60,427.5H20v-20h40V427.5z M410,427.5H80v-20h330V427.5z M430,423.62 6v-12.252 l18.377,6.126L430,423.626z"></path>{" "} </g>{" "} </g>{" "} </g>{" "} </g> </svg>`,
-          label: "Planing & Scheduling Management",
+          label: "Planning & Scheduling Management",
           route: "#",
           children: [
             {
@@ -235,6 +231,62 @@ module.exports = {
           console.log("Auto-migrated: Added Repackaging menu.");
           getMenu = [doc];
         }
+
+        // Auto-migration: Deduplicate and cleanup legacy menus
+        const initialCount = menus.length;
+        const seenRoutes = new Set();
+        const seenLabels = new Set();
+        
+        doc.menus = menus.filter((m) => {
+          if (!m) return false;
+          const label = String(m?.label || "").trim();
+          const labelLower = label.toLowerCase();
+          const route = String(m?.route || "").trim();
+          
+          // Remove unwanted legacy menus
+          if (
+            labelLower === "production process" || 
+            labelLower === "administration" || 
+            labelLower === "administrator"
+          ) return false;
+          
+          // Deduplicate by route (if not #)
+          if (route !== "#" && seenRoutes.has(route)) return false;
+          // Deduplicate by label (case-insensitive)
+          if (seenLabels.has(labelLower)) return false;
+          
+          if (route !== "#") seenRoutes.add(route);
+          seenLabels.add(labelLower);
+          return true;
+        });
+
+        // Auto-migration: Ensure missing administrative modules exist
+        const missingModules = [
+          { label: "Find Device", route: "/device/search", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21L16.65 16.65" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "FG Store Management", route: "/fg-to-store/view", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` }
+        ];
+
+        let changed = doc.menus.length !== initialCount;
+        for (const mod of missingModules) {
+          const modLabelLower = mod.label.toLowerCase();
+          const existingIndex = doc.menus.findIndex(m => m.label.toLowerCase() === modLabelLower);
+          
+          if (existingIndex === -1) {
+            doc.menus.push(mod);
+            changed = true;
+          } else if (doc.menus[existingIndex].route !== mod.route) {
+            // Update route if it's incorrect (e.g. from previous bad migration)
+            doc.menus[existingIndex].route = mod.route;
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Deduplicated and added missing modules.");
+          getMenu = [doc];
+        }
       }
 
       return res.status(200).json({
@@ -244,7 +296,10 @@ module.exports = {
       });
     } catch (error) {
       console.error("Error fetching Menu details:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ 
+        error: "MENU_VIEW_ERROR", 
+        details: error.message 
+      });
     }
   },
 };

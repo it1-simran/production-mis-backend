@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema({
   profilePic: { type: String, default: "" },
   coverPic: { type: String, default: "" },
   skills: { type: [String], default: [] },
+  department: { type: String, default: "" },
 });
 
 const User = mongoose.model("User", userSchema);

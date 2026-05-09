@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getDataAccessFilter } = require("../utils/accessControl");
 const Product = require("../models/Products");
 const InventoryModel = require("../models/inventoryManagement");
 
@@ -45,6 +46,8 @@ module.exports = {
         stages,
         commonStages,
         status: isDraft ? "draft" : "active",
+        createdBy: req.user?.id,
+        department: req.user?.department || "",
       });
 
       const savedProduct = await newProduct.save();
@@ -52,6 +55,8 @@ module.exports = {
         const InventoryData = {
           productName: name,
           productType: savedProduct._id,
+          createdBy: req.user?.id,
+          department: req.user?.department || "",
         };
         const newInventoryModel = new InventoryModel(InventoryData);
         await newInventoryModel.save();
@@ -67,7 +72,8 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const Products = await Product.find().sort({ _id: -1 });
+      const filter = getDataAccessFilter(req);
+      const Products = await Product.find(filter).sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
         status_msg: "Products Fetched Sucessfully!!",
