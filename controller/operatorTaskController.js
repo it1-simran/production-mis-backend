@@ -433,7 +433,7 @@ const setNoStoreHeaders = (res) => {
 const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageName = "", processId = "", processStages = [], normalizedAssignedStages = {}, seatKey = "" }) => {
   const trimmedStageName = normalizeValue(operatorStageName);
   const normalizedTrimmedStageName = normalizeKey(trimmedStageName);
-  const firstStageName = normalizeValue(processStages?.[0]?.stageName || "");
+  const firstStageName = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
   const normalizedFirstStageName = normalizeKey(firstStageName);
   const currentSeatStage = getSeatStageEntry(normalizedAssignedStages, seatKey);
   const parallelSeats = getParallelSeatEntries({
@@ -1146,6 +1146,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     getOperatorStats(operatorId, includeHistory),
   ]);
 
+  const mergedStagesForSeatFilter = [
+    ...(process?.stages || []),
+    ...(process?.commonStages || []),
+  ];
+
   let seatIssuedKits = 0;
   if (kitAssignment && seatKey) {
     const [row, seat] = String(seatKey).split("-");
@@ -1174,7 +1179,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
         latestRecords,
         operatorStageName: currentAssignedStageName,
         processId: process._id,
-        processStages: process?.stages || [],
+        processStages: mergedStagesForSeatFilter,
         normalizedAssignedStages,
         seatKey,
       })
@@ -1563,6 +1568,37 @@ module.exports = {
         });
       }
 
+      const mergedStagesForOperatorContext = [
+        ...(context?.process?.stages || []),
+        ...(context?.process?.commonStages || []),
+      ];
+      const firstMergedStageLabel = normalizeValue(
+        mergedStagesForOperatorContext?.[0]?.stageName ||
+          mergedStagesForOperatorContext?.[0]?.name ||
+          "",
+      );
+      const normOperatorStage = normalizeKey(context?.currentAssignedStageName || "");
+      const normDeviceStage = normalizeKey(device?.currentStage || "");
+      const normFirstStage = normalizeKey(firstMergedStageLabel);
+
+      if (context?.currentAssignedStageName && context?.seatKey && processId) {
+        const stageAlignedAtSeat =
+          normDeviceStage === normOperatorStage ||
+          (!normDeviceStage && normOperatorStage && normOperatorStage === normFirstStage);
+        if (!stageAlignedAtSeat) {
+          const readableDev = normalizeValue(device?.currentStage || "") || "unknown routing";
+          const readableOp = normalizeValue(context.currentAssignedStageName || "");
+          return res.status(409).json({
+            status: 409,
+            message: `This device is assigned to "${readableDev}" but this station is "${readableOp}". Open this device at the correct stage, or fix reassignment so currentStage matches your station (TRC resolve FormData must include currentStage).`,
+            data: {
+              deviceCurrentStage: device.currentStage || "",
+              operatorStage: readableOp,
+            },
+          });
+        }
+      }
+
       const latestSeatRecord =
         context?.currentAssignedStageName && context?.seatKey && processId
           ? await getLatestSeatRecordForDeviceStage({
@@ -1580,7 +1616,7 @@ module.exports = {
             latestRecords,
             operatorStageName: context.currentAssignedStageName,
             processId,
-            processStages: context?.process?.stages || [],
+            processStages: mergedStagesForOperatorContext,
             normalizedAssignedStages: context?.normalizedAssignedStages || {},
             seatKey: context.seatKey,
           })

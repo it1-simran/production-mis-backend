@@ -15,6 +15,7 @@ const holidayController = require('../controller/holidayController');
 const assignedOperatorsToPlan = require('../controller/operatorTaskController');
 const operatorWorkController = require('../controller/operatorWorkController');
 const deviceController = require(`../controller/deviceController`);
+const multer = require('multer');
 const connectDB = require('../config/db');
 const RoomPlan = require('../models/roomPlan');
 const reportController = require('../controller/reportController');
@@ -34,6 +35,12 @@ const esimProfileController = require('../controller/esimProfileController');
 const dispatchController = require('../controller/dispatchController');
 const device = require('../models/device');
 connectDB();
+
+/** Parses multipart fields for device PATCH/POST routes that may send FormData (e.g. TRC resolve + photo). */
+const deviceMultipartParser = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 router.get('/items', authController.getItems);
 router.get('/product/view', authController.authenticateToken, authController.authorize("View Product", "read"), productController.view);
 router.get('/product/get/:id', authController.authenticateToken, authController.authorize("View Product", "read"), productController.getProductByID);
@@ -179,10 +186,11 @@ router.get('/getOverallDeviceTestEntry', authController.authenticateToken, devic
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, deviceController.getDeviceTestHistoryByDeviceId);
-router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageByDeviceId);
+router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceMultipartParser.any(), deviceController.updateStageByDeviceId);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.searchByJigFields);
-router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorize("Find Device", "update"), deviceController.markAsResolved);
+router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
+router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorize("Find Device", "update"), deviceMultipartParser.any(), deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);

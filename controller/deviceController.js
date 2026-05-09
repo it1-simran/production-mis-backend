@@ -1116,7 +1116,7 @@ module.exports = {
 
       const eligibilityStart = Date.now();
       const eligibility = await resolvePreviousStageEligibility({
-        processStages: products?.stages || [],
+        processStages: [...(products?.stages || []), ...(products?.commonStages || [])],
         currentStageName,
         serialNo: data.serialNo,
         deviceCurrentStage: deviceSnapshot?.currentStage || "",
@@ -1943,6 +1943,104 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  validateDeviceIdentityAtConnection: async (req, res) => {
+    try {
+      const serialNo = String(req.body?.serialNo || "").trim();
+      const imeiNo = String(req.body?.imeiNo || "").trim();
+      const ccid = String(req.body?.ccid || "").trim();
+
+      if (!imeiNo && !ccid) {
+        return res.status(400).json({
+          status: 400,
+          message: "imeiNo or ccid is required",
+        });
+      }
+
+      const identityFilters = [];
+      if (imeiNo) {
+        identityFilters.push({ imeiNo });
+      }
+      if (ccid) {
+        identityFilters.push({ ccid });
+      }
+
+      const matchRootOr = identityFilters.length > 0 ? { $or: identityFilters } : {};
+      const candidates = await deviceModel
+        .find(matchRootOr)
+        .select("_id serialNo imeiNo ccid currentStage status processID")
+        .populate({ path: "processID", select: "name processName processID" })
+        .lean();
+
+      const candidateList = Array.isArray(candidates) ? candidates : [];
+      const duplicate = candidateList.find((device) => {
+        const sameSerial =
+          serialNo &&
+          String(device?.serialNo || "").trim().toLowerCase() === serialNo.toLowerCase();
+        return !sameSerial;
+      });
+
+      if (!duplicate) {
+        return res.status(200).json({
+          status: 200,
+          duplicate: false,
+          message: "Identity is unique for this serial number",
+        });
+      }
+
+      let latestFlowRecord = null;
+      try {
+        latestFlowRecord = await deviceTestRecords
+          .findOne({ deviceId: duplicate._id })
+          .sort({ createdAt: -1 })
+          .select("assignedDeviceTo flowType stageName status createdAt")
+          .lean();
+      } catch (flowError) {
+        console.warn("Failed to fetch latest flow record for duplicate identity:", flowError);
+      }
+
+      const processName = String(
+        duplicate?.processID?.name ||
+          duplicate?.processID?.processName ||
+          duplicate?.processID?.processID ||
+          "",
+      ).trim();
+      const currentStage = String(duplicate?.currentStage || "").trim();
+      const deviceStatus = String(duplicate?.status || "").trim();
+      const existingSerial = String(duplicate?.serialNo || "").trim();
+      const assignedFlow = String(
+        latestFlowRecord?.assignedDeviceTo ||
+          latestFlowRecord?.flowType ||
+          latestFlowRecord?.stageName ||
+          "",
+      ).trim();
+
+      const message = `Duplicate device detected. This device is already present in ${currentStage || "Unknown Stage"} for ${processName || "Unknown Process"}.`;
+
+      return res.status(409).json({
+        status: 409,
+        duplicate: true,
+        message,
+        data: {
+          currentStage,
+          processName,
+          deviceStatus,
+          existingSerialNumber: existingSerial,
+          assignedDepartmentOrFlow: assignedFlow,
+          matchedBy: {
+            ...(imeiNo ? { imeiNo } : {}),
+            ...(ccid ? { ccid } : {}),
+          },
+          deviceId: duplicate?._id || "",
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to validate device identity",
+        error: error.message,
+      });
+    }
+  },
   updateStageBySerialNo: async (req, res) => {
     try {
       const serialNo = req.params.serialNo || req.body.serialNo;
@@ -2169,7 +2267,9 @@ module.exports = {
         ? (process.stages[0]?.stageName || "")
         : "";
 
-      const selectedStage = req.body.currentStage || req.body.nextStage || req.body.selectedStage || "";
+      const selectedStage = String(
+        req.body.currentStage || req.body.nextStage || req.body.selectedStage || "",
+      ).trim();
 
       const incomingStatus = req.body.status || "QC Resolved";
       const isTRC = (incomingStatus || "").toUpperCase().includes("TRC") || !!req.body.trcRemarks;
@@ -2183,13 +2283,17 @@ module.exports = {
           parsedTrcRemarks = { parseError: true, raw: req.body.trcRemarks };
         }
       }
+      const resolvedStage = selectedStage || String(device.currentStage || firstStageName || "").trim();
       const testRecordPayload = {
         deviceId: device._id,
         processId: device.processID,
         serialNo: device.serialNo,
         stageName: isTRC ? "TRC" : "QC",
         status: incomingStatus,
-        assignedDeviceTo: isTRC ? "TRC" : "QC",
+        assignedDeviceTo: resolvedStage || (isTRC ? "TRC" : "QC"),
+        reason: resolvedStage
+          ? `Resolved and reassigned to ${resolvedStage}`
+          : "Resolved",
         flowVersion: Number(device.flowVersion || 1),
         flowBoundary: false,
         flowType: "resolve",
@@ -2200,7 +2304,7 @@ module.exports = {
       const testRecord = new deviceTestRecords(testRecordPayload);
       const savedRecord = await testRecord.save();
 
-      const nextStage = selectedStage || device.currentStage || firstStageName;
+      const nextStage = resolvedStage;
       const updatedDevice = await deviceModel.findByIdAndUpdate(
         device._id,
         { $set: { status: incomingStatus || "", currentStage: nextStage } },
