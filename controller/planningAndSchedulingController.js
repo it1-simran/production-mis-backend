@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
+const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const moment = require("moment");
 const momentTz = require("moment-timezone");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -1128,9 +1128,8 @@ module.exports = {
   getPlaningAnDschedulingByProcessId: async (req, res) => {
     try {
       const id = req.params.id;
-      const filter = getDataAccessFilter(req);
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
-        ...filter,
+        ...getUnscopedAuthorizedReadListFilter(),
         selectedProcess: id,
       });
       if (!PlaningAndScheduling) {
@@ -1153,8 +1152,10 @@ module.exports = {
           message: "Invalid plan id",
         });
       }
-      const filter = getDataAccessFilter(req);
-      const plan = await PlaningAndSchedulingModel.findOne({ _id: planId, ...filter }).lean();
+      const plan = await PlaningAndSchedulingModel.findOne({
+        _id: planId,
+        ...getUnscopedAuthorizedReadListFilter(),
+      }).lean();
       if (!plan) {
         return res.status(404).json({
           status: 404,
@@ -1211,8 +1212,9 @@ module.exports = {
   },
   fetchAllPlaningModel: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
-      const PlaningAndScheduling = await PlaningAndSchedulingModel.find(filter);
+      const PlaningAndScheduling = await PlaningAndSchedulingModel.find(
+        getUnscopedAuthorizedReadListFilter(),
+      );
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",
@@ -1405,11 +1407,10 @@ module.exports = {
         filterEndDate = today.clone().endOf("isoWeek").toDate();
       }
 
-      const filter = getDataAccessFilter(req);
       const response = await PlaningAndSchedulingModel.aggregate([
         {
           $match: {
-            ...filter,
+            ...getUnscopedAuthorizedReadListFilter(),
             startDate: {
               $gte: filterStartDate,
               $lte: filterEndDate,

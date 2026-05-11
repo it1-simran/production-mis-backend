@@ -55,6 +55,22 @@ const getDataAccessFilter = (req, options = {}) => {
  * For GET list routes already protected by `authorize(..., "read")` (User Roles RBAC).
  * Do not merge legacy department/createdBy scoping here: roles such as Engineering with
  * only `view_process` would otherwise see zero rows while the page is "allowed".
+ *
+ * Controllers / handlers that merge this with route-specific predicates only (catalog reads):
+ * - processController: view, getProcessesByProductId
+ * - productController: view
+ * - planningAndSchedulingController: view, getPlaningAnDschedulingByProcessId,
+ *   getPlanInsights, fetchAllPlaningModel, getPlaningAndSchedulingDateWise ($match)
+ * - inventoryController: view, getProcessInventory
+ *
+ * Do not use for user-owned lists (e.g. kit transfer requests by requesterId); those keep
+ * getDataAccessFilter or dedicated query builders.
+ *
+ * Frontend smoke (non-PM role with View Product + View Process + Planning/Inventory read):
+ * - Product edit Clone-into-Process, device add/generate serial: viewProcessByProductId
+ * - Planning add/edit/viewPlaning and operator task fallbacks: viewProcess, viewPlaning,
+ *   getPlaningAndSchedulingById, getPlaningAndSchedulingByProcessId, getPlaningAndSchedulingModel
+ * - Inventory list and process-inventory grid: GET /inventory/view, /inventory/process/get
  */
 const getUnscopedAuthorizedReadListFilter = () => ({});
 

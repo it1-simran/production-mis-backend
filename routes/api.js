@@ -100,7 +100,12 @@ router.get('/shift/get/:id', authController.authenticateToken, shiftController.g
 router.put('/shift/update/:id', authController.authenticateToken, shiftController.updateshift);
 router.post('/process/create', authController.authenticateToken, authController.authorize("View Process", "create"), processController.create);
 router.get('/process/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), processController.view);
-router.get('/getProcessesByProductId/:id', authController.authenticateToken, processController.getProcessesByProductId);
+router.get(
+  '/getProcessesByProductId/:id',
+  authController.authenticateToken,
+  authController.authorize(["View Product", "View Process"], "read"),
+  processController.getProcessesByProductId,
+);
 router.delete('/process/delete/:id', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.delete);
 router.post('/process/delete/multiple', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.deleteProcessMultiple);
 router.get('/process/get/:id', authController.authenticateToken, processController.getProcessByID);
