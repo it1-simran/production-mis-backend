@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter } = require("../utils/accessControl");
+const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
@@ -105,8 +105,9 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
-      const Inventory = await InventoryModel.find(filter).sort({ _id: -1 });
+      const Inventory = await InventoryModel.find(getUnscopedAuthorizedReadListFilter()).sort({
+        _id: -1,
+      });
       return res.status(200).json({
         status: 200,
         status_msg: "Inventory Fetched Sucessfully!!",
@@ -119,10 +120,9 @@ module.exports = {
   },
   getProcessInventory: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
       const data = await ProcessModel.aggregate([
         {
-          $match: filter
+          $match: getUnscopedAuthorizedReadListFilter(),
         },
         {
           $lookup: {

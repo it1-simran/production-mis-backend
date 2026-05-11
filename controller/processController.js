@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
+const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -126,10 +126,27 @@ module.exports = {
   },
   getProcessesByProductId: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
+      const rawId = req.params.id;
+      if (!rawId || typeof rawId !== "string") {
+        return res.status(400).json({
+          status: 400,
+          message: "Product id is required",
+          Processes: [],
+        });
+      }
+      // Match both ObjectId and legacy string storage on `selectedProduct`.
+      const productMatch = mongoose.Types.ObjectId.isValid(rawId)
+        ? {
+            $or: [
+              { selectedProduct: new mongoose.Types.ObjectId(rawId) },
+              { selectedProduct: rawId },
+            ],
+          }
+        : { selectedProduct: rawId };
+
       const Processes = await ProcessModel.find({
-        ...filter,
-        selectedProduct: req.params.id,
+        ...getUnscopedAuthorizedReadListFilter(),
+        ...productMatch,
       }).sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
@@ -277,8 +294,12 @@ module.exports = {
   getProcessByID: async (req, res) => {
     try {
       const id = req.params.id;
-      const filter = getDataAccessFilter(req);
-      const process = await ProcessModel.findOne({ _id: id, ...filter });
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid process id" });
+      }
+      // Read by id only: list/update paths use department filter; NG simulate and operator
+      // UIs need stages for any process id obtained from a device/plan the user can already open.
+      const process = await ProcessModel.findById(id);
       if (!process) {
         return res.status(404).json({ error: "Process not found" });
       }

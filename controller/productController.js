@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
+const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const Product = require("../models/Products");
 const InventoryModel = require("../models/inventoryManagement");
 
