@@ -109,7 +109,7 @@ router.get(
 router.delete('/process/delete/:id', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.delete);
 router.post('/process/delete/multiple', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.deleteProcessMultiple);
 router.get('/process/get/:id', authController.authenticateToken, processController.getProcessByID);
-router.put('/process/update/:id', authController.authenticateToken, authController.authorize("View Process", "update"), processController.update);
+router.put('/process/update/:id', authController.authenticateToken, authController.authorizeProcessUpdate, processController.update);
 router.post('/planing/get', authController.authenticateToken, planningAndSchedulingController.checkAvailability);
 router.get('/planing/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.view);
 router.delete('/planing/delete/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.delete);
