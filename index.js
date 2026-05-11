@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
@@ -18,6 +19,12 @@ app.use(cors({
   origin: '*'
 })); // Enable CORS
 app.use(compression());
+app.use((req, res, next) => {
+  const rid = req.get('x-request-id') || crypto.randomUUID();
+  req.requestId = rid;
+  res.setHeader('x-request-id', rid);
+  next();
+});
 app.use(morgan('dev')); // HTTP request logger
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));

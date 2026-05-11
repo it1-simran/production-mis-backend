@@ -34,6 +34,10 @@ const esimMakeController = require('../controller/esimMakeController');
 const esimProfileController = require('../controller/esimProfileController');
 const dispatchController = require('../controller/dispatchController');
 const device = require('../models/device');
+const {
+  PROCESS_AND_PLANNING_READ_MODULES,
+  DEVICE_READ_MODULE_LABELS,
+} = require('../constants/authorizationModules');
 connectDB();
 
 /** Parses multipart fields for device PATCH/POST routes that may send FormData (e.g. TRC resolve + photo). */
@@ -95,20 +99,20 @@ router.post('/shift/delete/multiple', authController.authenticateToken, shiftCon
 router.get('/shift/get/:id', authController.authenticateToken, shiftController.getShiftByID);
 router.put('/shift/update/:id', authController.authenticateToken, shiftController.updateshift);
 router.post('/process/create', authController.authenticateToken, authController.authorize("View Process", "create"), processController.create);
-router.get('/process/view', authController.authenticateToken, authController.authorize(["View Process", "Transfer Requests", "Kit Transfer", "Inventory", "FG Store Management", "Planning & Scheduling Management"], "read"), processController.view);
+router.get('/process/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), processController.view);
 router.get('/getProcessesByProductId/:id', authController.authenticateToken, processController.getProcessesByProductId);
 router.delete('/process/delete/:id', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.delete);
 router.post('/process/delete/multiple', authController.authenticateToken, authController.authorize("View Process", "delete"), processController.deleteProcessMultiple);
 router.get('/process/get/:id', authController.authenticateToken, processController.getProcessByID);
 router.put('/process/update/:id', authController.authenticateToken, authController.authorize("View Process", "update"), processController.update);
 router.post('/planing/get', authController.authenticateToken, planningAndSchedulingController.checkAvailability);
-router.get('/planing/view', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "read"), planningAndSchedulingController.view);
+router.get('/planing/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.view);
 router.delete('/planing/delete/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.delete);
 router.post('/planing/delete/multiple', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.deletePlaningMultiple);
-router.get('/planingAndScheduling/get/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "read"), planningAndSchedulingController.getPlaningAnDschedulingByID);
-router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "read"), planningAndSchedulingController.getPlanInsights);
-router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "read"), planningAndSchedulingController.getProcessInsights);
-router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
+router.get('/planingAndScheduling/get/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByID);
+router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlanInsights);
+router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getProcessInsights);
+router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "update"), planningAndSchedulingController.update);
 router.get('/holiday/view', authController.authenticateToken, holidayController.view);
 router.post('/holiday/create', authController.authenticateToken, holidayController.create);
@@ -174,7 +178,7 @@ router.get(
   operatorWorkController.getSessionWorkDetails
 );
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
-router.get('/device/get/:id', authController.authenticateToken, authController.authorize(["Find Device", "Operator Task", "Transfer Requests", "Repackaging"], "read"), deviceController.getDeviceById);
+router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
 router.get('/devices/by-process/:processId', authController.authenticateToken, deviceController.getDevicesByProcessId);
@@ -186,11 +190,17 @@ router.get('/getOverallDeviceTestEntry', authController.authenticateToken, devic
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
 router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, deviceController.getDeviceTestHistoryByDeviceId);
-router.patch('/updateStageByDeviceId/:deviceId', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceMultipartParser.any(), deviceController.updateStageByDeviceId);
+router.patch(
+  '/updateStageByDeviceId/:deviceId',
+  authController.authenticateToken,
+  deviceMultipartParser.any(),
+  authController.authorizeUpdateStageByDeviceId,
+  deviceController.updateStageByDeviceId
+);
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
-router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorize("Find Device", "update"), deviceMultipartParser.any(), deviceController.markAsResolved);
+router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceMultipartParser.any(), deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);
