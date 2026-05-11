@@ -200,6 +200,63 @@ module.exports = {
     };
   },
   /**
+   * PUT /process/update/:id
+   * - Normal process edit: requires View Process update.
+   * - Product "Clone into Process": allow View Product update when req.body.isCloning === "true".
+   */
+  authorizeProcessUpdate: async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Unauthorized - No user identity" });
+      }
+
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
+      const normalizedUserType = normalizeUserTypeKey(user.userType);
+      if (
+        normalizedUserType === "admin" ||
+        normalizedUserType === "administrator" ||
+        normalizedUserType === "production_manager" ||
+        normalizedUserType === "store_manager" ||
+        normalizedUserType === "store_manger" ||
+        normalizedUserType === "store" ||
+        normalizedUserType === "operator"
+      ) {
+        return next();
+      }
+
+      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      if (!role) {
+        return res.status(403).json({ error: `Forbidden - Role '${user.userType}' not configured` });
+      }
+
+      const permissions = role.permissions || new Map();
+      const hasProcessUpdate = hasModuleLabelAction(permissions, "View Process", "update");
+      const hasProductUpdate = hasModuleLabelAction(permissions, "View Product", "update");
+      const isCloningRequest = String(req?.body?.isCloning || "").toLowerCase() === "true";
+
+      if (hasProcessUpdate || (isCloningRequest && hasProductUpdate)) {
+        return next();
+      }
+
+      return res.status(403).json({
+        error: "Forbidden",
+        message: isCloningRequest
+          ? "You do not have permission to clone stages. Grant View Product update (or View Process update)."
+          : "You do not have permission to update in View Process",
+        checkedModules: isCloningRequest ? ["View Product", "View Process"] : ["View Process"],
+        requiredAction: "update",
+        requestId: req.requestId,
+      });
+    } catch (error) {
+      console.error(">>> [AUTH] authorizeProcessUpdate error:", error);
+      return res.status(500).json({ error: "Internal Server Authorization Error" });
+    }
+  },
+  /**
    * POST /devices/markAsResolved — NG Devices detail (TRC/QC resolve).
    */
   authorizeMarkDeviceResolved: async (req, res, next) => {
