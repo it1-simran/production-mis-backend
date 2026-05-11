@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter } = require("../utils/accessControl");
+const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -38,7 +38,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
+      const filter = getUnscopedAuthorizedReadListFilter();
 
       if (
         String(req.query?.lite || "").toLowerCase() === "true" ||

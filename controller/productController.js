@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter } = require("../utils/accessControl");
+const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const Product = require("../models/Products");
 const InventoryModel = require("../models/inventoryManagement");
 
@@ -72,7 +72,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
+      const filter = getUnscopedAuthorizedReadListFilter();
       const Products = await Product.find(filter).sort({ _id: -1 });
       return res.status(200).json({
         status: 200,

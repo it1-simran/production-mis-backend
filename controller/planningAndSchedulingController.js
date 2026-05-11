@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { getDataAccessFilter } = require("../utils/accessControl");
+const { getDataAccessFilter, getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const moment = require("moment");
 const momentTz = require("moment-timezone");
 const PlaningAndSchedulingModel = require("../models/planingAndSchedulingModel");
@@ -528,7 +528,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const filter = getDataAccessFilter(req);
+      const filter = getUnscopedAuthorizedReadListFilter();
       let plans = await PlaningAndSchedulingModel.aggregate([
         {
           $match: filter
