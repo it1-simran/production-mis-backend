@@ -1579,11 +1579,22 @@ module.exports = {
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
       const statusRaw = req.query.status || req.query.onlyNg;
+      const modeRaw = String(req.query.mode || "").trim().toLowerCase();
       const shouldPaginate = pageRaw || limitRaw;
-      const statusFilter =
-        String(statusRaw || "").toLowerCase() === "ng"
-          ? { status: { $regex: /^NG$/i } }
-          : {};
+      const statusLower = String(statusRaw || "").toLowerCase();
+      let statusFilter = {};
+      if (statusLower === "ng") {
+        statusFilter = { status: { $regex: /^NG$/i } };
+      } else if (modeRaw === "ngportal" || statusLower === "ngportal") {
+        // NG queue + resolution outcomes only — excludes unrelated station "Pass" rows
+        // that were incorrectly winning client-side dedupe over active NG cycles.
+        statusFilter = {
+          $or: [
+            { status: { $regex: /^NG$/i } },
+            { status: { $regex: /resolved/i } },
+          ],
+        };
+      }
       const projection = {
         deviceId: 1,
         processId: 1,

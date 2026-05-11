@@ -14,28 +14,92 @@ const authService = new AuthService(
 const userService = new UserService();
 const User = require("../models/User");
 const UserTypes = require("../models/userType");
+const { NG_PORTAL_DEVICE_WRITE_MODULE_LABELS } = require("../constants/authorizationModules");
+
+function normalizeUserTypeKey(userType) {
+  return String(userType || "").toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function getPerm(permissions, moduleKey) {
+  if (!permissions) return null;
+  return permissions instanceof Map ? permissions.get(moduleKey) : permissions[moduleKey];
+}
+
+function hasModuleLabelAction(permissions, moduleLabel, action) {
+  const key = moduleLabel.toLowerCase().replace(/[\s-]+/g, "_");
+  const p = getPerm(permissions, key);
+  return Boolean(p && p[action] === true);
+}
+
+function hasAnyNgPortalWriteModuleUpdate(permissions) {
+  return NG_PORTAL_DEVICE_WRITE_MODULE_LABELS.some((label) =>
+    hasModuleLabelAction(permissions, label, "update")
+  );
+}
+
+/**
+ * Shared policy for mark-as-resolved and restricted PATCH /updateStageByDeviceId (NG portal).
+ */
+async function evaluateNgPortalDeviceWrite(user) {
+  const checkedModules = ["Operator Task", ...NG_PORTAL_DEVICE_WRITE_MODULE_LABELS, "NG Devices(read)"];
+  const t = normalizeUserTypeKey(user.userType);
+  const fullAccess = new Set([
+    "admin",
+    "production_manager",
+    "store_manager",
+    "store_manger",
+    "store",
+    "operator",
+  ]);
+  const portalTypes = new Set(["trc", "qc", "quality_control"]);
+  if (fullAccess.has(t) || portalTypes.has(t)) {
+    return { allowed: true, checkedModules };
+  }
+  const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+  if (!role) {
+    return { allowed: false, checkedModules, reason: "role_not_found" };
+  }
+  const permissions = role.permissions || new Map();
+  if (hasAnyNgPortalWriteModuleUpdate(permissions)) {
+    return { allowed: true, checkedModules };
+  }
+  const ngDevices = getPerm(permissions, "ng_devices");
+  if (ngDevices && ngDevices.read === true) {
+    return { allowed: true, checkedModules };
+  }
+  return { allowed: false, checkedModules, reason: "no_ng_portal_access" };
+}
+
+const PORTAL_PATCH_ALLOWED_BODY_KEYS = new Set([
+  "currentStage",
+  "status",
+  "assignedDeviceTo",
+  "imeiNo",
+  "ccid",
+  "serialNumber",
+  "serialNo",
+  "deviceId",
+]);
 
 module.exports = {
   login: async (req, res) => {
-       try {
-        // Call the authenticate method and get the result
-        const result = await userService.authenticate(req.body);
-    
-        // Send the response based on the result's status
-        return res.status(result.status).json({
-          success: result.success,
-          user: result.user,
-          message: result.message,
-          token: result.token || null, // Include the token if available
-        });
-      } catch (error) {
-        return res.status(500).json({ success: false, message: 'Internal server error' });
-      }
+    try {
+      const result = await userService.authenticate(req.body);
+
+      return res.status(result.status).json({
+        success: result.success,
+        user: result.user,
+        message: result.message,
+        token: result.token || null,
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
   },
-  logout: async (req,res) =>{
-    res.clearCookie('token');
-    res.clearCookie('userDetails');
-    res.json({ message: 'Logged out successfully' });
+  logout: async (req, res) => {
+    res.clearCookie("token");
+    res.clearCookie("userDetails");
+    res.json({ message: "Logged out successfully" });
   },
   register: async (req, res) => {
     const data = req.body;
@@ -56,7 +120,7 @@ module.exports = {
         console.log(">>> [AUTH_TRACE] No token provided");
         return res.status(401).json({ error: "No token provided" });
       }
-      
+
       const decoded = await authService.verifyToken(token);
       const user = await User.findById(decoded.id);
       if (!user) {
@@ -77,19 +141,19 @@ module.exports = {
           return res.status(401).json({ error: "Unauthorized - No user identity" });
         }
 
-        // Fetch user to get their userType (role)
         const user = await User.findById(req.user.id);
         if (!user) {
           console.log(`>>> [AUTH_TRACE] User not found: ${req.user.id}`);
           return res.status(401).json({ message: "User not found" });
         }
 
-        const normalizedUserType = (user.userType || "").toLowerCase().replace(/[\s-]+/g, "_");
-        logToFile(`>>> [AUTH_TRACE] Authorizing user: ${user.email}, role: "${user.userType}", normalized: "${normalizedUserType}"`);
+        const normalizedUserType = normalizeUserTypeKey(user.userType);
+        logToFile(
+          `>>> [AUTH_TRACE] Authorizing user: ${user.email}, role: "${user.userType}", normalized: "${normalizedUserType}"`
+        );
 
-        // Admin and Production Manager always have full access
         if (
-          normalizedUserType === "admin" || 
+          normalizedUserType === "admin" ||
           normalizedUserType === "production_manager" ||
           normalizedUserType === "store_manager" ||
           normalizedUserType === "store_manger" ||
@@ -100,7 +164,6 @@ module.exports = {
           return next();
         }
 
-        // Fetch permissions for this role
         const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
         if (!role) {
           logToFile(`>>> [AUTH] Role ${user.userType} not found for user ${user.email}`);
@@ -108,19 +171,23 @@ module.exports = {
         }
 
         const permissions = role.permissions || new Map();
-        
-        // Check if ANY of the modules provide the required permission
-        const hasPermission = modules.some(moduleName => {
+
+        const hasPermission = modules.some((moduleName) => {
           const moduleKey = moduleName.toLowerCase().replace(/[\s-]+/g, "_");
-          const permsObj = permissions instanceof Map ? permissions.get(moduleKey) : permissions[moduleKey];
+          const permsObj = getPerm(permissions, moduleKey);
           return permsObj && permsObj[action] === true;
         });
 
         if (!hasPermission) {
-          logToFile(`>>> [AUTH] Access denied for ${user.email} on modules: ${modules.join("/")}, action: ${action}`);
-          return res.status(403).json({ 
-            error: "Forbidden", 
-            message: `You do not have permission to ${action} in ${modules[0]}` 
+          logToFile(
+            `>>> [AUTH] Access denied for ${user.email} on modules: ${modules.join("/")}, action: ${action}`
+          );
+          return res.status(403).json({
+            error: "Forbidden",
+            message: `You do not have permission to ${action} in ${modules[0]}`,
+            checkedModules: modules,
+            requiredAction: action,
+            requestId: req.requestId,
           });
         }
 
@@ -130,6 +197,116 @@ module.exports = {
         return res.status(500).json({ error: "Internal Server Authorization Error" });
       }
     };
+  },
+  /**
+   * POST /devices/markAsResolved — NG Devices detail (TRC/QC resolve).
+   */
+  authorizeMarkDeviceResolved: async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Unauthorized - No user identity" });
+      }
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      const decision = await evaluateNgPortalDeviceWrite(user);
+      if (!decision.allowed) {
+        logToFile(
+          `[AUTH] markAsResolved denied for ${user.email} (${user.userType}) — ${decision.reason || "policy"}`
+        );
+        return res.status(403).json({
+          error: "Forbidden",
+          message:
+            "You do not have permission to mark this device resolved. Use a TRC/QC account, or grant NG Devices read/update (or Find Device update).",
+          checkedModules: decision.checkedModules,
+          requiredCapability: "ng_portal_device_write",
+          requestId: req.requestId,
+        });
+      }
+      return next();
+    } catch (error) {
+      console.error("[AUTH] authorizeMarkDeviceResolved error:", error);
+      return res.status(500).json({ error: "Internal Server Authorization Error" });
+    }
+  },
+  /**
+   * PATCH /updateStageByDeviceId — operators may send full payloads; TRC/QC/NG-read users
+   * only allowlisted fields (same write policy as markAsResolved).
+   */
+  authorizeUpdateStageByDeviceId: async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Unauthorized - No user identity" });
+      }
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      const normalizedUserType = normalizeUserTypeKey(user.userType);
+      const unrestrictedTypes = new Set([
+        "admin",
+        "production_manager",
+        "store_manager",
+        "store_manger",
+        "store",
+        "operator",
+      ]);
+      if (unrestrictedTypes.has(normalizedUserType)) {
+        return next();
+      }
+
+      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      if (!role) {
+        return res.status(403).json({
+          error: "Forbidden",
+          message: `Forbidden - Role '${user.userType}' not configured`,
+          requestId: req.requestId,
+        });
+      }
+      const permissions = role.permissions || new Map();
+      if (hasModuleLabelAction(permissions, "Operator Task", "update")) {
+        return next();
+      }
+
+      const decision = await evaluateNgPortalDeviceWrite(user);
+      if (!decision.allowed) {
+        logToFile(`[AUTH] updateStageByDeviceId denied for ${user.email} (${user.userType})`);
+        return res.status(403).json({
+          error: "Forbidden",
+          message:
+            "You do not have permission to update this device. Grant Operator Task update, or NG portal access (same as mark resolved).",
+          checkedModules: decision.checkedModules,
+          requiredCapability: "operator_task_update or ng_portal_device_write",
+          requestId: req.requestId,
+        });
+      }
+
+      const bodyKeys = Object.keys(req.body || {}).filter((k) => !String(k).startsWith("$"));
+      const extra = bodyKeys.filter((k) => !PORTAL_PATCH_ALLOWED_BODY_KEYS.has(k));
+      if (extra.length) {
+        return res.status(403).json({
+          error: "Forbidden",
+          message: `For your role, only these fields are allowed on this endpoint: ${[
+            ...PORTAL_PATCH_ALLOWED_BODY_KEYS,
+          ].join(", ")}. Remove: ${extra.join(", ")}`,
+          checkedModules: decision.checkedModules,
+          requestId: req.requestId,
+        });
+      }
+      if (Array.isArray(req.files) && req.files.length > 0) {
+        return res.status(403).json({
+          error: "Forbidden",
+          message: "File uploads on this endpoint require Operator Task update permission.",
+          requestId: req.requestId,
+        });
+      }
+
+      return next();
+    } catch (error) {
+      console.error("[AUTH] authorizeUpdateStageByDeviceId error:", error);
+      return res.status(500).json({ error: "Internal Server Authorization Error" });
+    }
   },
   getItems: (req, res) => {
     const sampleData = [

@@ -24,7 +24,8 @@
     "repair:self-reserved-plans": "node scripts/repair-self-reserved-plans.js",
     "repair:self-reserved-plans:dry": "node scripts/repair-self-reserved-plans.js --dry-run",
     "move:device:fqc": "node scripts/move-device-to-fqc.js",
-    "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run"
+    "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run",
+    "smoke:portal": "node scripts/portal-smoke.js"
   },
   "repository": {
     "type": "git",
