@@ -27,8 +27,8 @@ const getDataAccessFilter = (req, options = {}) => {
 
   // Admin, Production Manager, and Store Manager always have full access
   if (
-    userRole === "admin" || 
-    userRole === "administrator" || 
+    userRole === "admin" ||
+    userRole === "administrator" ||
     userRole === "production_manager" ||
     userRole === "store_manager" ||
     userRole === "store_manger" ||
@@ -51,6 +51,14 @@ const getDataAccessFilter = (req, options = {}) => {
   return filter;
 };
 
+/**
+ * For GET list routes already protected by `authorize(..., "read")` (User Roles RBAC).
+ * Do not merge legacy department/createdBy scoping here: roles such as Engineering with
+ * only `view_process` would otherwise see zero rows while the page is "allowed".
+ */
+const getUnscopedAuthorizedReadListFilter = () => ({});
+
 module.exports = {
   getDataAccessFilter,
+  getUnscopedAuthorizedReadListFilter,
 };

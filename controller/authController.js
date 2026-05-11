@@ -154,6 +154,7 @@ module.exports = {
 
         if (
           normalizedUserType === "admin" ||
+          normalizedUserType === "administrator" ||
           normalizedUserType === "production_manager" ||
           normalizedUserType === "store_manager" ||
           normalizedUserType === "store_manger" ||
