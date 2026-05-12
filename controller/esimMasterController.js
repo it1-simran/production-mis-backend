@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const EsimMaster = require("../models/EsimMaster");
 const EsimMake = require("../models/EsimMake");
 const EsimProfile = require("../models/EsimProfile");
@@ -125,7 +126,7 @@ module.exports = {
 
   create: async (req, res) => {
     try {
-      const { ccid, esimMake, profile1, profile2, apnProfile1, apnProfile2, remarks } = req.body;
+      const { ccid, esimMake, profile1, profile2, apnProfile1, apnProfile2, remarks } = req.body || {};
       const newEntry = new EsimMaster({ ccid, esimMake, profile1, profile2, apnProfile1, apnProfile2, remarks });
       await newEntry.save();
       return res.status(201).json({
@@ -149,9 +150,12 @@ module.exports = {
   update: async (req, res) => {
     try {
       const { id } = req.params;
-      const updateData = req.body;
-      updateData.updatedAt = Date.now();
-      const updated = await EsimMaster.findByIdAndUpdate(id, updateData, { new: true });
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid ESIM master ID" });
+      }
+      const { _id, createdAt, __v, ...safeData } = req.body;
+      safeData.updatedAt = Date.now();
+      const updated = await EsimMaster.findByIdAndUpdate(id, safeData, { new: true });
       if (!updated) {
         return res.status(404).json({ status: 404, message: "Record not found" });
       }
@@ -173,6 +177,9 @@ module.exports = {
   delete: async (req, res) => {
     try {
       const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid ESIM master ID" });
+      }
       const deleted = await EsimMaster.findByIdAndDelete(id);
       if (!deleted) {
         return res.status(404).json({ status: 404, message: "Record not found" });

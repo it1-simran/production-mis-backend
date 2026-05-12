@@ -578,14 +578,13 @@ module.exports = {
         duplicateErrors,
       });
     } catch (error) {
-      console.error("error ==>", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getLastEntryBasedOnPrefixAndSuffix: async (req, res) => {
     try {
       const data = req.query;
-      const escapeRegex = (string) => string.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
+      const escapeRegex = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const escapedPrefix = escapeRegex(data.prefix || "");
       const escapedSuffix = escapeRegex(data.suffix || "");
 
@@ -622,6 +621,7 @@ module.exports = {
       const { processId } = req.params;
       const devices = await deviceModel
         .find({ processID: processId }, null, { sort: { createdAt: -1 } })
+        .limit(5000)
         .lean();
 
       const deviceIds = devices.map((device) => device?._id).filter(Boolean);
@@ -690,11 +690,12 @@ module.exports = {
       const ngDevices = await deviceTestRecords
         .find({
           processId: new mongoose.Types.ObjectId(processId),
-          status: { $regex: /^NG$|RESOLVED/i },
+          status: { $regex: /^NG$|^Fail$|^QC$|^TRC$|^Rework$|Resolved$/i },
         })
         .populate("deviceId")
         .populate("processId")
         .sort({ _id: -1 })
+        .limit(2000)
         .lean();
 
       return res.status(200).json({
@@ -710,7 +711,11 @@ module.exports = {
     try {
       const data = req.body;
       const productType = data.selectedProduct;
-      const imeis = JSON.parse(data.imei);
+      if (!data.imei) {
+        return res.status(400).json({ status: 400, message: "IMEI data is required" });
+      }
+      let imeis;
+      try { imeis = JSON.parse(data.imei); } catch { return res.status(400).json({ status: 400, message: "Invalid IMEI JSON data" }); }
       const savedImeis = [];
 
       for (const value of imeis.slice(1)) {
@@ -768,6 +773,9 @@ module.exports = {
   },
   deleteIMEI: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid IMEI ID" });
+      }
       const imei = await imeiModel.findByIdAndDelete(req.params.id);
       if (!imei) {
         return res.status(404).json({ message: "Product not found" });
@@ -879,7 +887,6 @@ module.exports = {
       if (data && data.logs) {
         data.logs = sanitizeKeys(data.logs);
       }
-
       const serialNo = normalizeText(
         data.serialNo || data.serialNoValue || data.deviceSerial || data.serial,
       );
@@ -1493,6 +1500,9 @@ module.exports = {
           message: "planId and processId are required",
         });
       }
+      if (!mongoose.Types.ObjectId.isValid(planId) || !mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid planId or processId" });
+      }
 
       let resolvedDeviceId = deviceId;
       if (!resolvedDeviceId && serialNo) {
@@ -1535,6 +1545,11 @@ module.exports = {
         normalizedStageName.length > 0 ? normalizedStageName : "__default__"
       ).toString("base64url");
 
+      if (!mongoose.Types.ObjectId.isValid(resolvedDeviceId) ||
+          !mongoose.Types.ObjectId.isValid(planId) ||
+          !mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid device, plan, or process ID" });
+      }
       const attempt = await DeviceAttempt.findOneAndUpdate(
         {
           deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
@@ -1632,6 +1647,7 @@ module.exports = {
       } else {
         DeviceTestEntry = await deviceTestRecords
           .find(statusFilter, projection, { sort: { createdAt: -1 } })
+          .limit(1000)
           .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
           .populate({ path: "processId", select: "name processName" })
           .lean();
@@ -1651,15 +1667,18 @@ module.exports = {
   },
   getDeviceTestEntryByOperatorId: async (req, res) => {
     try {
-      console.log(">>> [DEBUG]: getDeviceTestEntryByOperatorId - id:", req.params.id, "query:", req.query);
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid operator ID" });
+      }
       const { date, startDate, endDate, serialNo } = req.query;
 
       let query = { operatorId: id };
       let startOfDay, endOfDay;
 
       if (serialNo) {
-        query.serialNo = { $regex: serialNo, $options: "i" };
+        const escapedSerial = String(serialNo).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        query.serialNo = { $regex: escapedSerial, $options: "i" };
       }
 
       if (date) {
@@ -1721,6 +1740,9 @@ module.exports = {
   getDeviceTestHistoryByDeviceId: async (req, res) => {
     try {
       let id = req.params.deviceId;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid device ID" });
+      }
 
       let deviceTestHistory = await deviceTestRecords
         .find({ deviceId: id }, null, { sort: { createdAt: -1 } })
@@ -1918,6 +1940,7 @@ module.exports = {
 
       const devices = await deviceModel.find(query)
         .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+        .limit(10000)
         .lean();
 
       const matchingDevices = findDevicesByScanTokensStrict(devices, scanTokens);
@@ -2295,6 +2318,10 @@ module.exports = {
         }
       }
       const resolvedStage = selectedStage || String(device.currentStage || firstStageName || "").trim();
+
+      const previousFlowVersion = Number(device.flowVersion || 1);
+      const newFlowVersion = previousFlowVersion + 1;
+
       const testRecordPayload = {
         deviceId: device._id,
         processId: device.processID,
@@ -2305,30 +2332,44 @@ module.exports = {
         reason: resolvedStage
           ? `Resolved and reassigned to ${resolvedStage}`
           : "Resolved",
-        flowVersion: Number(device.flowVersion || 1),
-        flowBoundary: false,
+        flowVersion: newFlowVersion,
+        flowBoundary: true,
         flowType: "resolve",
-        previousFlowVersion: null,
+        previousFlowVersion,
+        flowStartedAt: new Date(),
         ...(isTRC ? { trcRemarks: parsedTrcRemarks ? [parsedTrcRemarks] : [] } : {}),
       };
 
-      const testRecord = new deviceTestRecords(testRecordPayload);
-      const savedRecord = await testRecord.save();
-
       const nextStage = resolvedStage;
-      const updatedDevice = await deviceModel.findByIdAndUpdate(
-        device._id,
-        { $set: { status: incomingStatus || "", currentStage: nextStage } },
-        { new: true, runValidators: true }
-      );
+      const deviceUpdate = {
+        status: "",
+        currentStage: nextStage,
+        flowVersion: newFlowVersion,
+        flowStartedAt: new Date(),
+        updatedAt: new Date(),
+      };
 
+      let savedRecord;
+      let updatedDevice;
+      const session = await mongoose.startSession();
       try {
-        await DeviceAttempt.updateMany(
-          { deviceId: device._id },
-          { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } }
-        );
-      } catch (e) {
-        console.warn("Failed to reset attempt count on resolve:", e);
+        await session.withTransaction(async () => {
+          savedRecord = await new deviceTestRecords(testRecordPayload).save({ session });
+
+          updatedDevice = await deviceModel.findByIdAndUpdate(
+            device._id,
+            { $set: deviceUpdate },
+            { new: true, runValidators: true, session }
+          );
+
+          await DeviceAttempt.updateMany(
+            { deviceId: device._id },
+            { $set: { attemptCount: 0, stageAttempts: {}, lastAttemptAt: new Date() } },
+            { session }
+          );
+        });
+      } finally {
+        await session.endSession();
       }
 
       return res.status(200).json({
@@ -2346,12 +2387,16 @@ module.exports = {
   getDeviceTestHistoryByOperatorId: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid operator ID" });
+      }
       const { date, startDate, endDate, serialNo } = req.query;
 
       let query = { operatorId: id };
 
       if (serialNo) {
-        query.serialNo = { $regex: serialNo, $options: "i" };
+        const escapedSerial = String(serialNo).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        query.serialNo = { $regex: escapedSerial, $options: "i" };
       }
 
       if (date) {

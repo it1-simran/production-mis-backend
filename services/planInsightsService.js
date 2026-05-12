@@ -146,6 +146,14 @@ const isRevertedEquivalentStatus = (status) => {
   return normalized === "reverted" || normalized === "removed";
 };
 
+const isResolvedStatus = (status) => {
+  const normalized = normalizeKey(status);
+  return normalized === "resolved" ||
+    normalized === "qc resolved" ||
+    normalized === "trc resolved" ||
+    normalized.includes("resolved");
+};
+
 const isCountableStatus = (status) => COUNTABLE_STATUS_SET.has(normalizeKey(status));
 
 const isPassStatus = (status) => {
@@ -252,8 +260,30 @@ const buildLatestRecordPipeline = (match = {}) => [
   { $match: match },
   { $sort: { createdAt: -1 } },
   {
+    $group: {
+      _id: { deviceId: "$deviceId", stageName: "$stageName" },
+      docId: { $first: "$_id" },
+      planId: { $first: "$planId" },
+      processId: { $first: "$processId" },
+      operatorId: { $first: "$operatorId" },
+      deviceId: { $first: "$deviceId" },
+      serialNo: { $first: "$serialNo" },
+      seatNumber: { $first: "$seatNumber" },
+      stageName: { $first: "$stageName" },
+      status: { $first: "$status" },
+      assignedSeatKey: { $first: "$assignedSeatKey" },
+      currentSeatKey: { $first: "$currentSeatKey" },
+      nextLogicalStage: { $first: "$nextLogicalStage" },
+      currentLogicalStage: { $first: "$currentLogicalStage" },
+      currentStage: { $first: "$currentStage" },
+      assignedDeviceTo: { $first: "$assignedDeviceTo" },
+      createdAt: { $first: "$createdAt" },
+      updatedAt: { $first: "$updatedAt" },
+    },
+  },
+  {
     $project: {
-      _id: 1,
+      _id: "$docId",
       planId: 1,
       processId: 1,
       operatorId: 1,
@@ -267,10 +297,12 @@ const buildLatestRecordPipeline = (match = {}) => [
       nextLogicalStage: 1,
       currentLogicalStage: 1,
       currentStage: 1,
+      assignedDeviceTo: 1,
       createdAt: 1,
       updatedAt: 1,
     },
   },
+  { $sort: { createdAt: -1 } },
 ];
 
 const getOperatorTodayStats = async ({ operatorId = "", planId = "", processId = "" }) => {
@@ -492,8 +524,7 @@ const computePlanInsights = async ({
           if (isNgStatus(status)) seatStageRow.ng += 1;
         }
       }
-    } else if (normalizeKey(record?.status) === "resolved") {
-      // Resolved NG devices should be counted as WIP for the stage they returned to
+    } else if (isResolvedStatus(record?.status)) {
       const stageRow = upsertStage(stageName);
       if (stageRow) stageRow.wip += 1;
 
@@ -558,26 +589,26 @@ const computePlanInsights = async ({
     wip: 0,
   };
 
-  // Identify terminal units to exclude from active WIP
-  const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
+  const validProcessId = mongoose.Types.ObjectId.isValid(String(processId));
+  const terminalDevicesInProcess = validProcessId ? await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
     { 
       $group: { 
         _id: "$deviceId", 
-        latestStatus: { $first: "$status" },
-        latestAssignedTo: { $first: "$assignedDeviceTo" }
+        latestStatus: { $first: { $toLower: { $ifNull: ["$status", ""] } } },
+        latestAssignedTo: { $first: { $toLower: { $ifNull: ["$assignedDeviceTo", ""] } } }
       } 
     },
     { 
       $match: { 
         $or: [
-          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
-          { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+          { latestStatus: { $in: ["ng", "fail", "qc", "trc", "rework", "rejected"] } },
+          { latestAssignedTo: { $in: ["qc", "trc"] } }
         ]
       } 
     }
-  ]);
+  ]) : [];
 
   const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
 
@@ -631,12 +662,12 @@ const computePlanInsights = async ({
       }
   });
 
-  // Calculate process-level summary totals
   latestBySerial.forEach((record, serial) => {
     uniquePlanTotals.tested += 1;
     const status = normalizeKey(record?.status);
     if (isPassStatus(status)) uniquePlanTotals.pass += 1;
     else if (isNgStatus(status)) uniquePlanTotals.ng += 1;
+    else if (isResolvedStatus(record?.status)) uniquePlanTotals.wip += 1;
     else uniquePlanTotals.wip += 1;
   });
 
@@ -711,22 +742,21 @@ const computeProcessInsights = async ({
 
   const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
 
-  // Identify terminal devices to exclude from WIP
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
     { 
       $group: { 
         _id: "$deviceId", 
-        latestStatus: { $first: "$status" },
-        latestAssignedTo: { $first: "$assignedDeviceTo" }
+        latestStatus: { $first: { $toLower: { $ifNull: ["$status", ""] } } },
+        latestAssignedTo: { $first: { $toLower: { $ifNull: ["$assignedDeviceTo", ""] } } }
       } 
     },
     { 
       $match: { 
         $or: [
-          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
-          { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+          { latestStatus: { $in: ["ng", "fail", "qc", "trc", "rework", "rejected"] } },
+          { latestAssignedTo: { $in: ["qc", "trc"] } }
         ]
       } 
     }
@@ -804,8 +834,7 @@ const computeProcessInsights = async ({
           if (isNgStatus(status)) seatRow.ng += 1;
         }
       }
-    } else if (normalizeKey(record?.status) === "resolved") {
-      // Resolved NG devices should be counted as WIP for the stage they returned to
+    } else if (isResolvedStatus(record?.status)) {
       const stageRow = upsertStage(currentStageName);
       if (stageRow) stageRow.wip += 1;
 

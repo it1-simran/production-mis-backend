@@ -107,7 +107,7 @@ const buildRequestQuery = (req, query = {}) => {
   if (query.status && query.status !== "all") {
     filter.status = String(query.status).trim().toUpperCase();
   }
-  if (query.processId) {
+  if (query.processId && mongoose.Types.ObjectId.isValid(query.processId)) {
     const pId = new mongoose.Types.ObjectId(query.processId);
     filter.$and = filter.$and || [];
     filter.$and.push({
@@ -117,7 +117,7 @@ const buildRequestQuery = (req, query = {}) => {
       ]
     });
   }
-  if (query.requesterId) {
+  if (query.requesterId && mongoose.Types.ObjectId.isValid(query.requesterId)) {
     filter.requesterId = new mongoose.Types.ObjectId(query.requesterId);
   }
   if (query.fromDate || query.toDate) {
@@ -149,11 +149,9 @@ const getActorLabel = (user) =>
 module.exports = {
   createRequest: async (req, res) => {
     try {
-      console.log(">>> [DEBUG_TRACE] 1: Starting createRequest");
       const { fromProcessId, toProcessId, quantity, serials, targetStage, remarks } = req.body || {};
 
       const parsedQuantity = Number(quantity);
-      console.log(">>> [DEBUG_TRACE] 2: Parsed data:", { fromProcessId, toProcessId, parsedQuantity, serialsCount: serials?.length });
       const normalizedSerials = Array.from(
         new Set(
           (Array.isArray(serials) ? serials : [])
@@ -163,46 +161,37 @@ module.exports = {
       );
 
       if (!fromProcessId || !toProcessId) {
-        console.log(">>> [DEBUG_TRACE] 3: Validation failed - Missing IDs");
         return res.status(400).json({ status: 400, message: "From and To process are required" });
       }
       if (String(fromProcessId) === String(toProcessId)) {
-        console.log(">>> [DEBUG_TRACE] 4: Validation failed - Same IDs");
         return res.status(400).json({ status: 400, message: "From and To process cannot be the same" });
       }
       if (!Number.isInteger(parsedQuantity) || parsedQuantity <= 0) {
-        console.log(">>> [DEBUG_TRACE] 5: Validation failed - Quantity invalid");
         return res.status(400).json({ status: 400, message: "Quantity must be a positive integer" });
       }
 
-      console.log(">>> [DEBUG_TRACE] 6: Looking up processes");
       const [fromProcess, toProcess] = await Promise.all([
         ProcessModel.findById(fromProcessId).lean(),
         ProcessModel.findById(toProcessId).lean(),
       ]);
 
       if (!fromProcess || !toProcess) {
-        console.log(">>> [DEBUG_TRACE] 7: Process not found");
         return res.status(404).json({ status: 404, message: "Process not found" });
       }
 
-      console.log(">>> [DEBUG_TRACE] 8: Identifying actor");
       const actorId = getActorId(req.user);
       if (!actorId) {
-        console.log(">>> [DEBUG_TRACE] 9: Unauthorized");
         return res.status(401).json({ status: 401, message: "Unauthorized user" });
       }
 
       const requesterUser = await User.findById(actorId).lean();
 
       if (String(fromProcess.selectedProduct) !== String(toProcess.selectedProduct)) {
-        console.log(">>> [DEBUG_TRACE] 10: Product mismatch");
         return res.status(400).json({ status: 400, message: "Transfers are allowed only between same-product processes" });
       }
 
       const availableIssuedKits = Number(fromProcess.issuedKits || 0);
       if (parsedQuantity > availableIssuedKits) {
-        console.log(">>> [DEBUG_TRACE] 11: Insufficient kits");
         return res.status(400).json({
           status: 400,
           message: `Quantity cannot exceed allocated kits (${availableIssuedKits})`,
@@ -210,16 +199,13 @@ module.exports = {
       }
 
       if (normalizedSerials.length > 0) {
-        console.log(">>> [DEBUG_TRACE] 12: Validating serials");
         if (normalizedSerials.length !== parsedQuantity) {
-          console.log(">>> [DEBUG_TRACE] 13: Serial count mismatch");
           return res.status(400).json({
             status: 400,
             message: "Quantity must exactly match the number of scanned serials",
           });
         }
         if (!String(targetStage || "").trim()) {
-          console.log(">>> [DEBUG_TRACE] 14: Missing target stage");
           return res.status(400).json({
             status: 400,
             message: "Target stage is required when transferring devices",
@@ -231,7 +217,6 @@ module.exports = {
           (stage) => normalizeStage(stage) === normalizeStage(targetStage)
         );
         if (!stageExists) {
-          console.log(">>> [DEBUG_TRACE] 15: Stage doesn't exist");
           return res.status(400).json({
             status: 400,
             message: "Selected target stage does not exist on destination process",
@@ -244,7 +229,6 @@ module.exports = {
         }).lean();
 
         if (devices.length !== normalizedSerials.length) {
-          console.log(">>> [DEBUG_TRACE] 16: Not all serials found in source");
           const foundSet = new Set(devices.map((d) => normalizeSerial(d.serialNo)));
           const missing = normalizedSerials.filter((serial) => !foundSet.has(serial));
           return res.status(400).json({
@@ -256,7 +240,6 @@ module.exports = {
         const destinationStageSequence = buildStageSequence(toProcess);
         const targetStageIndex = getStageIndex(destinationStageSequence, targetStage);
         if (targetStageIndex === -1) {
-          console.log(">>> [DEBUG_TRACE] 17: Stage index -1");
           return res.status(400).json({
             status: 400,
             message: "Selected target stage does not exist on destination process",
@@ -271,7 +254,6 @@ module.exports = {
           });
         }
 
-        console.log(">>> [DEBUG_TRACE] 18: Validating flow eligibility for serials");
         const validationFailures = [];
         for (const device of devices) {
           const deviceFlowVersion = getDeviceFlowVersion(device);
@@ -315,7 +297,6 @@ module.exports = {
         }
 
         if (validationFailures.length > 0) {
-          console.log(">>> [DEBUG_TRACE] 19: Eligibility failed");
           return res.status(400).json({
             status: 400,
             message: validationFailures[0].reason || "Selected device is not eligible for the target stage",
@@ -324,7 +305,6 @@ module.exports = {
         }
       }
 
-      console.log(">>> [DEBUG_TRACE] 20: Creating database record");
       const request = await KitTransferRequest.create({
         fromProcessId: fromProcess._id,
         toProcessId: toProcess._id,
@@ -341,19 +321,16 @@ module.exports = {
         department: req.user?.department || "",
       });
 
-      console.log(">>> [DEBUG_TRACE] 21: Done!");
       return res.status(201).json({
         status: 201,
         message: "Kit transfer request created successfully",
         request: shapeRequest(request),
       });
     } catch (error) {
-      console.error(">>> [DEBUG_TRACE] CRASH:", error);
       return res.status(500).json({
         status: 500,
         message: error?.message || "Failed to create kit transfer request",
         details: error?.details || null,
-        error: error?.stack || error?.message || String(error),
       });
     }
   },
@@ -380,6 +357,9 @@ module.exports = {
 
   getRequestById: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid transfer request ID" });
+      }
       const request = await KitTransferRequest.findById(req.params.id).lean();
       if (!request) {
         return res.status(404).json({ status: 404, message: "Transfer request not found" });
@@ -400,8 +380,12 @@ module.exports = {
   },
 
   approveRequest: async (req, res) => {
-    const session = await mongoose.startSession();
+    let session;
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid transfer request ID" });
+      }
+      session = await mongoose.startSession();
       let updatedRequest;
       await session.withTransaction(async () => {
         const request = await KitTransferRequest.findById(req.params.id).session(session);
@@ -602,12 +586,15 @@ module.exports = {
         message: error.message || "Failed to approve transfer request",
       });
     } finally {
-      session.endSession();
+      if (session) session.endSession();
     }
   },
 
   rejectRequest: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid transfer request ID" });
+      }
       const request = await KitTransferRequest.findById(req.params.id);
       if (!request) {
         return res.status(404).json({ status: 404, message: "Transfer request not found" });

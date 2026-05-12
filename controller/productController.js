@@ -9,8 +9,9 @@ module.exports = {
     create: async (req, res) => {
     try {
       const name = req.body.name;
-      const stages = JSON.parse(req.body.Products || "[]");
-      const commonStages = JSON.parse(req.body.commonStages || "[]");
+      let stages, commonStages;
+      try { stages = req.body.Products ? JSON.parse(req.body.Products) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid Products JSON" }); }
+      try { commonStages = req.body.commonStages ? JSON.parse(req.body.commonStages) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid commonStages JSON" }); }
       const bodyStatus = String(req.body.status || req.body.productStatus || "").toLowerCase();
       const isDraft = String(req.body.isDraft || "").toLowerCase() === "true" || bodyStatus === "draft";
 
@@ -86,6 +87,9 @@ module.exports = {
   },
     delete: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid product ID" });
+      }
       const product = await Product.findByIdAndDelete(req.params.id);
       if (!product) {
         return res.status(404).json({ message: "Product not found" });
@@ -102,6 +106,9 @@ module.exports = {
   getProductByID: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid product ID" });
+      }
       const product = await Product.findById(id);
       // const product = await Product.aggregate([
       //   {
@@ -153,8 +160,12 @@ module.exports = {
   update: async (req, res) => {
     try {
       const id = req.params.id;
-      const stages = JSON.parse(req.body.stages);
-      const commonStages = JSON.parse(req.body.commonStages);
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid product ID" });
+      }
+      let stages, commonStages;
+      try { stages = req.body.stages ? JSON.parse(req.body.stages) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid stages JSON" }); }
+      try { commonStages = req.body.commonStages ? JSON.parse(req.body.commonStages) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid commonStages JSON" }); }
       const updatedData = { name: req.body.name, stages, commonStages };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
@@ -181,6 +192,9 @@ module.exports = {
   activate: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid product ID" });
+      }
       const product = await Product.findById(id);
       if (!product) {
         return res.status(404).json({ message: "Product not found" });

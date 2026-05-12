@@ -112,10 +112,10 @@ deviceSchemas.pre('updateOne', function (next) {
 
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
-deviceSchemas.index({ serialNo: 1, processID: 1 });
+deviceSchemas.index({ serialNo: 1, processID: 1 }, { unique: true });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
-deviceSchemas.index({ imeiNo: 1 });
-deviceSchemas.index({ ccid: 1 });
+deviceSchemas.index({ imeiNo: 1 }, { unique: true, sparse: true, partialFilterExpression: { imeiNo: { $ne: "" } } });
+deviceSchemas.index({ ccid: 1 }, { unique: true, sparse: true, partialFilterExpression: { ccid: { $ne: "" } } });
 deviceSchemas.index({ productType: 1, processID: 1, currentStage: 1, status: 1 });
 
 const device = mongoose.model("devices", deviceSchemas);

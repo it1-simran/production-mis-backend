@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const UserRoles = require("../models/userRoles");
 const UserTypes = require("../models/userType");
-console.log(">>> [DEBUG] UserTypes Model Loaded:", !!UserTypes, typeof UserTypes);
 const bcrypt = require("bcrypt");
 module.exports = {
   create: async (req, res) => {
@@ -38,6 +37,9 @@ module.exports = {
   },
   deleteUserRole: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid role ID" });
+      }
       const userRoles = await UserRoles.findByIdAndDelete(req.params.id);
       if (!userRoles) {
         return res.status(404).json({ message: "User Role not found" });
@@ -79,21 +81,14 @@ module.exports = {
   getUserRolesByID: async (req, res) => {
     try {
       const id = req.params.id;
-      console.log(`>>> [DEBUG] Fetching role by ID: ${id}`);
-      
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        console.error(`>>> [ERROR] Invalid ObjectId format: ${id}`);
-        return res.status(400).json({ error: "Invalid role ID format" });
+        return res.status(400).json({ status: 400, message: "Invalid role ID format" });
       }
 
       const role = await UserTypes.findById(id);
-      
       if (!role) {
-        console.warn(`>>> [WARN] Role not found in database for ID: ${id}`);
-        return res.status(404).json({ error: "User Role not found in database" });
+        return res.status(404).json({ status: 404, message: "User Role not found" });
       }
-
-      console.log(`>>> [DEBUG] Role found: ${role.name}`);
       return res.status(200).json({ 
         roles: role.permissions || {}, 
         name: role.name 
@@ -110,7 +105,9 @@ module.exports = {
   update: async (req, res) => {
     try {
       const id = req.params.id;
-      // We are now updating permissions directly on the UserType (Role)
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid role ID" });
+      }
       const updatedUserType = await UserTypes.findByIdAndUpdate(
         id,
         { $set: { permissions: req.body, updatedAt: Date.now() } },
@@ -161,7 +158,11 @@ module.exports = {
   getUserTypeByType: async (req, res) => {
     try {
       const { type } = req.query;
-      const userType = await UserTypes.findOne({ name: new RegExp(`^${type}$`, "i") });
+      if (!type || typeof type !== "string") {
+        return res.status(400).json({ status: 400, message: "Missing or invalid 'type' query parameter" });
+      }
+      const escaped = type.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const userType = await UserTypes.findOne({ name: new RegExp(`^${escaped}$`, "i") });
       
       if (!userType) {
         return res.status(404).json({ message: "Role not found" });

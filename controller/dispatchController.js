@@ -1,6 +1,15 @@
+const mongoose = require("mongoose");
 const DispatchService = require("../services/dispatchService");
 
 const dispatchService = new DispatchService();
+
+const validateId = (res, id, label = "ID") => {
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    res.status(400).json({ success: false, message: `Invalid ${label}` });
+    return false;
+  }
+  return true;
+};
 
 const sendError = (res, error, fallbackMessage) =>
   res.status(error.status || 500).json({
@@ -57,6 +66,7 @@ module.exports = {
 
   getInvoiceById: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "invoice ID")) return;
       const invoice = await dispatchService.getInvoiceById(req.params.id, { includeGatePass: true });
       return res.status(200).json({ success: true, data: invoice });
     } catch (error) {
@@ -66,6 +76,7 @@ module.exports = {
 
   updateInvoice: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "invoice ID")) return;
       const invoice = await dispatchService.updateDraft(req.params.id, req.body || {}, req.user?.id || req.user?._id || null);
       return res.status(200).json({ success: true, data: invoice, message: "Dispatch draft updated successfully." });
     } catch (error) {
@@ -75,6 +86,7 @@ module.exports = {
 
   cancelInvoice: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "invoice ID")) return;
       const invoice = await dispatchService.cancelInvoice(req.params.id, req.user?.id || req.user?._id || null);
       return res.status(200).json({ success: true, data: invoice, message: "Dispatch draft cancelled successfully." });
     } catch (error) {
@@ -84,6 +96,7 @@ module.exports = {
 
   confirmInvoice: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "invoice ID")) return;
       const invoice = await dispatchService.confirmInvoice(
         req.params.id,
         req.user?.id || req.user?._id || null,
@@ -97,6 +110,7 @@ module.exports = {
 
   getGatePass: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "gate pass ID")) return;
       const gatePass = await dispatchService.getGatePass(req.params.id, {
         includeImeiList: String(req.query.includeImeiList || "").toLowerCase() === "true",
       });
@@ -109,6 +123,7 @@ module.exports = {
 
   generateGatePassPdf: async (req, res) => {
     try {
+      if (!validateId(res, req.params.id, "gate pass ID")) return;
       const gatePass = await dispatchService.getGatePass(req.params.id, {
         includeImeiList: Boolean(req.body?.includeImeiList),
       });

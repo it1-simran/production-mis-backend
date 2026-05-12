@@ -5,7 +5,11 @@ module.exports = {
   create: async (req, res) => {
     try {
       const floorName = req.body.floorName;
-      const lines = JSON.parse(req.body.lines);
+      if (!req.body.lines) {
+        return res.status(400).json({ status: 400, message: "Lines data is required" });
+      }
+      let lines;
+      try { lines = typeof req.body.lines === "string" ? JSON.parse(req.body.lines) : req.body.lines; } catch { return res.status(400).json({ status: 400, message: "Invalid lines JSON" }); }
       const newRoomPlan = new RoomPlanModel({ floorName, lines });
       await newRoomPlan.save();
 
@@ -25,7 +29,7 @@ module.exports = {
       const RoomPlan = await RoomPlanModel.find().sort({ _id: -1 });
       return res.status(200).json({
         status: 200,
-        status_msg: "Jigs Fetched Sucessfully!!",
+        status_msg: "Room Plans Fetched Successfully!!",
         RoomPlan,
       });
     } catch (error) {
@@ -34,6 +38,9 @@ module.exports = {
   },
   deleteRoomPlan: async (req,res)=>{
     try{
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid room plan ID" });
+      }
       const roomPlan = await RoomPlanModel.findByIdAndDelete(req.params.id);
       if (!roomPlan) {
         return res.status(404).json({ message: "Room Plan not found" });
@@ -69,6 +76,9 @@ module.exports = {
   getRoomPlanByID: async (req,res) =>{
     try{
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid room plan ID" });
+      }
       const roomPlan = await RoomPlanModel.findById(id);
       if (!roomPlan) {
         return res.status(404).json({ error: "Room Plan not found" });
@@ -81,7 +91,15 @@ module.exports = {
   update: async (req,res) =>{
     try{
       const id = req.params.id;
-      const updatedData = {floorName:req.body.floorName,lines:JSON.parse(req.body.lines)  };
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid room plan ID" });
+      }
+      if (!req.body.lines) {
+        return res.status(400).json({ status: 400, message: "Lines data is required" });
+      }
+      let parsedLines;
+      try { parsedLines = typeof req.body.lines === "string" ? JSON.parse(req.body.lines) : req.body.lines; } catch { return res.status(400).json({ status: 400, message: "Invalid lines JSON" }); }
+      const updatedData = {floorName:req.body.floorName,lines:parsedLines};
   
       const updatedRoomPlan = await RoomPlanModel.findByIdAndUpdate(id, updatedData, { 
         new: true,

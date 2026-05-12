@@ -485,6 +485,9 @@ module.exports = {
         return isNaN(d.getTime()) ? undefined : d;
       };
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid plan ID" });
+      }
       const updatedData = req.body;
       const safeParse = (val, fallback) => {
         if (typeof val === "string") {
@@ -607,6 +610,9 @@ module.exports = {
           error:
             "Room ID, Shift ID, Start Date, and Expected End Date are required.",
         });
+      }
+      if (!mongoose.Types.ObjectId.isValid(roomId) || !mongoose.Types.ObjectId.isValid(shiftId)) {
+        return res.status(400).json({ status: 400, error: "Invalid Room ID or Shift ID" });
       }
       const parseFlexibleDateTimeUtc = (value) => {
         if (value === undefined || value === null) return moment.invalid();
@@ -773,6 +779,9 @@ module.exports = {
           error: "Room ID and Shift ID are required.",
         });
       }
+      if (!mongoose.Types.ObjectId.isValid(roomId) || !mongoose.Types.ObjectId.isValid(shiftId)) {
+        return res.status(400).json({ status: 400, error: "Invalid Room ID or Shift ID" });
+      }
 
       const currentDate = moment.utc().startOf("day");
       const endDate = moment.utc().add(30, "days").endOf("day");
@@ -881,14 +890,17 @@ module.exports = {
   delete: async (req, res) => {
     try {
       const planId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(planId)) {
+        return res.status(400).json({ status: 400, message: "Invalid plan ID" });
+      }
       const planingAndScheduling =
         await PlaningAndSchedulingModel.findByIdAndDelete(planId);
-      await ProcessLogsModel.deleteMany({ planId });
       if (!planingAndScheduling) {
         return res
           .status(404)
           .json({ message: "Planing & Scheduling not found" });
       }
+      await ProcessLogsModel.deleteMany({ planId });
       res.status(200).json({
         message: "Planing & Scheduling deleted successfully",
         planingAndScheduling,
@@ -934,6 +946,9 @@ module.exports = {
   getPlaningAnDschedulingByID: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid plan ID" });
+      }
       const PlaningAndScheduling = await PlaningAndSchedulingModel.aggregate([
         {
           $match: { _id: new mongoose.Types.ObjectId(id) },
@@ -1128,12 +1143,15 @@ module.exports = {
   getPlaningAnDschedulingByProcessId: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
         ...getUnscopedAuthorizedReadListFilter(),
         selectedProcess: id,
       });
-      if (!PlaningAndScheduling) {
-        return res.status(404).json({ error: "Product not found" });
+      if (!PlaningAndScheduling || PlaningAndScheduling.length === 0) {
+        return res.status(404).json({ error: "Planning schedule not found for this process" });
       }
       return res.status(200).json(PlaningAndScheduling[0]);
     } catch (error) {
@@ -1241,6 +1259,9 @@ module.exports = {
   getProcessLogsByProcessId: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
       const processLogs = await ProcessLogsModel.aggregate([
         {
           $match: {
@@ -1282,7 +1303,17 @@ module.exports = {
       const selectedProcess = req.body.selectedProcess;
       const downTime = req.body.downTime;
 
-      const downtimeData = JSON.parse(downTime);
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid planning ID" });
+      }
+      if (selectedProcess && !mongoose.Types.ObjectId.isValid(selectedProcess)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
+
+      const downtimeData = safeParseJson(downTime, null);
+      if (!downtimeData) {
+        return res.status(400).json({ status: 400, message: "Invalid downtime data" });
+      }
 
       const processData = {
         status: "down_time_hold",
@@ -1304,6 +1335,9 @@ module.exports = {
           runValidators: true,
         }
       );
+      if (!planing) {
+        return res.status(404).json({ status: 404, message: "Planning schedule not found" });
+      }
       const process = await ProcessModel.findByIdAndUpdate(
         selectedProcess,
         processData,
@@ -1331,6 +1365,9 @@ module.exports = {
   updateProcessStatus: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid planning ID" });
+      }
       const selectedProcess = req.body.selectedProcess;
       const processData = {
         status: req.body.status,
@@ -1617,8 +1654,8 @@ module.exports = {
   },
   checkTestRecordsDateWise: async (req, res) => {
     try {
+      return res.status(501).json({ status: 501, message: "Not implemented" });
     } catch (error) {
-      console.error(" Api Error :", error.message);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },

@@ -28,9 +28,9 @@ const getPackagingDataByProductId = async (productId) => {
 module.exports = {
   dashboard: async (req, res) => {
     try {
-      processCount = await ProcessModel.countDocuments({});
-      productCount = await ProductModel.countDocuments({});
-      productWiseQuantity = await ProcessModel.aggregate([
+      const processCount = await ProcessModel.countDocuments({});
+      const productCount = await ProductModel.countDocuments({});
+      const productWiseQuantity = await ProcessModel.aggregate([
         {
           $lookup: {
             from: "products",
@@ -443,7 +443,7 @@ const calculateOverallInventoryAccuracy = async (physicalCounts) => {
       const inventory = inventories[i];
       const systemRecordedCount = inventory.quantity;
       const physicalCount =
-        physicalCounts[inventory.productType.toString()] || 0;
+        physicalCounts[String(inventory.productType || "")] || 0;
       if (systemRecordedCount === 0) {
 
         continue;

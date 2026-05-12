@@ -4,7 +4,7 @@ const ShiftModel = require("../models/shiftManagement");
 module.exports = {
   create: async (req, res) => {
     try {
-      const { name, intervals, weekDays, descripition } = req.body;
+      const { name, intervals, weekDays, descripition } = req.body || {};
       const startTime = req?.body?.startTime;
       const endTime = req?.body?.endTime;
 
@@ -67,6 +67,9 @@ module.exports = {
   },
   delete: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid shift ID" });
+      }
       const Shifts = await ShiftModel.findByIdAndDelete(req.params.id);
       if (!Shifts) {
         return res.status(404).json({ message: "shift not found" });
@@ -110,9 +113,12 @@ module.exports = {
   getShiftByID: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid shift ID" });
+      }
       const shift = await ShiftModel.findById(id).lean();
       if (!shift) {
-        return res.status(404).json({ error: "Room Plan not found" });
+        return res.status(404).json({ error: "Shift not found" });
       }
       return res.status(200).json(shift);
     } catch (error) {
@@ -160,11 +166,11 @@ module.exports = {
         runValidators: true,
       });
       if (!updatedShift) {
-        return res.status(404).json({ message: "Room Plan not found" });
+        return res.status(404).json({ message: "Shift not found" });
       }
       return res.status(200).json({
         status: 200,
-        message: "Room Plan updated successfully",
+        message: "Shift updated successfully",
         shift: updatedShift,
       });
     } catch (error) {

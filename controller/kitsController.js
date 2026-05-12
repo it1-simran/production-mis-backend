@@ -7,7 +7,11 @@ const ProcessModel = require("../models/process");
 module.exports = {
   createKitsEntry: async (req, res) => {
     try {
-      const data = req?.body;
+      const { processId, userId, returnedKits, returnedCarton, selectedProduct, ...rest } = req?.body || {};
+      if (!processId || !userId) {
+        return res.status(400).json({ status: 400, message: "processId and userId are required" });
+      }
+      const data = { processId, userId, returnedKits, returnedCarton, selectedProduct, ...rest };
       const kitsEntry = new kitsModel(data);
       await kitsEntry.save();
       return res.status(200).json({status: 200,message: "Kits Return Entry Created Successfully!!",kitsEntry});
@@ -18,11 +22,17 @@ module.exports = {
   updateKitsStatus: async (req,res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid kit entry ID" });
+      }
       let data = {'status':req.body.status};
       if (!req.body.processID) {
         return res.status(400).json({ status: 400, message: "processID is required" });
       }
       const processData = await ProcessModel.findOne({_id:req.body.processID});
+      if (!processData) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
       let updatedProcessData = {
         issuedKits : processData.issuedKits - parseInt(req.body.returnedKits),
         issuedCartons:processData.issuedCartons - parseInt(req.body.returnedCarton),
@@ -30,6 +40,9 @@ module.exports = {
 
       const updatedProcess  = await ProcessModel.findByIdAndUpdate(req.body.processID,updatedProcessData,{new:true});
       const currentInventory = await InventoryModel.findOne({productType:req.body.selectedProduct});
+      if (!currentInventory) {
+        return res.status(404).json({ status: 404, message: "Inventory record not found for this product" });
+      }
       const inventoryData = {
         'quantity':parseInt(currentInventory.quantity) + parseInt(req.body.returnedKits) ,
         'cartonQuantity':parseInt(currentInventory.cartonQuantity) + parseInt(req.body.returnedCarton),

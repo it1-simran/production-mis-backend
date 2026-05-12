@@ -88,10 +88,9 @@ class UserService {
     try {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(data, saltRounds);
-
-      res.status(200).json({ hashedPassword });
+      return { hashedPassword };
     } catch (error) {
-      throw new Error(error.message || "Error registering user");
+      throw new Error(error.message || "Error hashing password");
     }
   }
 }

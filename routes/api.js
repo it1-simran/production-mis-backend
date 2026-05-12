@@ -64,10 +64,10 @@ router.post('/jig/create', authController.authenticateToken, jigController.creat
 router.post('/jig/category/create', authController.authenticateToken, jigController.createOrUpdateJigCategory);
 router.get('/jig/view', authController.authenticateToken, jigController.view);
 router.get('/jig/category/view', authController.authenticateToken, jigController.viewCategory);
-router.delete('/jig/delete/:id', authController.authenticateToken, jigController.delete);
-router.delete('/jig/category/delete/:id', authController.authenticateToken, jigController.deleteCategory);
-router.post('/jig/delete/multiple', authController.authenticateToken, jigController.deleteJigMultiple);
-router.post('/jig/categories/delete/multiple', authController.authenticateToken, jigController.deleteCategoryMultiple);
+router.delete('/jig/delete/:id', authController.authenticateToken, authController.authorize("Jig Management", "delete"), jigController.delete);
+router.delete('/jig/category/delete/:id', authController.authenticateToken, authController.authorize("Jig Management", "delete"), jigController.deleteCategory);
+router.post('/jig/delete/multiple', authController.authenticateToken, authController.authorize("Jig Management", "delete"), jigController.deleteJigMultiple);
+router.post('/jig/categories/delete/multiple', authController.authenticateToken, authController.authorize("Jig Management", "delete"), jigController.deleteCategoryMultiple);
 router.get(`/fetchJigsById/:id`, authController.authenticateToken, jigController.fetchJigsById);
 router.get(`/fetchJigByJigId/:id`, authController.authenticateToken, jigController.fetchJigByJigId);
 router.post('/room-plan/create', authController.authenticateToken, roomPlanController.create);
@@ -82,20 +82,20 @@ router.delete('/user/delete/:id', authController.authenticateToken, authControll
 router.post('/user/delete/multiple', authController.authenticateToken, authController.authorize("View User", "delete"), userController.deleteUserMultiple);
 router.put('/user/update/:id', authController.authenticateToken, authController.authorize("View User", "update"), userController.updateUser);
 router.get('/analytics/users/registration-trends', authController.authenticateToken, userController.getUserRegistrationTrends);
-router.post('/user-roles/create', authController.authenticateToken, userRolesController.create);
+router.post('/user-roles/create', authController.authenticateToken, authController.authorize("View User", "create"), userRolesController.create);
 router.get('/user-roles/view', authController.authenticateToken, userRolesController.view);
-router.delete('/user-roles/delete/:id', authController.authenticateToken, userRolesController.deleteUserRole);
-router.post('/user-roles/delete/multiple', authController.authenticateToken, userRolesController.deleteUserRoleMultiple);
+router.delete('/user-roles/delete/:id', authController.authenticateToken, authController.authorize("View User", "delete"), userRolesController.deleteUserRole);
+router.post('/user-roles/delete/multiple', authController.authenticateToken, authController.authorize("View User", "delete"), userRolesController.deleteUserRoleMultiple);
 router.get('/user-roles/get/:id', authController.authenticateToken, userRolesController.getUserRolesByID);
-router.put('/roles/update/:id', authController.authenticateToken, userRolesController.update);
+router.put('/roles/update/:id', authController.authenticateToken, authController.authorize("View User", "update"), userRolesController.update);
 router.get('/user-type/get', authController.authenticateToken, userRolesController.getUserType);
 router.get('/user-type/getPermissionByType', authController.authenticateToken, userRolesController.getUserTypeByType);
 router.post('/menu/create', authController.authenticateToken, menuController.create);
 router.get('/menu/get', authController.authenticateToken, menuController.view);
 router.post('/shift/create', authController.authenticateToken, shiftController.create);
 router.get('/shift/view', authController.authenticateToken, shiftController.view);
-router.delete('/shift/delete/:id', authController.authenticateToken, shiftController.delete);
-router.post('/shift/delete/multiple', authController.authenticateToken, shiftController.deleteUserRoleMultiple);
+router.delete('/shift/delete/:id', authController.authenticateToken, authController.authorize("Shift Management", "delete"), shiftController.delete);
+router.post('/shift/delete/multiple', authController.authenticateToken, authController.authorize("Shift Management", "delete"), shiftController.deleteUserRoleMultiple);
 router.get('/shift/get/:id', authController.authenticateToken, shiftController.getShiftByID);
 router.put('/shift/update/:id', authController.authenticateToken, shiftController.updateshift);
 router.post('/process/create', authController.authenticateToken, authController.authorize("View Process", "create"), processController.create);
@@ -121,8 +121,8 @@ router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authC
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "update"), planningAndSchedulingController.update);
 router.get('/holiday/view', authController.authenticateToken, holidayController.view);
 router.post('/holiday/create', authController.authenticateToken, holidayController.create);
-router.delete('/holiday/delete/:id', authController.authenticateToken, holidayController.delete);
-router.post('/holiday/delete/multiple', authController.authenticateToken, holidayController.deleteHolidayMultiple);
+router.delete('/holiday/delete/:id', authController.authenticateToken, authController.authorize("Shift Management", "delete"), holidayController.delete);
+router.post('/holiday/delete/multiple', authController.authenticateToken, authController.authorize("Shift Management", "delete"), holidayController.deleteHolidayMultiple);
 router.post('/planing/getFromCurrentDate', authController.authenticateToken, planningAndSchedulingController.checkAvailabilityFromCurrentDate);
 router.get('/planing/getPlaningAndSchedulingModel', authController.authenticateToken, planningAndSchedulingController?.fetchAllPlaningModel);
 router.post('/planing/create', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "create"), planningAndSchedulingController.create);
@@ -210,14 +210,14 @@ router.post('/devices/seed-stage-history', authController.authenticateToken, dev
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
-router.post('/sticker/fields/create', authController.authenticateToken, stickerController.createStickerField);
+router.post('/sticker/fields/create', authController.authenticateToken, authController.authorize("Sticker Management", "create"), stickerController.createStickerField);
 router.get('/sticker/fields/get', authController.authenticateToken, stickerController.getStickerField);
-router.delete('/sticker/fields/delete/:id', authController.authenticateToken, stickerController.deleteStickerField);
-router.post('/sticker/fields/delete/multiple', authController.authenticateToken, stickerController.deleteStickerFieldMultiple);
+router.delete('/sticker/fields/delete/:id', authController.authenticateToken, authController.authorize("Sticker Management", "delete"), stickerController.deleteStickerField);
+router.post('/sticker/fields/delete/multiple', authController.authenticateToken, authController.authorize("Sticker Management", "delete"), stickerController.deleteStickerFieldMultiple);
 router.post('/devices/createIMEI', authController.authenticateToken, deviceController.createIMEI);
 router.get('/devices/viewIMEI', authController.authenticateToken, deviceController.viewIMEI);
-router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, deviceController.deleteIMEI);
-router.post('/devices/deleteIMEI/multiple', authController.authenticateToken, deviceController.deleteMultipleIMEI);
+router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, authController.authorize("Find Device", "delete"), deviceController.deleteIMEI);
+router.post('/devices/deleteIMEI/multiple', authController.authenticateToken, authController.authorize("Find Device", "delete"), deviceController.deleteMultipleIMEI);
 router.get('/analytics/device-test/trends', authController.authenticateToken, deviceController.getDeviceTestTrends);
 router.get('/analytics/device-test/ng-reasons', authController.authenticateToken, deviceController.getNGReasonDistribution);
 router.get('/inventory/view', authController.authenticateToken, authController.authorize("Inventory", "read"), inventoryController.view);
@@ -237,8 +237,8 @@ router.get('/analytics/mes/production-dashboard', authController.authenticateTok
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
 router.post('/skill-management/create', authController.authenticateToken, skillManagementController.create);
 router.get('/skill-management/get', authController.authenticateToken, skillManagementController.getSkills);
-router.delete('/skill-management/delete/:id', authController.authenticateToken, skillManagementController.delete);
-router.post('/skill-management/delete/multiple', authController.authenticateToken, skillManagementController.deleteMultiple);
+router.delete('/skill-management/delete/:id', authController.authenticateToken, authController.authorize("Skill Management", "delete"), skillManagementController.delete);
+router.post('/skill-management/delete/multiple', authController.authenticateToken, authController.authorize("Skill Management", "delete"), skillManagementController.deleteMultiple);
 router.put('/process/updateQuantity/:id', authController.authenticateToken, processController.updateMoreQuantity);
 router.put('/process/updateMarkAsCompleted/:id', authController.authenticateToken, processController.updateMarkasCompletedProcess);
 router.post('/production/returnKitsToStore', authController.authenticateToken, kitsController.createKitsEntry);
@@ -260,8 +260,8 @@ router.put("/kit-transfer/request/:id/reject", authController.authenticateToken,
 
 router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);
-router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, OrderConfirmationController.delete);
-router.post('/process/orderConfirmation/delete-multiple', authController.authenticateToken, OrderConfirmationController.deleteMultiple);
+router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, authController.authorize("OC Management", "delete"), OrderConfirmationController.delete);
+router.post('/process/orderConfirmation/delete-multiple', authController.authenticateToken, authController.authorize("OC Management", "delete"), OrderConfirmationController.deleteMultiple);
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
 router.put('/process/addOvertime/:id', authController.authenticateToken, planningAndSchedulingController.addOvertime);
 router.delete('/process/removeOvertime/:id/:windowId', authController.authenticateToken, planningAndSchedulingController.removeOvertime);
@@ -276,14 +276,11 @@ router.put('/carton/updateWeight', authController.authenticateToken, CartonContr
 router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
 router.put('/carton/removeDevice', authController.authenticateToken, CartonController.removeDevice);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
-router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
-router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
-// IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
+// Static routes MUST be registered before parameterized routes to avoid
+// "store-portal" being captured as :processId.
 router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
 router.get("/cartons/:processId/open", authController.authenticateToken, CartonController.getOpenCartonsByProcessId);
-// IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
-router.get("/cartons/store-portal", authController.authenticateToken, cartonController.getStorePortalCartons);
 router.get("/cartons/:processId", authController.authenticateToken, cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, cartonController.getCartonsIntoStore);
@@ -297,22 +294,22 @@ router.post('/carton/repackage/shuffle', authController.authenticateToken, authC
 router.get('/cartons/:cartonSerial/history', authController.authenticateToken, cartonController.getCartonHistory);
 router.post('/cartons/:processId/shift', authController.authenticateToken, cartonController.shiftToNextCommonStage);
 router.post('/cartons/:processId/keep-in-store', authController.authenticateToken, cartonController.keepInStore);
-router.delete('/carton/discard/:cartonSerial', authController.authenticateToken, cartonController.discardCarton);
+router.delete('/carton/discard/:cartonSerial', authController.authenticateToken, authController.authorize("Repackaging", "delete"), cartonController.discardCarton);
 
 router.get("/process/getFGInventory", authController.authenticateToken, cartonController.fetchCurrentRunningProcessFG);
 router.get("/dispatch/cartons/ready", authController.authenticateToken, dispatchController.getReadyCartons);
 router.get("/dispatch/summary/processes", authController.authenticateToken, dispatchController.getProcessDispatchSummaries);
 router.get("/dispatch/cartons/:cartonSerial", authController.authenticateToken, dispatchController.getCartonBySerial);
-router.post("/dispatch/invoices", authController.authenticateToken, dispatchController.createInvoice);
+router.post("/dispatch/invoices", authController.authenticateToken, authController.authorize("Dispatch Management", "create"), dispatchController.createInvoice);
 router.get("/dispatch/invoices", authController.authenticateToken, dispatchController.getInvoices);
 router.get("/dispatch/invoices/:id", authController.authenticateToken, dispatchController.getInvoiceById);
-router.put("/dispatch/invoices/:id", authController.authenticateToken, dispatchController.updateInvoice);
-router.post("/dispatch/invoices/:id/cancel", authController.authenticateToken, dispatchController.cancelInvoice);
-router.post("/dispatch/invoices/:id/confirm", authController.authenticateToken, dispatchController.confirmInvoice);
+router.put("/dispatch/invoices/:id", authController.authenticateToken, authController.authorize("Dispatch Management", "update"), dispatchController.updateInvoice);
+router.post("/dispatch/invoices/:id/cancel", authController.authenticateToken, authController.authorize("Dispatch Management", "delete"), dispatchController.cancelInvoice);
+router.post("/dispatch/invoices/:id/confirm", authController.authenticateToken, authController.authorize("Dispatch Management", "update"), dispatchController.confirmInvoice);
 router.get("/dispatch/invoices/:id/gate-pass", authController.authenticateToken, dispatchController.getGatePass);
 router.post("/dispatch/invoices/:id/gate-pass/pdf", authController.authenticateToken, dispatchController.generateGatePassPdf);
 router.get("/warranty/check", authController.authenticateToken, dispatchController.checkWarranty);
-router.delete("/devices/remove-duplicates", authController.authenticateToken, async (req, res) => {
+router.delete("/devices/remove-duplicates", authController.authenticateToken, authController.authorize("Find Device", "delete"), async (req, res) => {
   try {
     const duplicates = await device.aggregate([
       {
@@ -339,30 +336,30 @@ router.delete("/devices/remove-duplicates", authController.authenticateToken, as
 
 const esimApnController = require('../controller/esimApnController');
 
-router.post('/esim-master/bulk-create', authController.authenticateToken, esimMasterController.bulkCreate);
-router.post('/esim-master/create', authController.authenticateToken, esimMasterController.create);
+router.post('/esim-master/bulk-create', authController.authenticateToken, authController.authorize("ESIM Management", "create"), esimMasterController.bulkCreate);
+router.post('/esim-master/create', authController.authenticateToken, authController.authorize("ESIM Management", "create"), esimMasterController.create);
 router.get('/esim-master/view', authController.authenticateToken, esimMasterController.view);
-router.put('/esim-master/update/:id', authController.authenticateToken, esimMasterController.update);
-router.delete('/esim-master/delete/:id', authController.authenticateToken, esimMasterController.delete);
-router.post('/esim-master/bulk-delete', authController.authenticateToken, esimMasterController.bulkDelete);
+router.put('/esim-master/update/:id', authController.authenticateToken, authController.authorize("ESIM Management", "update"), esimMasterController.update);
+router.delete('/esim-master/delete/:id', authController.authenticateToken, authController.authorize("ESIM Management", "delete"), esimMasterController.delete);
+router.post('/esim-master/bulk-delete', authController.authenticateToken, authController.authorize("ESIM Management", "delete"), esimMasterController.bulkDelete);
 router.get('/esim-master/ccid/:ccid', authController.authenticateToken, esimMasterController.getByCcid);
 
-router.post('/esim-make/create', authController.authenticateToken, esimMakeController.create);
+router.post('/esim-make/create', authController.authenticateToken, authController.authorize("ESIM Management", "create"), esimMakeController.create);
 router.get('/esim-make/view', authController.authenticateToken, esimMakeController.view);
-router.put('/esim-make/update/:id', authController.authenticateToken, esimMakeController.update);
-router.delete('/esim-make/delete/:id', authController.authenticateToken, esimMakeController.delete);
+router.put('/esim-make/update/:id', authController.authenticateToken, authController.authorize("ESIM Management", "update"), esimMakeController.update);
+router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize("ESIM Management", "delete"), esimMakeController.delete);
 
-router.post('/esim-profile/create', authController.authenticateToken, esimProfileController.create);
+router.post('/esim-profile/create', authController.authenticateToken, authController.authorize("ESIM Management", "create"), esimProfileController.create);
 router.get('/esim-profile/view', authController.authenticateToken, esimProfileController.view);
 router.get('/esim-profile/view/:id', authController.authenticateToken, esimProfileController.esimProfileById);
-router.put('/esim-profile/update/:id', authController.authenticateToken, esimProfileController.update);
-router.delete('/esim-profile/delete/:id', authController.authenticateToken, esimProfileController.delete);
+router.put('/esim-profile/update/:id', authController.authenticateToken, authController.authorize("ESIM Management", "update"), esimProfileController.update);
+router.delete('/esim-profile/delete/:id', authController.authenticateToken, authController.authorize("ESIM Management", "delete"), esimProfileController.delete);
 
-router.post('/esim-apn/create', authController.authenticateToken, esimApnController.create);
+router.post('/esim-apn/create', authController.authenticateToken, authController.authorize("ESIM Management", "create"), esimApnController.create);
 router.get('/esim-apn/view', authController.authenticateToken, esimApnController.view);
 router.get('/esim-apn/view/:id', authController.authenticateToken, esimApnController.viewAPNById);
-router.put('/esim-apn/update/:id', authController.authenticateToken, esimApnController.update);
-router.delete('/esim-apn/delete/:id', authController.authenticateToken, esimApnController.delete);
+router.put('/esim-apn/update/:id', authController.authenticateToken, authController.authorize("ESIM Management", "update"), esimApnController.update);
+router.delete('/esim-apn/delete/:id', authController.authenticateToken, authController.authorize("ESIM Management", "delete"), esimApnController.delete);
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
 router.get("/process/orderconfirmation/:orderConfirmationNo(*)", authController.authenticateToken, processController.getOrderConfirmationByNo);
 

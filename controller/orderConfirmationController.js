@@ -5,8 +5,10 @@ module.exports = {
     try {
       const data = req.body;
 
-      // ✅ Update logic
       if (data?.id) {
+        if (!mongoose.Types.ObjectId.isValid(data.id)) {
+          return res.status(400).json({ status: 400, message: "Invalid order confirmation ID" });
+        }
         data.updatedAt = Date.now();
         const updatedOrder =
           await OrderConfirmationNumberModel.findByIdAndUpdate(data.id, data, {
@@ -38,8 +40,8 @@ module.exports = {
       });
     } catch (error) {
       if (error.code === 11000) {
-        return res.status(200).json({
-          status: 204,
+        return res.status(409).json({
+          status: 409,
           message: "Order Confirmation Number already exists.",
           field: Object.keys(error.keyPattern)[0],
         });
@@ -48,40 +50,6 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
-  //   create: async (req, res) => {
-  //     try {
-  //       const data = req?.body;
-  //       if (data.id) {
-  //         const updatedOrder =
-  //           await OrderConfirmationNumberModel.findByIdAndUpdate(data.id, data, {
-  //             new: true,
-  //           });
-
-  //         if (!updatedOrder) {
-  //           return res.status(404).json({
-  //             status: 404,
-  //             message: "Order Confirmation Number not found",
-  //           });
-  //         }
-
-  //         return res.status(200).json({
-  //           status: 200,
-  //           message: "Order Confirmation Number updated successfully",
-  //           orderConfirmation: updatedOrder,
-  //         });
-  //       }
-  //       const orderConfirmation = new OrderConfirmationNumberModel(data);
-  //       const savedOrderConfirmationNumber = await orderConfirmation.save();
-
-  //       return res.status(200).json({
-  //         status: 200,
-  //         message: "Order Confirmation Number created successfully",
-  //         orderConfirmation: savedOrderConfirmationNumber,
-  //       });
-  //     } catch (error) {
-  //       return res.status(500).json({ status: 500, error: error.message });
-  //     }
-  //   },
   view: async (req, res) => {
     try {
       const getOrderConfirmationNo = await OrderConfirmationNumberModel.find().sort({ _id: -1 });
@@ -91,13 +59,16 @@ module.exports = {
         getOrderConfirmationNo,
       });
     } catch (error) {
-      console.error("Error fetching Menu details:", error.message);
-      return res.status(500).json({ error: "Internal Server Error" });
+      console.error("Error fetching order confirmations:", error.message);
+      return res.status(500).json({ status: 500, message: "Failed to fetch order confirmations" });
     }
   },
   delete: async (req, res) => {
     try {
       const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid order confirmation ID" });
+      }
       const deletedOrder = await OrderConfirmationNumberModel.findByIdAndDelete(id);
 
       if (!deletedOrder) {

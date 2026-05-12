@@ -22,7 +22,7 @@ const NGDeviceSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
-// index for faster lookups by serial number
-// NGDeviceSchema.index({ serialNo: 1 });
+NGDeviceSchema.index({ serialNo: 1 });
+NGDeviceSchema.index({ processId: 1, serialNo: 1 });
 
 module.exports = mongoose.model("NGDevice", NGDeviceSchema);

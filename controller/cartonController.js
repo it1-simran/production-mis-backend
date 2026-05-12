@@ -243,6 +243,7 @@ const extractPackagingDataFromStages = (stages = []) => {
 };
 
 const getProcessAndProductDocs = async (processId) => {
+  if (processId && !mongoose.Types.ObjectId.isValid(String(processId))) return null;
   const processDoc = processId ? await ProcessModel.findById(processId).lean() : null;
   const productId =
     processDoc?.selectedProduct || processDoc?.productType || processDoc?.productId || null;
@@ -971,7 +972,7 @@ const enrichCartonDevicesForResponse = ({
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
-      const { processId, devices, packagingData: rawPackagingData, selectedCarton: rawSelectedCarton } = req.body;
+      const { processId, devices, packagingData: rawPackagingData, selectedCarton: rawSelectedCarton } = req.body || {};
       const deviceIds = Array.from(
         new Set(
           (Array.isArray(devices) ? devices : [])
@@ -2330,40 +2331,6 @@ module.exports = {
     }
   },
 
-  verifySticker: async (req, res) => {
-    try {
-      const { cartonSerial } = req.body;
-      if (!cartonSerial) {
-        return res
-          .status(400)
-          .json({ status: 400, message: "Carton serial is required." });
-      }
-
-      const updatedCarton = await cartonModel.findOneAndUpdate(
-        { cartonSerial },
-        { isStickerVerified: true },
-        { new: true }
-      );
-
-      if (!updatedCarton) {
-        return res
-          .status(404)
-          .json({ status: 404, message: "Carton not found." });
-      }
-
-      return res.status(200).json({
-        status: 200,
-        message: "Carton verified successfully.",
-        carton: updatedCarton,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        status: 500,
-        message: "Error verifying carton.",
-        error: error.message,
-      });
-    }
-  },
   shiftToPDI: async (req, res) => {
     try {
       const { cartons } = req.body;
@@ -2787,8 +2754,7 @@ module.exports = {
         await process.save();
       }
 
-      // 5. Update the count for the consumed kits into the planning if planId is provided
-      if (planId) {
+      if (planId && mongoose.Types.ObjectId.isValid(String(planId))) {
         const planing = await planingModel.findById(planId);
         if (planing) {
           planing.consumedKit = (planing.consumedKit || 0) + deviceCount;
@@ -3039,6 +3005,8 @@ module.exports = {
             storeStatus: { $in: ["FG_TO_STORE", "STOCKED", "KEPT_IN_STORE"] },
           },
         },
+        { $sort: { createdAt: -1 } },
+        { $limit: 500 },
         {
           $lookup: {
             from: "processes",
@@ -3077,7 +3045,6 @@ module.exports = {
             devices: "$deviceDetails",
           },
         },
-        { $sort: { createdAt: -1 } }
       ]);
 
       const enrichedCartons = await attachModelNamesToCartons(
@@ -3108,7 +3075,7 @@ module.exports = {
         cartonDepth,
         cartonWeight,
         cartonWeightTolerance,
-      } = req.body;
+      } = req.body || {};
 
       if (!cartonSerial) {
         return res.status(400).json({ status: 400, message: "Carton serial is required." });
@@ -3429,9 +3396,10 @@ module.exports = {
   },
 
   repackageCarton: async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    let session;
     try {
+      session = await mongoose.startSession();
+      session.startTransaction();
       const { cartonSerial, deviceIds, weightCarton, maxCapacity, cartonSize } = req.body;
       if (!cartonSerial || !Array.isArray(deviceIds)) {
         return res.status(400).json({ status: 400, message: "Invalid input data." });
@@ -3515,18 +3483,19 @@ module.exports = {
       await session.commitTransaction();
       return res.status(200).json({ status: 200, message: "Carton repackaged successfully." });
     } catch (error) {
-      await session.abortTransaction();
+      if (session?.inTransaction()) await session.abortTransaction();
       console.error("Error repackaging carton:", error);
       return res.status(500).json({ status: 500, message: error.message });
     } finally {
-      session.endSession();
+      if (session) session.endSession();
     }
   },
 
   shuffleDevices: async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    let session;
     try {
+      session = await mongoose.startSession();
+      session.startTransaction();
       const { 
         sourceCartonSerial, 
         targetCartonSerial, 
@@ -3632,11 +3601,11 @@ module.exports = {
       await session.commitTransaction();
       return res.status(200).json({ status: 200, message: "Devices shuffled successfully." });
     } catch (error) {
-      await session.abortTransaction();
+      if (session?.inTransaction()) await session.abortTransaction();
       console.error("Error shuffling devices:", error);
       return res.status(500).json({ status: 500, message: error.message });
     } finally {
-      session.endSession();
+      if (session) session.endSession();
     }
   },
   discardCarton: async (req, res) => {

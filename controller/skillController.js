@@ -57,6 +57,9 @@ module.exports = {
   delete: async (req, res) => {
     try {
       let id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid skill ID" });
+      }
       let skill = await SkillModel.findByIdAndDelete(id);
       if (!skill) {
         return res.status(404).json({ message: "Skill not Found" });

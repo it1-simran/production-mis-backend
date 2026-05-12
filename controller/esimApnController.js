@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const EsimApn = require("../models/EsimApn");
 
 module.exports = {
@@ -113,9 +114,12 @@ module.exports = {
     update: async (req, res) => {
         try {
             const { id } = req.params;
-            const updateData = req.body;
-            updateData.updatedAt = Date.now();
-            const updated = await EsimApn.findByIdAndUpdate(id, updateData, { new: true });
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({ status: 400, message: "Invalid APN ID" });
+            }
+            const { _id, createdAt, __v, ...safeData } = req.body;
+            safeData.updatedAt = Date.now();
+            const updated = await EsimApn.findByIdAndUpdate(id, safeData, { new: true });
             if (!updated) {
                 return res.status(404).json({ status: 404, message: "Record not found" });
             }
@@ -136,6 +140,9 @@ module.exports = {
     delete: async (req, res) => {
         try {
             const { id } = req.params;
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({ status: 400, message: "Invalid APN ID" });
+            }
             const deleted = await EsimApn.findByIdAndDelete(id);
             if (!deleted) {
                 return res.status(404).json({ status: 404, message: "Record not found" });

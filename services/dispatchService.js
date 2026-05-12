@@ -181,7 +181,8 @@ class DispatchService {
     }
 
     if (filters.cartonSerial) {
-      query.cartonSerial = { $regex: String(filters.cartonSerial).trim(), $options: "i" };
+      const escaped = String(filters.cartonSerial).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.cartonSerial = { $regex: escaped, $options: "i" };
     }
 
     const cartons = await cartonModel
@@ -607,6 +608,11 @@ class DispatchService {
   }
 
   async releaseReservation(invoiceId) {
+    if (!mongoose.Types.ObjectId.isValid(String(invoiceId))) {
+      const err = new Error("Invalid invoice ID");
+      err.status = 400;
+      throw err;
+    }
     const objectId = new mongoose.Types.ObjectId(String(invoiceId));
     await cartonModel.updateMany(
       { dispatchInvoiceId: objectId, dispatchStatus: RESERVED_STATUS },

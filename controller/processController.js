@@ -20,8 +20,8 @@ module.exports = {
         processID: data?.processID,
         quantity: data?.quantity,
         descripition: data?.descripition,
-        stages: JSON.parse(data?.stages),
-        commonStages: JSON.parse(data?.commonStages),
+        stages: (() => { try { return data?.stages ? JSON.parse(data.stages) : []; } catch { return []; } })(),
+        commonStages: (() => { try { return data?.commonStages ? JSON.parse(data.commonStages) : []; } catch { return []; } })(),
         createdBy: req.user?.id,
         department: req.user?.department || "",
       };
@@ -162,6 +162,9 @@ module.exports = {
   delete: async (req, res) => {
     try {
       const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
       const deletedProcess = await ProcessModel.findByIdAndDelete(id);
 
       if (!deletedProcess) {
@@ -311,6 +314,9 @@ module.exports = {
   update: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
       const data = req?.body;
 
       const oldProcess = await ProcessModel.findById(id);
@@ -318,8 +324,9 @@ module.exports = {
         return res.status(404).json({ message: "Process not found" });
       }
 
-      let newStages = JSON.parse(data?.stages || "[]");
-      let newCommonStages = JSON.parse(data?.commonStages || "[]");
+      let newStages, newCommonStages;
+      try { newStages = JSON.parse(data?.stages || "[]"); } catch { return res.status(400).json({ status: 400, message: "Invalid stages JSON" }); }
+      try { newCommonStages = JSON.parse(data?.commonStages || "[]"); } catch { return res.status(400).json({ status: 400, message: "Invalid commonStages JSON" }); }
 
       // Preserving operator/jig assignments for existing stages during cloning if they match by name
       if (data?.isCloning === "true") {
@@ -388,9 +395,10 @@ module.exports = {
         });
 
         for (const plan of plans) {
-          let assignedStages = JSON.parse(plan.assignedStages || "{}");
-          let assignedOperators = JSON.parse(plan.assignedOperators || "{}");
-          let assignedJigs = JSON.parse(plan.assignedJigs || "{}");
+          let assignedStages, assignedOperators, assignedJigs;
+          try { assignedStages = JSON.parse(plan.assignedStages || "{}"); } catch { assignedStages = {}; }
+          try { assignedOperators = JSON.parse(plan.assignedOperators || "{}"); } catch { assignedOperators = {}; }
+          try { assignedJigs = JSON.parse(plan.assignedJigs || "{}"); } catch { assignedJigs = {}; }
           let modified = false;
 
           for (const key in assignedStages) {
@@ -426,12 +434,9 @@ module.exports = {
           }
 
           // Cleanup for custom/common stages
-          let assignedCustomStages = JSON.parse(
-            plan.assignedCustomStages || "[]",
-          );
-          let assignedCustomStagesOp = JSON.parse(
-            plan.assignedCustomStagesOp || "[]",
-          );
+          let assignedCustomStages, assignedCustomStagesOp;
+          try { assignedCustomStages = JSON.parse(plan.assignedCustomStages || "[]"); } catch { assignedCustomStages = []; }
+          try { assignedCustomStagesOp = JSON.parse(plan.assignedCustomStagesOp || "[]"); } catch { assignedCustomStagesOp = []; }
           let filteredCustomStages = [];
           let filteredCustomStagesOp = [];
           let customModified = false;
@@ -494,19 +499,19 @@ module.exports = {
     try {
       const { id } = req.params;
 
-      if (!id) {
+      if (!id || !mongoose.Types.ObjectId.isValid(id)) {
         return res
           .status(400)
-          .json({ status: 400, message: "Process ID is required" });
+          .json({ status: 400, message: "Invalid or missing process ID" });
       }
       let assignedOperatorsToPlan = await AssignOperatorToPlanModel.find({
         processId: id,
         status: "Occupied",
       });
       if (assignedOperatorsToPlan.length > 0) {
-        assignedOperatorsToPlan.map(async (value, index) => {
+        await Promise.all(assignedOperatorsToPlan.map(async (value) => {
           let operatorData = { status: "Free" };
-          const updatedPlan = await AssignOperatorToPlanModel.findByIdAndUpdate(
+          await AssignOperatorToPlanModel.findByIdAndUpdate(
             value._id,
             operatorData,
             {
@@ -514,7 +519,7 @@ module.exports = {
               runValidators: true,
             },
           );
-        });
+        }));
       }
       const updatedData = req.body;
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
@@ -550,6 +555,9 @@ module.exports = {
   updateMoreQuantity: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
 
       const planData = await ProcessModel.aggregate([
         {
@@ -589,16 +597,19 @@ module.exports = {
         },
       ]);
       let finalPlanData = planData[0];
-      let planingID = finalPlanData?.planing?._id;
-      let startDate = finalPlanData?.planing?.startDate;
-      let totalUPHA = parseInt(finalPlanData?.planing.totalUPHA);
+      if (!finalPlanData || !finalPlanData.planing) {
+        return res.status(404).json({ status: 404, message: "No planning data found for this process" });
+      }
+      let planingID = finalPlanData.planing._id;
+      let startDate = finalPlanData.planing.startDate;
+      let totalUPHA = parseInt(finalPlanData.planing.totalUPHA) || 0;
       let totalQuantity =
-        parseInt(finalPlanData.quantity) + parseInt(req.body.quantity);
-      const totalTimeEstimationInDays = parseInt(
-        (totalQuantity / totalUPHA).toFixed(2),
-      );
+        (parseInt(finalPlanData.quantity) || 0) + (parseInt(req.body.quantity) || 0);
+      const totalTimeEstimationInDays = totalUPHA > 0
+        ? parseInt((totalQuantity / totalUPHA).toFixed(2))
+        : 0;
       const endDate = new Date(startDate);
-      endDate.setDate(startDate.getDate() + totalTimeEstimationInDays);
+      endDate.setDate(endDate.getDate() + totalTimeEstimationInDays);
       const updatedQuantity = await ProcessModel.findByIdAndUpdate(
         id,
         {
@@ -682,6 +693,9 @@ module.exports = {
   updateStatusAssignedOperator: async (req, res) => {
     try {
       let userId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       let status = req.body.status;
       let updateAssignedOperator;
       let operatorData = await AssignOperatorToPlanModel.findOne({ userId });
@@ -720,7 +734,7 @@ module.exports = {
         planId: data.planId,
         processId: data.processId,
         issuedKits: parseInt(data.issuedKits),
-        seatDetails: JSON.parse(data.seatDetails),
+        seatDetails: (() => { try { return data.seatDetails ? JSON.parse(data.seatDetails) : []; } catch { return []; } })(),
         issuedKitsStatus: data.issuedKitsStatus,
         status: "ASSIGN_TO_OPERATOR",
       };
@@ -767,6 +781,9 @@ module.exports = {
   updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid kit ID" });
+      }
       let data = {
         status: req?.body?.status,
         issuedKitsStatus: req?.body?.issuedKitsStatus,
@@ -782,6 +799,9 @@ module.exports = {
           runValidators: true,
         },
       );
+      if (!req.body.processId || !mongoose.Types.ObjectId.isValid(req.body.processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID in request body" });
+      }
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
         req.body.processId,
         processData,
@@ -799,6 +819,9 @@ module.exports = {
   getDeviceTestRecordsByProcessId: async (req, res) => {
     try {
       let processId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process ID" });
+      }
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
       const shouldPaginate = pageRaw || limitRaw;

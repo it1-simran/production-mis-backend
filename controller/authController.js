@@ -1,13 +1,6 @@
 const AuthService = require("../services/authService");
-const fs = require("fs");
-const path = require("path");
-
-const LOG_FILE = path.join(process.cwd(), "debug_auth.log");
-const logToFile = (msg) => {
-  const timestamp = new Date().toISOString();
-  fs.appendFileSync(LOG_FILE, `[${timestamp}] ${msg}\n`);
-};
 const UserService = require("../services/userService");
+const escapeRegex = (str) => String(str || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const authService = new AuthService(
   process.env.JWT_SECRET || "your-secret-key"
 );
@@ -55,7 +48,7 @@ async function evaluateNgPortalDeviceWrite(user) {
   if (fullAccess.has(t) || portalTypes.has(t)) {
     return { allowed: true, checkedModules };
   }
-  const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+  const role = await UserTypes.findOne({ name: new RegExp(`^${escapeRegex(user.userType)}$`, "i") });
   if (!role) {
     return { allowed: false, checkedModules, reason: "role_not_found" };
   }
@@ -97,14 +90,22 @@ module.exports = {
     }
   },
   logout: async (req, res) => {
-    res.clearCookie("token");
-    res.clearCookie("userDetails");
-    res.json({ message: "Logged out successfully" });
+    try {
+      res.clearCookie("token");
+      res.clearCookie("userDetails");
+      res.json({ message: "Logged out successfully" });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Logout failed" });
+    }
   },
   register: async (req, res) => {
-    const data = req.body;
-    const result = await userService.register(data);
-    res.json(result);
+    try {
+      const data = req.body;
+      const result = await userService.register(data);
+      res.json(result);
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || "Registration failed" });
+    }
   },
   getProtectedData: (req, res) => {
     res.json({
@@ -113,11 +114,9 @@ module.exports = {
   },
   authenticateToken: async (req, res, next) => {
     try {
-      console.log(`>>> [AUTH_TRACE] authenticateToken started for ${req.method} ${req.url}`);
       const authHeader = req.headers["authorization"];
       const token = authHeader && authHeader.split(" ")[1];
       if (!token) {
-        console.log(">>> [AUTH_TRACE] No token provided");
         return res.status(401).json({ error: "No token provided" });
       }
 
@@ -129,8 +128,7 @@ module.exports = {
       req.user = user;
       next();
     } catch (error) {
-      console.error(">>> [AUTH_TRACE] Error verifying token:", error);
-      return res.status(403).json({ error });
+      return res.status(403).json({ error: "Invalid or expired token" });
     }
   },
   authorize: (moduleNames, action) => {
@@ -143,31 +141,20 @@ module.exports = {
 
         const user = await User.findById(req.user.id);
         if (!user) {
-          console.log(`>>> [AUTH_TRACE] User not found: ${req.user.id}`);
           return res.status(401).json({ message: "User not found" });
         }
 
         const normalizedUserType = normalizeUserTypeKey(user.userType);
-        logToFile(
-          `>>> [AUTH_TRACE] Authorizing user: ${user.email}, role: "${user.userType}", normalized: "${normalizedUserType}"`
-        );
 
         if (
           normalizedUserType === "admin" ||
-          normalizedUserType === "administrator" ||
-          normalizedUserType === "production_manager" ||
-          normalizedUserType === "store_manager" ||
-          normalizedUserType === "store_manger" ||
-          normalizedUserType === "store" ||
-          normalizedUserType === "operator"
+          normalizedUserType === "administrator"
         ) {
-          logToFile(`>>> [AUTH_TRACE] Full access bypass granted for role: ${normalizedUserType}`);
           return next();
         }
 
-        const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+        const role = await UserTypes.findOne({ name: new RegExp(`^${escapeRegex(user.userType)}$`, "i") });
         if (!role) {
-          logToFile(`>>> [AUTH] Role ${user.userType} not found for user ${user.email}`);
           return res.status(403).json({ error: `Forbidden - Role '${user.userType}' not configured` });
         }
 
@@ -180,9 +167,6 @@ module.exports = {
         });
 
         if (!hasPermission) {
-          logToFile(
-            `>>> [AUTH] Access denied for ${user.email} on modules: ${modules.join("/")}, action: ${action}`
-          );
           return res.status(403).json({
             error: "Forbidden",
             message: `You do not have permission to ${action} in ${modules[0]}`,
@@ -218,17 +202,12 @@ module.exports = {
       const normalizedUserType = normalizeUserTypeKey(user.userType);
       if (
         normalizedUserType === "admin" ||
-        normalizedUserType === "administrator" ||
-        normalizedUserType === "production_manager" ||
-        normalizedUserType === "store_manager" ||
-        normalizedUserType === "store_manger" ||
-        normalizedUserType === "store" ||
-        normalizedUserType === "operator"
+        normalizedUserType === "administrator"
       ) {
         return next();
       }
 
-      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      const role = await UserTypes.findOne({ name: new RegExp(`^${escapeRegex(user.userType)}$`, "i") });
       if (!role) {
         return res.status(403).json({ error: `Forbidden - Role '${user.userType}' not configured` });
       }
@@ -270,9 +249,6 @@ module.exports = {
       }
       const decision = await evaluateNgPortalDeviceWrite(user);
       if (!decision.allowed) {
-        logToFile(
-          `[AUTH] markAsResolved denied for ${user.email} (${user.userType}) — ${decision.reason || "policy"}`
-        );
         return res.status(403).json({
           error: "Forbidden",
           message:
@@ -314,7 +290,7 @@ module.exports = {
         return next();
       }
 
-      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      const role = await UserTypes.findOne({ name: new RegExp(`^${escapeRegex(user.userType)}$`, "i") });
       if (!role) {
         return res.status(403).json({
           error: "Forbidden",
@@ -329,7 +305,6 @@ module.exports = {
 
       const decision = await evaluateNgPortalDeviceWrite(user);
       if (!decision.allowed) {
-        logToFile(`[AUTH] updateStageByDeviceId denied for ${user.email} (${user.userType})`);
         return res.status(403).json({
           error: "Forbidden",
           message:

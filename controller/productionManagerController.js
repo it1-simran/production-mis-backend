@@ -159,7 +159,7 @@ module.exports = {
   },
   updateProductionStatus: async (req, res) => {
     try {
-      const { id: ProcessId, status: ProductionStatus, issuedKits } = req.body;
+      const { id: ProcessId, status: ProductionStatus, issuedKits } = req.body || {};
 
       const existingProcess = await ProcessModel.findById(ProcessId);
 
@@ -191,7 +191,7 @@ module.exports = {
       });
     } catch (error) {
       console.error(error);
-      res.status(500).json({
+      return res.status(500).json({
         message: "An error occurred while updating the Production status",
       });
     }
@@ -199,7 +199,7 @@ module.exports = {
 
   processStatics: async (req, res) => {
     try {
-      let Process = await ProcessModel.aggregate([
+      const Process = await ProcessModel.aggregate([
         {
           $lookup: {
             from: "planingandschedulings",
@@ -209,31 +209,17 @@ module.exports = {
           },
         },
         { $unwind: "$planingData" },
-        // {
-        //   $project: {
-        //     // _id: 1,
-        //     // name: 1,
-        //     // processID: 1,
-        //     // processQuantity: "$quantity",
-        //     // inventoryQuantity: "$inventoryProcess.quantity",
-        //     // cartonQuantity: "$inventoryProcess.cartonQuantity",
-        //     // status: "$inventoryProcess.status",
-        //     // productName: "$products.name",
-        //     // issuedKits: 1,
-        //     // issuedCartons: 1,
-        //     // createdAt: 1,
-        //     // updatedAt: 1,
-        //     // status: 1,
-        //     // productDetails: 1,
-        //   },
-        // },
       ]);
-
+      return res.status(200).json({
+        status: 200,
+        message: "Process statistics fetched successfully",
+        Process,
+      });
     } catch (error) {
       res
         .status(500)
         .json({
-          message: "An error occured while updating the Production Status",
+          message: "An error occurred while fetching the process statistics",
         });
     }
   },
@@ -590,10 +576,6 @@ module.exports = {
     }
   },
 };
-
-
-
-
 
 
 

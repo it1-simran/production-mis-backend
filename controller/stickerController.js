@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const stickerFieldModel = require("../models/stickerFieldManagement");
 
 module.exports = {
@@ -15,7 +16,9 @@ module.exports = {
       let savedStickerField;
   
       if (stickerFieldId) {
-        // Update existing sticker field
+        if (!mongoose.Types.ObjectId.isValid(stickerFieldId)) {
+          return res.status(400).json({ status: 400, message: "Invalid sticker field ID" });
+        }
         savedStickerField = await stickerFieldModel.findOneAndUpdate(
           { _id: stickerFieldId },
           data,
@@ -57,22 +60,21 @@ module.exports = {
   },
   deleteStickerField: async (req, res) => {
     try {
-      let id = req.params.id;
-      let stickerField = await stickerFieldModel.findByIdAndDelete(id);
+      const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid sticker field ID" });
+      }
+      const stickerField = await stickerFieldModel.findByIdAndDelete(id);
       if (!stickerField) {
-        return res.status(404).json({ message: "Sticker Field not Found" });
+        return res.status(404).json({ status: 404, message: "Sticker Field not found" });
       }
       res.status(200).json({
-        message: "Sticker Field Deleted Successfully!!",
+        status: 200,
+        message: "Sticker Field deleted successfully",
         stickerField,
       });
     } catch (error) {
-      console.error(error);
-      res
-        .status(500)
-        .json({
-          message: "An error occurred while Deleting the Sticker Field!!",
-        });
+      res.status(500).json({ status: 500, message: "Failed to delete sticker field" });
     }
   },
   deleteStickerFieldMultiple: async (req, res) => {
@@ -101,8 +103,7 @@ module.exports = {
         message: `${result.deletedCount} Sticker Field(s) deleted successfully`,
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "An error occurred while Deleting the Shifts!!" });
+      res.status(500).json({ status: 500, message: "Failed to delete sticker fields" });
     }
   },
 };

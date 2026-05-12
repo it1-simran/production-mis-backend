@@ -7,6 +7,9 @@ module.exports = {
     try {
       const { id, name, jigCategory } = req.body;
       if (id) {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+          return res.status(400).json({ status: 400, message: "Invalid jig ID" });
+        }
         const existingJig = await Jig.findById(id);
         if (!existingJig) {
           return res.status(404).json({
@@ -23,6 +26,9 @@ module.exports = {
           jig: existingJig,
         });
       } else {
+        if (!name) {
+          return res.status(400).json({ status: 400, message: "Jig name is required" });
+        }
         const newJig = new Jig({ name, jigCategory });
         await newJig.save();
         return res.status(200).json({
@@ -44,6 +50,9 @@ module.exports = {
     try {
       const { id, name, status } = req.body;
       if (id) {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+          return res.status(400).json({ status: 400, message: "Invalid jig category ID" });
+        }
         const existingJig = await jigCategory.findById(id);
         if (!existingJig) {
           return res.status(404).json({
@@ -60,6 +69,9 @@ module.exports = {
           jigCat: existingJig,
         });
       } else {
+        if (!name) {
+          return res.status(400).json({ status: 400, message: "Jig category name is required" });
+        }
         const newJig = new jigCategory({ name, status });
         await newJig.save();
         return res.status(200).json({
@@ -116,22 +128,26 @@ module.exports = {
   },
   delete: async (req, res) => {
     try {
-      const jig = await Jig.findByIdAndDelete(req.params.id);
-
-      if (!jig) {
-        return res.status(404).json({ message: "Jig not found" });
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid jig ID" });
       }
-      res.status(200).json({ message: "Jig deleted successfully", jig });
+      const jig = await Jig.findByIdAndDelete(req.params.id);
+      if (!jig) {
+        return res.status(404).json({ status: 404, message: "Jig not found" });
+      }
+      res.status(200).json({ status: 200, message: "Jig deleted successfully", jig });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      return res.status(500).json({ status: 500, message: error.message });
     }
   },
   deleteCategory: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid jig category ID" });
+      }
       const jigcat = await jigCategory.findByIdAndDelete(req.params.id);
-
       if (!jigcat) {
-        return res.status(404).json({ message: "Jig Category not found" });
+        return res.status(404).json({ status: 404, message: "Jig Category not found" });
       }
       res
         .status(200)
@@ -204,50 +220,56 @@ module.exports = {
   },
   updateJigStatus: async (req, res) => {
     try {
-      let jigId = req.params.id;
-      let status = req.body.status;
-      let updateAssignedOperator;
-      let jigData = await assignJigToPlanModel.findOne({ jigId });
-      if (jigData && Object.keys(jigData).length > 0) {
-        updateAssignedOperator = await assignJigToPlanModel.findByIdAndUpdate(
-          jigData._id,
-          { status },
-          { new: true, runValidators: true }
-        );
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "No Records found!!",
-          updateAssignedOperator,
-        });
+      const jigId = req.params.id;
+      const status = req.body.status;
+      if (!mongoose.Types.ObjectId.isValid(jigId)) {
+        return res.status(400).json({ status: 400, message: "Invalid jig ID" });
       }
+      if (!status) {
+        return res.status(400).json({ status: 400, message: "Status is required" });
+      }
+      const jigData = await assignJigToPlanModel.findOne({ jigId });
+      if (!jigData) {
+        return res.status(404).json({ status: 404, message: "No jig assignment found" });
+      }
+      const updateAssignedOperator = await assignJigToPlanModel.findByIdAndUpdate(
+        jigData._id,
+        { status },
+        { new: true, runValidators: true }
+      );
       return res.status(200).json({
         status: 200,
-        message: "Vacant Operator found!!",
+        message: "Jig status updated successfully",
         updateAssignedOperator,
       });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      return res.status(500).json({ status: 500, message: error.message });
     }
   },
   fetchJigByJigId: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid jig ID" });
+      }
       const Jigs = await Jig.findById(id);
+      if (!Jigs) {
+        return res.status(404).json({ status: 404, message: "Jig not found" });
+      }
       return res.status(200).json({
         status: 200,
-        status_msg: "Jigs Fetched Sucessfully!!",
+        message: "Jig fetched successfully",
         Jigs,
       });
     } catch (error) {
-      return res.status(500).json({ status: 500, error: error.message });
+      return res.status(500).json({ status: 500, message: error.message });
     }
   },
   fetchJigsById: async (req, res) => {
     try {
       const id = req.params.id;
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ error: "Invalid jigCategory ID" });
+        return res.status(400).json({ status: 400, message: "Invalid jig category ID" });
       }
       const jigs = await Jig.find({ jigCategory: id });
       if (!jigs) {

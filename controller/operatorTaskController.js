@@ -55,7 +55,6 @@ const sortIndexedObjectKeys = (source = {}) =>
     if (rightFinite) return 1;
     return String(left).localeCompare(String(right));
   });
-
 const normalizeIndexedSlots = (value) => {
   const parsed = safeJsonParse(value, []);
   if (Array.isArray(parsed)) return parsed;
@@ -841,6 +840,7 @@ const getLatestSeatRecordForDeviceStage = async ({
 };
 
 const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
+  if (!planId || !mongoose.Types.ObjectId.isValid(planId)) return [];
   const match = { planId: new mongoose.Types.ObjectId(planId) };
   if (processId && mongoose.Types.ObjectId.isValid(processId)) {
     match.processId = new mongoose.Types.ObjectId(processId);
@@ -1307,8 +1307,16 @@ module.exports = {
   create: async (req, res) => {
     try {
       const data = req?.body;
-      let seatsDetails = JSON.parse(data?.seatDetails);
-      let ProcessShiftMappings = JSON.parse(data?.ProcessShiftMappings);
+      if (!data?.processId || !data?.userId) {
+        return res.status(400).json({ status: 400, message: "processId and userId are required" });
+      }
+      let seatsDetails, ProcessShiftMappings;
+      try {
+        seatsDetails = safeJsonParse(data?.seatDetails, []);
+        ProcessShiftMappings = safeJsonParse(data?.ProcessShiftMappings, []);
+      } catch (parseErr) {
+        return res.status(400).json({ status: 400, message: "Invalid JSON in seatDetails or ProcessShiftMappings" });
+      }
       let newassignOp;
       const data1 = {
         processId: data.processId,
@@ -1346,6 +1354,9 @@ module.exports = {
   getOperatorTaskByUserID: async (req, res) => {
     try {
       const userId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       const task = await assignedOperatorsToPlanModel.findOne({ userId }).lean();
       return res.status(200).json({ status: 200, task });
     } catch (error) {
@@ -1430,6 +1441,9 @@ module.exports = {
   getOperatorTaskBootstrap: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(planId) || !mongoose.Types.ObjectId.isValid(operatorId)) {
+        return res.status(400).json({ status: 400, message: "Invalid planId or operatorId" });
+      }
       const payload = await buildOperatorTaskSummary({ planId, operatorId });
       setNoStoreHeaders(res);
       return res.status(200).json({ status: 200, message: "Operator task bootstrap fetched", data: payload });
@@ -1440,6 +1454,9 @@ module.exports = {
   getOperatorTaskRefresh: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(planId) || !mongoose.Types.ObjectId.isValid(operatorId)) {
+        return res.status(400).json({ status: 400, message: "Invalid planId or operatorId" });
+      }
       const payload = await buildOperatorTaskSummary({ planId, operatorId });
       setNoStoreHeaders(res);
       return res.status(200).json({ status: 200, message: "Operator task refresh fetched", data: payload });
@@ -1450,6 +1467,9 @@ module.exports = {
   getOperatorTaskDevice: async (req, res) => {
     try {
       const { planId, operatorId } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(planId) || !mongoose.Types.ObjectId.isValid(operatorId)) {
+        return res.status(400).json({ status: 400, message: "Invalid planId or operatorId" });
+      }
       const { deviceId, serialNo, scanInput } = req.query || {};
       const context = await buildOperatorTaskDeviceContext({ planId, operatorId });
       const processId = context?.process?._id || context?.selectedProcess;
@@ -1642,7 +1662,7 @@ module.exports = {
             message: "Device is already in progress on seat " + claimedSeatKey + ".",
           });
         }
-        // return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
+        return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
       }
 
       const history = await deviceTestRecordModel
@@ -1686,8 +1706,9 @@ module.exports = {
     try {
       const data = req?.body;
       let newassignJig;
-      let seatsDetails = data?.seatDetails ? JSON.parse(data.seatDetails) : [];
-      let ProcessShiftMappings = data?.ProcessShiftMappings ? JSON.parse(data.ProcessShiftMappings) : [];
+      let seatsDetails, ProcessShiftMappings;
+      try { seatsDetails = data?.seatDetails ? JSON.parse(data.seatDetails) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid seatDetails JSON" }); }
+      try { ProcessShiftMappings = data?.ProcessShiftMappings ? JSON.parse(data.ProcessShiftMappings) : []; } catch { return res.status(400).json({ status: 400, message: "Invalid ProcessShiftMappings JSON" }); }
       if (!data.processId || !data.jigId || !data.roomName || !data.startDate) {
         return res.status(400).json({ status: 400, message: "Missing required fields" });
       }
@@ -1704,7 +1725,7 @@ module.exports = {
       if (jigData && Object.keys(jigData).length > 0) {
         newassignJig = await assignedJigToPlanModel.findByIdAndUpdate(
           jigData._id,
-          { status: data.status },
+          data1,
           { new: true, runValidators: true },
         );
       } else {

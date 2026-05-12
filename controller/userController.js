@@ -27,6 +27,9 @@ module.exports = {
     }
     try {
       const userId = req.params.userId;
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       const updatedUser = await User.findByIdAndUpdate(
         userId,
         { profilePic: req.file.path },
@@ -60,8 +63,11 @@ module.exports = {
         mobileNo,
       } = req?.body;
 
+      if (!req?.body?.password) {
+        return res.status(400).json({ status: 400, message: "Password is required" });
+      }
       const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(req?.body.password, salt);
+      const hashedPassword = await bcrypt.hash(req.body.password, salt);
       const password = hashedPassword;
       const newUser = new User({
         name,
@@ -95,6 +101,9 @@ module.exports = {
     }
     try {
       const userId = req.params.userId;
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       const updatedUser = await User.findByIdAndUpdate(
         userId,
         { coverPic: req.file.path },
@@ -130,6 +139,9 @@ module.exports = {
   },
   deleteUser: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       const users = await User.findByIdAndDelete(req.params.id);
 
       if (!users) {
@@ -172,6 +184,9 @@ module.exports = {
   updateUser: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
       const {
         name,
         email,
@@ -218,12 +233,19 @@ module.exports = {
   updateOperatorSkillSet: async (req, res) => {
     try {
       const id = req.params.id;
-      const updatedData = { skills: req.body.skills.split(",") };
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid user ID" });
+      }
+      const rawSkills = req.body.skills;
+      const updatedData = { skills: typeof rawSkills === "string" ? rawSkills.split(",") : Array.isArray(rawSkills) ? rawSkills : [] };
       const updatedUserSkill = await User.findByIdAndUpdate(id, updatedData, {
         new: true,
         runValidators: true,
         context: "query",
       });
+      if (!updatedUserSkill) {
+        return res.status(404).json({ status: 404, message: "User not found" });
+      }
       return res.status(200).json({
         status: 200,
         message: "User Skills Added successfully!",

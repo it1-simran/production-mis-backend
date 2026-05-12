@@ -20,8 +20,11 @@ module.exports = {
   create: async (req, res) => {
     try {
       const { holidayId, ...data } = req.body;
+      if (holidayId && !mongoose.Types.ObjectId.isValid(holidayId)) {
+        return res.status(400).json({ status: 400, message: "Invalid holiday ID" });
+      }
       const updatedHoliday = await holidayModel.findOneAndUpdate(
-        { _id: holidayId || new mongoose.Types.ObjectId() }, // Generate ID for creation if not present
+        { _id: holidayId || new mongoose.Types.ObjectId() },
         data,
         {
           new: true,
@@ -68,6 +71,9 @@ module.exports = {
   },
   delete: async (req, res) => {
     try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid holiday ID" });
+      }
       const Holiday = await holidayModel.findByIdAndDelete(req.params.id);
       if (!Holiday) {
         return res.status(404).json({ message: "Holiday not found" });
