@@ -93,6 +93,41 @@ const normalizeAssignedCustomStagesOp = (value) => {
   return [];
 };
 
+const collectPlanOperatorUserIds = (plan) => {
+  const userIds = [];
+  const seen = new Set();
+
+  const pushId = (rawId) => {
+    const userId = toObjectId(rawId);
+    if (!userId) return;
+    const key = String(userId);
+    if (seen.has(key)) return;
+    seen.add(key);
+    userIds.push(userId);
+  };
+
+  const assignedOperators = safeParseJson(plan?.assignedOperators, {});
+  for (const seatKey of Object.keys(assignedOperators || {})) {
+    const operators = Array.isArray(assignedOperators[seatKey])
+      ? assignedOperators[seatKey]
+      : assignedOperators[seatKey]
+        ? [assignedOperators[seatKey]]
+        : [];
+    for (const op of operators) {
+      pushId(op?._id || op?.userId || op?.id);
+    }
+  }
+
+  const customOpsArr = normalizeAssignedCustomStagesOp(plan?.assignedCustomStagesOp);
+  for (const operators of customOpsArr) {
+    for (const op of operators) {
+      pushId(op?._id || op?.userId || op?.id);
+    }
+  }
+
+  return userIds;
+};
+
 const overlapMs = (startA, endA, startB, endB) => {
   if (!startA || !endA || !startB || !endB) return 0;
   const s = Math.max(startA.getTime(), startB.getTime());
@@ -174,7 +209,7 @@ const getBottleneckUPH = (processData) => {
   return Math.min(...values);
 };
 
-const syncAssignments = async (plan) => {
+const syncAssignments = async (plan, { previousUserIds = [] } = {}) => {
   try {
     const processId = toObjectId(plan.selectedProcess);
     if (!processId) return;
@@ -288,17 +323,37 @@ const syncAssignments = async (plan) => {
       }
     }
 
-    // Optional: Cleanup old assignments for this process that are no longer in the plan
+    const previousIdSet = new Set(
+      (Array.isArray(previousUserIds) ? previousUserIds : []).map((value) => String(value)),
+    );
+    const activeIdSet = new Set(activeUserIds.map((value) => String(value)));
+    const removedUserIds = [...previousIdSet]
+      .filter((id) => !activeIdSet.has(id))
+      .map((id) => toObjectId(id))
+      .filter(Boolean);
+
+    if (removedUserIds.length > 0) {
+      await assignedOperatorsToPlanModel.updateMany(
+        { processId, userId: { $in: removedUserIds } },
+        { $set: { status: "Free", updatedAt: new Date() } },
+      );
+      await assignedOperatorsToPlanModel.deleteMany({
+        processId,
+        userId: { $in: removedUserIds },
+      });
+    }
+
     if (activeUserIds.length > 0) {
       await assignedOperatorsToPlanModel.deleteMany({
         processId,
-        userId: { $nin: activeUserIds }
+        userId: { $nin: activeUserIds },
       });
     }
+
     if (activeJigIds.length > 0) {
       await assignedJigToPlanModel.deleteMany({
         processId,
-        jigId: { $nin: activeJigIds }
+        jigId: { $nin: activeJigIds },
       });
     }
 
@@ -485,6 +540,8 @@ module.exports = {
         return isNaN(d.getTime()) ? undefined : d;
       };
       const id = req.params.id;
+      const existingPlan = await PlaningAndSchedulingModel.findById(id).lean();
+      const previousUserIds = collectPlanOperatorUserIds(existingPlan || {});
       const updatedData = req.body;
       const safeParse = (val, fallback) => {
         if (typeof val === "string") {
@@ -509,8 +566,7 @@ module.exports = {
         });
 
       if (updatedPlaningAndScheduling) {
-        // Trigger backend synchronization on update
-        await syncAssignments(updatedPlaningAndScheduling);
+        await syncAssignments(updatedPlaningAndScheduling, { previousUserIds });
       } else {
         return res
           .status(404)
@@ -520,6 +576,7 @@ module.exports = {
       return res.status(200).json({
         status: 200,
         message: "Planing and Scheduling Updated Successfully!!",
+        newPlanAndScheduling: updatedPlaningAndScheduling,
         shift: updatedPlaningAndScheduling,
       });
     } catch (error) {
