@@ -633,42 +633,46 @@ module.exports = {
   },
   getVacantOperator: async (req, res) => {
     try {
-      const users = await OperatorModel.find();
+      const processId = req.query?.processId;
+      const occupiedQuery = {
+        $or: [
+          { status: { $regex: /^occupied$/i } },
+          { status: { $exists: false } },
+          { status: null },
+          { status: "" },
+        ],
+      };
+      if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+        occupiedQuery.processId = new mongoose.Types.ObjectId(processId);
+      }
 
-      // const users = await OperatorModel.aggregate([
-      //   {
-      //     $match: { userType: "Operator" },
-      //   },
-      //   {
-      //     $lookup: {
-      //       from: "assignpoperatorsplans",
-      //       localField: "_id",
-      //       foreignField: "userId",
-      //       as: "assignOperatorDetails",
-      //     },
-      //   },
-      //   {
-      //     $addFields: {
-      //       hasFreeStatus: {
-      //         $anyElementTrue: {
-      //           $map: {
-      //             input: "$assignOperatorDetails",
-      //             as: "detail",
-      //             in: { $eq: ["$$detail.status", "Free"] },
-      //           },
-      //         },
-      //       },
-      //     },
-      //   },
-      //   {
-      //     $match: {
-      //       $or: [
-      //         { assignOperatorDetails: { $eq: [] } },
-      //         { hasFreeStatus: true },
-      //       ],
-      //     },
-      //   },
-      // ]);
+      const occupiedUserIds = await AssignOperatorToPlanModel.distinct(
+        "userId",
+        occupiedQuery,
+      );
+
+      const forCommonStages =
+        String(req.query?.forCommonStages || "").toLowerCase() === "true" ||
+        String(req.query?.forCommonStages || "") === "1";
+
+      const userTypeFilter = forCommonStages
+        ? {
+            $or: [
+              { userType: { $regex: /operator/i } },
+              { userType: { $regex: /^qc$/i } },
+              { userType: { $regex: /quality\s*control/i } },
+              { userType: { $regex: /store/i } },
+              { userType: { $regex: /production\s*manager/i } },
+            ],
+          }
+        : { userType: { $regex: /operator/i } };
+
+      const users = await OperatorModel.find({
+        ...userTypeFilter,
+        ...(occupiedUserIds.length > 0 ? { _id: { $nin: occupiedUserIds } } : {}),
+      })
+        .select("name email phoneNumber userType skills employeeCode profilePic")
+        .lean();
 
       return res.status(200).json({
         status: 200,
@@ -681,28 +685,32 @@ module.exports = {
   },
   updateStatusAssignedOperator: async (req, res) => {
     try {
-      let userId = req.params.id;
-      let status = req.body.status;
-      let updateAssignedOperator;
-      let operatorData = await AssignOperatorToPlanModel.findOne({ userId });
-      if (operatorData && Object.keys(operatorData).length > 0) {
-        updateAssignedOperator =
-          await AssignOperatorToPlanModel.findByIdAndUpdate(
-            operatorData._id,
-            { status },
-            { new: true, runValidators: true },
-          );
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "No Records found!!",
-          updateAssignedOperator,
-        });
+      const userId = req.params.id;
+      const status = String(req.body?.status || "").trim();
+      const processId = req.body?.processId || req.query?.processId;
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid operator id" });
       }
+
+      const filter = { userId: new mongoose.Types.ObjectId(userId) };
+      if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+        filter.processId = new mongoose.Types.ObjectId(processId);
+      }
+
+      const updateResult = await AssignOperatorToPlanModel.updateMany(filter, {
+        $set: { status, updatedAt: new Date() },
+      });
+
+      if (/^free$/i.test(status)) {
+        await AssignOperatorToPlanModel.deleteMany(filter);
+      }
+
       return res.status(200).json({
         status: 200,
-        message: "Vacant Operator found!!",
-        updateAssignedOperator,
+        message: updateResult?.matchedCount
+          ? "Operator assignment status updated"
+          : "No assignment records found; operator treated as vacant",
+        updateAssignedOperator: updateResult,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
