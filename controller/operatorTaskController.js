@@ -1,4 +1,4 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 const moment = require("moment");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const assignedJigToPlanModel = require("../models/assignJigToPlan");
@@ -503,6 +503,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     return sum + (Number.isFinite(passed) ? passed : 0) + (Number.isFinite(ng) ? ng : 0);
   }, 0);
 
+  const seatWipTotal = seatStageEntries.reduce((sum, stageEntry) => {
+    const wip = Number(stageEntry?.totalUPHA || 0);
+    return sum + (Number.isFinite(wip) ? wip : 0);
+  }, 0);
+
   const { operatorStats, operatorHistory } = operatorSummary;
 
   const currentStatus = plan?.processStatus || plan?.status;
@@ -531,8 +536,8 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     processStagesName: (process?.stages || []).map((stage) => stage?.stageName).filter(Boolean),
     compactQueue: deviceQueue,
     counters: {
-      wipKits: deviceQueue.length,
-      lineIssueKits: deviceQueue.length + seatProcessedTotal,
+      wipKits: seatWipTotal,
+      lineIssueKits: seatWipTotal + seatProcessedTotal,
       kitsShortage: 0,
       overallTotalCompleted: overallPass,
       overallTotalNg: overallNg,
