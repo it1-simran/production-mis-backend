@@ -97,11 +97,11 @@ const resolveOperatorIdentity = (operatorEntry) => {
   if (typeof operatorEntry === "object") {
     return String(
       operatorEntry?._id ||
-        operatorEntry?.userId ||
-        operatorEntry?.operatorId ||
-        operatorEntry?.id ||
-        operatorEntry?.value ||
-        "",
+      operatorEntry?.userId ||
+      operatorEntry?.operatorId ||
+      operatorEntry?.id ||
+      operatorEntry?.value ||
+      "",
     ).trim();
   }
   return "";
@@ -123,10 +123,10 @@ const extractCustomStageName = (stageEntry) => {
   if (typeof stageEntry === "object") {
     return normalizeValue(
       stageEntry?.stageName ||
-        stageEntry?.name ||
-        stageEntry?.stage ||
-        stageEntry?.label ||
-        stageEntry?.value,
+      stageEntry?.name ||
+      stageEntry?.stage ||
+      stageEntry?.label ||
+      stageEntry?.value,
     );
   }
 
@@ -761,8 +761,8 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
     : assignUserStage;
   const currentAssignedStageName = normalizeValue(
     currentAssignedStage?.name ||
-      currentAssignedStage?.stageName ||
-      currentAssignedStage?.stage,
+    currentAssignedStage?.stageName ||
+    currentAssignedStage?.stage,
   );
 
   const firstStageName = normalizeValue(process?.stages?.[0]?.stageName || "");
@@ -783,10 +783,10 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
     seatKey,
     operatorSeatInfo: seatKey
       ? {
-          rowNumber: String(seatKey).split("-")[0] || "",
-          seatNumber: String(seatKey).split("-")[1] || "",
-          seatKey,
-        }
+        rowNumber: String(seatKey).split("-")[0] || "",
+        seatNumber: String(seatKey).split("-")[1] || "",
+        seatKey,
+      }
       : null,
   };
 };
@@ -978,15 +978,15 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
     ]),
     includeHistory
       ? deviceTestRecordModel
-          .find(
-            {
-              operatorId: operatorObjectId,
-              createdAt: { $gte: start, $lte: end },
-            },
-            { serialNo: 1, stageName: 1, status: 1, assignedDeviceTo: 1, timeConsumed: 1, createdAt: 1 },
-            { sort: { createdAt: -1 } },
-          )
-          .lean()
+        .find(
+          {
+            operatorId: operatorObjectId,
+            createdAt: { $gte: start, $lte: end },
+          },
+          { serialNo: 1, stageName: 1, status: 1, assignedDeviceTo: 1, timeConsumed: 1, createdAt: 1 },
+          { sort: { createdAt: -1 } },
+        )
+        .lean()
       : Promise.resolve(undefined),
   ]);
 
@@ -1133,14 +1133,14 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : Promise.resolve([]),
     process?.selectedProduct
       ? deviceModel
-          .find({
-            productType: process.selectedProduct,
-            processID: process._id,
-            status: { $nin: ["NG"] },
-            ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
-          })
-          .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
-          .lean()
+        .find({
+          productType: process.selectedProduct,
+          processID: process._id,
+          status: { $nin: ["NG"] },
+          ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
+        })
+        .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+        .lean()
       : Promise.resolve([]),
     assignKitsToLineModel.findOne({ planId, processId: process?._id }).lean().catch(() => null),
     getOperatorStats(operatorId, includeHistory),
@@ -1175,69 +1175,48 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
 
   const deviceQueue = seatKey && currentAssignedStageName && process
     ? filterDevicesForSeat({
-        devices: rawDevices,
-        latestRecords,
-        operatorStageName: currentAssignedStageName,
-        processId: process._id,
-        processStages: mergedStagesForSeatFilter,
-        normalizedAssignedStages,
-        seatKey,
-      })
+      devices: rawDevices,
+      latestRecords,
+      operatorStageName: currentAssignedStageName,
+      processId: process._id,
+      processStages: mergedStagesForSeatFilter,
+      normalizedAssignedStages,
+      seatKey,
+    })
     : [];
 
-  const byStage = Array.isArray(canonicalInsights?.byStage) ? canonicalInsights.byStage : [];
-  const bySeatStage = Array.isArray(canonicalInsights?.bySeatStage)
-    ? canonicalInsights.bySeatStage
-    : [];
-  const scopedStages = byStage.filter((row) =>
-    targetStageNames.has(normalizeValue(row?.stageName)),
-  );
-  const scopedSeatStages = seatKey
-    ? bySeatStage.filter(
-        (row) =>
-          String(row?.seatKey || "") === String(seatKey) &&
-          targetStageNames.has(normalizeValue(row?.stageName)),
-      )
-    : [];
+  let overallPass = 0;
+  let overallNg = 0;
+  let overallTested = 0;
+  latestRecords.forEach((record) => {
+    const stageName = normalizeValue(record?.stageName);
+    if (!targetStageNames.has(stageName)) return;
+    const status = normalizeKey(record?.status);
+    overallTested += 1;
+    if (status === "pass" || status === "completed") overallPass += 1;
+    if (status === "ng" || status === "fail") overallNg += 1;
+  });
 
-  const seatTotals = scopedSeatStages.reduce(
-    (acc, row) => {
-      acc.pass += Number(row?.pass || 0);
-      acc.ng += Number(row?.ng || 0);
-      acc.wip += Number(row?.wip || 0);
-      acc.tested += Number(row?.tested || 0);
-      return acc;
-    },
-    { pass: 0, ng: 0, wip: 0, tested: 0 },
-  );
+  const quantityCap = Number.parseInt(process?.quantity, 10) || 0;
+  if (quantityCap > 0 && overallPass + overallNg > quantityCap) {
+    const cappedPass = Math.min(overallPass, quantityCap);
+    const remaining = Math.max(quantityCap - cappedPass, 0);
+    const cappedNg = Math.min(overallNg, remaining);
+    overallPass = cappedPass;
+    overallNg = cappedNg;
+    overallTested = Math.min(overallTested, quantityCap);
+  }
 
-  const scopedTotals = scopedStages.reduce(
-    (acc, row) => {
-      acc.overallTotalAttempts += Number(row?.tested || 0);
-      acc.overallTotalCompleted += Number(row?.pass || 0);
-      acc.overallTotalNg += Number(row?.ng || 0);
-      acc.scopedStageWip += Number(row?.wip || 0);
-      return acc;
-    },
-    {
-      overallTotalAttempts: 0,
-      overallTotalCompleted: 0,
-      overallTotalNg: 0,
-      scopedStageWip: 0,
-    },
-  );
-
-  const seatAccountedFor = seatTotals.pass + seatTotals.ng;
-  const queueDerivedWip = Array.isArray(deviceQueue) ? deviceQueue.length : 0;
-  const issuedMinusAccounted = seatIssuedKits > 0 ? seatIssuedKits - seatAccountedFor : 0;
-  const resolvedWipKits = Math.max(
-    seatTotals.wip,
-    issuedMinusAccounted,
-    queueDerivedWip,
-  );
-  const resolvedLineIssueKits = seatIssuedKits || resolvedWipKits + seatAccountedFor;
-  const resolvedKitsShortage = Math.max(0, resolvedLineIssueKits - (resolvedWipKits + seatAccountedFor));
-
+  const seatStageEntries = Array.isArray(assignUserStage)
+    ? assignUserStage
+    : assignUserStage
+      ? [assignUserStage]
+      : [];
+  const seatProcessedTotal = seatStageEntries.reduce((sum, stageEntry) => {
+    const passed = Number(stageEntry?.passedDevice || 0);
+    const ng = Number(stageEntry?.ngDevice || 0);
+    return sum + (Number.isFinite(passed) ? passed : 0) + (Number.isFinite(ng) ? ng : 0);
+  }, 0);
 
   const { operatorStats, operatorHistory } = operatorSummary;
   const operatorToday = canonicalInsights?.totals?.operatorToday || operatorStats;
@@ -1256,10 +1235,10 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : null,
     operatorSeatInfo: seatKey
       ? {
-          rowNumber: String(seatKey).split("-")[0] || "",
-          seatNumber: String(seatKey).split("-")[1] || "",
-          seatKey,
-        }
+        rowNumber: String(seatKey).split("-")[0] || "",
+        seatNumber: String(seatKey).split("-")[1] || "",
+        seatKey,
+      }
       : null,
     assignUserStage,
     processAssignUserStage,
@@ -1270,28 +1249,13 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     processStagesName: (process?.stages || []).map((stage) => stage?.stageName).filter(Boolean),
     compactQueue: deviceQueue,
     counters: {
-      wipKits: resolvedWipKits,
-      lineIssueKits: resolvedLineIssueKits,
-      kitsShortage: resolvedKitsShortage,
-      overallTotalCompleted: seatTotals.pass,
-      overallTotalNg: seatTotals.ng,
-      overallTotalAttempts: seatTotals.tested,
-      totalAttempts: Number(operatorToday?.totalAttempts || 0),
-      totalCompleted: Number(operatorToday?.totalCompleted || 0),
-      totalNg: Number(operatorToday?.totalNg || 0),
-    },
-    insights: {
-      ...canonicalInsights,
-      operatorScope: {
-        seatKey,
-        stageNames,
-        tested: seatTotals.tested,
-        pass: seatTotals.pass,
-        ng: seatTotals.ng,
-        wip: resolvedWipKits,
-        lineIssueKits: resolvedLineIssueKits,
-        kitsShortage: resolvedKitsShortage,
-      },
+      wipKits: deviceQueue.length,
+      lineIssueKits: deviceQueue.length + seatProcessedTotal,
+      kitsShortage: 0,
+      overallTotalCompleted: overallPass,
+      overallTotalNg: overallNg,
+      overallTotalAttempts: overallTested,
+      ...operatorStats,
     },
     downTime: {
       enabled: downTimeEnabled,
@@ -1472,22 +1436,22 @@ module.exports = {
         const stageScopedFilter =
           processId && context?.process?.selectedProduct
             ? {
-                productType: context.process.selectedProduct,
-                processID: processId,
-                status: { $nin: ["NG"] },
-                ...(context.stageAwareCurrentStage !== undefined
-                  ? { currentStage: context.stageAwareCurrentStage }
-                  : {}),
-              }
+              productType: context.process.selectedProduct,
+              processID: processId,
+              status: { $nin: ["NG"] },
+              ...(context.stageAwareCurrentStage !== undefined
+                ? { currentStage: context.stageAwareCurrentStage }
+                : {}),
+            }
             : null;
 
         const processScopedFilter =
           processId && context?.process?.selectedProduct
             ? {
-                productType: context.process.selectedProduct,
-                processID: processId,
-                status: { $nin: ["NG"] },
-              }
+              productType: context.process.selectedProduct,
+              processID: processId,
+              status: { $nin: ["NG"] },
+            }
             : null;
 
         const rootIndexedClauses = buildRootIndexedLookupOrClauses(scanTokens);
@@ -1577,8 +1541,8 @@ module.exports = {
       ];
       const firstMergedStageLabel = normalizeValue(
         mergedStagesForOperatorContext?.[0]?.stageName ||
-          mergedStagesForOperatorContext?.[0]?.name ||
-          "",
+        mergedStagesForOperatorContext?.[0]?.name ||
+        "",
       );
       const normOperatorStage = normalizeKey(context?.currentAssignedStageName || "");
       const normDeviceStage = normalizeKey(device?.currentStage || "");
@@ -1605,24 +1569,24 @@ module.exports = {
       const latestSeatRecord =
         context?.currentAssignedStageName && context?.seatKey && processId
           ? await getLatestSeatRecordForDeviceStage({
-              planId,
-              processId,
-              stageName: context.currentAssignedStageName,
-              device,
-            }).catch(() => null)
+            planId,
+            processId,
+            stageName: context.currentAssignedStageName,
+            device,
+          }).catch(() => null)
           : null;
       const latestRecords = latestSeatRecord ? [latestSeatRecord] : [];
 
       const isVisibleToSeat = context?.currentAssignedStageName && context?.seatKey && processId
         ? isDeviceVisibleToSeat({
-            device,
-            latestRecords,
-            operatorStageName: context.currentAssignedStageName,
-            processId,
-            processStages: mergedStagesForOperatorContext,
-            normalizedAssignedStages: context?.normalizedAssignedStages || {},
-            seatKey: context.seatKey,
-          })
+          device,
+          latestRecords,
+          operatorStageName: context.currentAssignedStageName,
+          processId,
+          processStages: mergedStagesForOperatorContext,
+          normalizedAssignedStages: context?.normalizedAssignedStages || {},
+          seatKey: context.seatKey,
+        })
         : true;
 
       if (!isVisibleToSeat) {
