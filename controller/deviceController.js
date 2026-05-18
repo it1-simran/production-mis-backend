@@ -2665,7 +2665,7 @@ module.exports = {
       // 2. If searchStr looks like a carton serial or no devices found yet,
       // search in CartonManagement collection to find associated devices.
       let devicesInCartonCount = 0;
-      if (devices.length === 0 || searchStr.startsWith("CARTON-")) {
+      if (devices.length === 0 || searchStr.startsWith("CARTON-") || searchStr.startsWith("MCQ-") || searchStr.startsWith("MCQ No - ")) {
         const carton = await cartonModel.findOne({ cartonSerial: searchStr }).lean();
         if (carton && Array.isArray(carton.devices) && carton.devices.length > 0) {
           devicesInCartonCount = carton.devices.length;
@@ -2756,7 +2756,7 @@ module.exports = {
             const orderedDevices = carton.devices.map(id => deviceMap.get(String(id))).filter(Boolean);
             
             // If we are doing a carton search, replace the devices list with the ordered/duplicated list
-            if (searchStr.startsWith("CARTON-")) {
+            if (searchStr.startsWith("CARTON-") || searchStr.startsWith("MCQ-") || searchStr.startsWith("MCQ No - ")) {
               devices = orderedDevices;
             } else {
               // For other searches, just append unique missing ones

@@ -968,6 +968,72 @@ const enrichCartonDevicesForResponse = ({
   });
 };
 
+const checkIsPackagingCarton = (processDoc, productDoc, effectivePackagingData) => {
+  const pkgType = String(
+    effectivePackagingData?.packagingType ||
+    extractPackagingDataFromStages(processDoc?.stages)?.packagingType ||
+    extractPackagingDataFromStages(productDoc?.stages)?.packagingType ||
+    ""
+  ).trim().toLowerCase();
+
+  if (pkgType !== "carton") return false;
+
+  const hasPackagingStep = (doc) => {
+    if (!doc || !Array.isArray(doc.stages)) return false;
+    for (const stage of doc.stages) {
+      if (!Array.isArray(stage.subSteps)) continue;
+      for (const subStep of stage.subSteps) {
+        if (subStep.isPackagingStatus) return true;
+        const name = String(subStep.stepName || subStep.name || "").toLowerCase();
+        const type = String(subStep.stepType || "").toLowerCase();
+        if (name.includes("packaging") || type.includes("packaging")) return true;
+      }
+    }
+    return false;
+  };
+
+  return hasPackagingStep(processDoc) || hasPackagingStep(productDoc);
+};
+
+const escapeRegex = (string) => {
+  return string.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+};
+
+const generateNextCartonSerial = async (cleanOc, attempt = 1) => {
+  const maxAttempts = 10;
+  const escapedOc = escapeRegex(cleanOc);
+  
+  // Matches both MCQ- and MCQ No - formats to avoid duplicates across formatting transitions
+  const regex = new RegExp(`^(MCQ-|MCQ No - )${escapedOc}/\\d+$`);
+  
+  const existingCartons = await cartonModel.find({
+    cartonSerial: { $regex: regex }
+  }).select("cartonSerial").lean();
+
+  let maxSeq = 0;
+  for (const carton of existingCartons) {
+    const parts = carton.cartonSerial.split("/");
+    const seqStr = parts[parts.length - 1];
+    const seq = parseInt(seqStr, 10);
+    if (!isNaN(seq) && seq > maxSeq) {
+      maxSeq = seq;
+    }
+  }
+
+  const nextSeq = maxSeq + 1;
+  const nextSerial = `MCQ No - ${cleanOc}/${String(nextSeq).padStart(2, '0')}`;
+
+  const exists = await cartonModel.exists({ cartonSerial: nextSerial });
+  if (exists) {
+    if (attempt >= maxAttempts) {
+      throw new Error(`Failed to generate a unique carton serial after ${maxAttempts} attempts.`);
+    }
+    return generateNextCartonSerial(cleanOc, attempt + 1);
+  }
+
+  return nextSerial;
+};
+
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
@@ -1158,33 +1224,78 @@ module.exports = {
         });
       }
 
-      const newCarton = new cartonModel({
-        cartonSerial: `CARTON-${Date.now()}`,
-        processId,
-        devices: deviceIds,
-        packagingData: effectivePackagingData,
-        cartonSize: {
-          length: effectivePackagingData?.cartonLength
-            ? String(effectivePackagingData.cartonLength)
-            : "",
-          width: effectivePackagingData?.cartonWidth
-            ? String(effectivePackagingData.cartonWidth)
-            : "",
-          height: effectivePackagingData?.cartonHeight
-            ? String(effectivePackagingData.cartonHeight)
-            : "",
-          depth: effectivePackagingData?.cartonLength
-            ? String(effectivePackagingData.cartonLength)
-            : "",
-        },
-        maxCapacity: effectivePackagingData.maxCapacity,
-        status: resolveCartonStatusFromDeviceCount(
-          deviceIds.length,
-          Number(effectivePackagingData.maxCapacity || 0),
-        ),
-      });
+      let nextCartonSerial = `CARTON-${Date.now()}`;
+      const isPackagingCarton = checkIsPackagingCarton(processDoc, productDoc, effectivePackagingData);
+      if (isPackagingCarton) {
+        let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
+        if (!ocNumber) {
+          const planDoc = await planingModel.findOne({ processId }).lean();
+          if (planDoc?.orderConfirmationNo) {
+            ocNumber = String(planDoc.orderConfirmationNo).trim();
+          }
+        }
+        const rawOc = String(ocNumber || "01").trim();
+        const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
+        nextCartonSerial = await generateNextCartonSerial(cleanOc);
+      }
 
-      await newCarton.save();
+      let newCarton = null;
+      let isSaved = false;
+      let saveAttempts = 0;
+      const maxSaveAttempts = 5;
+
+      while (saveAttempts < maxSaveAttempts) {
+        saveAttempts++;
+        try {
+          if (isPackagingCarton && saveAttempts > 1) {
+            let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
+            if (!ocNumber) {
+              const planDoc = await planingModel.findOne({ processId }).lean();
+              if (planDoc?.orderConfirmationNo) {
+                ocNumber = String(planDoc.orderConfirmationNo).trim();
+              }
+            }
+            const rawOc = String(ocNumber || "01").trim();
+            const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
+            nextCartonSerial = await generateNextCartonSerial(cleanOc);
+          }
+
+          newCarton = new cartonModel({
+            cartonSerial: nextCartonSerial,
+            processId,
+            devices: deviceIds,
+            packagingData: effectivePackagingData,
+            cartonSize: {
+              length: effectivePackagingData?.cartonLength
+                ? String(effectivePackagingData.cartonLength)
+                : "",
+              width: effectivePackagingData?.cartonWidth
+                ? String(effectivePackagingData.cartonWidth)
+                : "",
+              height: effectivePackagingData?.cartonHeight
+                ? String(effectivePackagingData.cartonHeight)
+                : "",
+              depth: effectivePackagingData?.cartonLength
+                ? String(effectivePackagingData.cartonLength)
+                : "",
+            },
+            maxCapacity: effectivePackagingData.maxCapacity,
+            status: resolveCartonStatusFromDeviceCount(
+              deviceIds.length,
+              Number(effectivePackagingData.maxCapacity || 0),
+            ),
+          });
+
+          await newCarton.save();
+          isSaved = true;
+          break;
+        } catch (saveError) {
+          if (saveError.code === 11000 && saveAttempts < maxSaveAttempts) {
+            continue;
+          }
+          throw saveError;
+        }
+      }
 
       // ✅ Sync cartonSerial to devices
       await deviceModel.updateMany(
@@ -3212,37 +3323,84 @@ module.exports = {
             message: `Device already assigned to carton ${conflict.cartonSerial}.`,
           });
         }
-        const newCartonSerial = `CARTON-${Date.now()}`;
-        const newCarton = await cartonModel.create({
-          cartonSerial: newCartonSerial,
-          processId: carton.processId,
-          devices: movedDevices,
-          packagingData: {
-            ...packagingData,
-            cartonLength: resolvedLength,
-            cartonWidth: resolvedWidth,
-            cartonHeight: resolvedHeight,
-            cartonDepth: resolvedLength,
-            cartonWeight: resolvedWeight,
-            cartonWeightTolerance: resolvedTolerance,
-            maxCapacity: resolvedQty,
-          },
-          cartonSize: {
-            length: String(resolvedLength),
-            width: String(resolvedWidth),
-            height: String(resolvedHeight),
-            depth: String(resolvedLength),
-          },
-          maxCapacity: String(resolvedQty),
-          status: "full",
-          cartonStatus: "",
-          weightCarton: String(resolvedWeight),
-          isLooseCarton: false,
-          looseCartonAction: "assign-new",
-          sourceCartonSerial: carton.cartonSerial,
-          reassignedQuantity: resolvedQty,
-          reassignedCartonSerial: newCartonSerial,
+        const isPackagingCarton = checkIsPackagingCarton(processDoc, productDoc, {
+          packagingType: packagingData?.packagingType,
         });
+
+        let newCartonSerial = `CARTON-${Date.now()}`;
+        if (isPackagingCarton) {
+          let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
+          if (!ocNumber) {
+            const planDoc = await planingModel.findOne({ processId: carton.processId }).lean();
+            if (planDoc?.orderConfirmationNo) {
+              ocNumber = String(planDoc.orderConfirmationNo).trim();
+            }
+          }
+          const rawOc = String(ocNumber || "01").trim();
+          const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
+          newCartonSerial = await generateNextCartonSerial(cleanOc);
+        }
+
+        let newCarton = null;
+        let isSaved = false;
+        let saveAttempts = 0;
+        const maxSaveAttempts = 5;
+
+        while (saveAttempts < maxSaveAttempts) {
+          saveAttempts++;
+          try {
+            if (isPackagingCarton && saveAttempts > 1) {
+              let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
+              if (!ocNumber) {
+                const planDoc = await planingModel.findOne({ processId: carton.processId }).lean();
+                if (planDoc?.orderConfirmationNo) {
+                  ocNumber = String(planDoc.orderConfirmationNo).trim();
+                }
+              }
+              const rawOc = String(ocNumber || "01").trim();
+              const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
+              newCartonSerial = await generateNextCartonSerial(cleanOc);
+            }
+
+            newCarton = await cartonModel.create({
+              cartonSerial: newCartonSerial,
+              processId: carton.processId,
+              devices: movedDevices,
+              packagingData: {
+                ...packagingData,
+                cartonLength: resolvedLength,
+                cartonWidth: resolvedWidth,
+                cartonHeight: resolvedHeight,
+                cartonDepth: resolvedLength,
+                cartonWeight: resolvedWeight,
+                cartonWeightTolerance: resolvedTolerance,
+                maxCapacity: resolvedQty,
+              },
+              cartonSize: {
+                length: String(resolvedLength),
+                width: String(resolvedWidth),
+                height: String(resolvedHeight),
+                depth: String(resolvedLength),
+              },
+              maxCapacity: String(resolvedQty),
+              status: "full",
+              cartonStatus: "",
+              weightCarton: String(resolvedWeight),
+              isLooseCarton: false,
+              looseCartonAction: "assign-new",
+              sourceCartonSerial: carton.cartonSerial,
+              reassignedQuantity: resolvedQty,
+              reassignedCartonSerial: newCartonSerial,
+            });
+            isSaved = true;
+            break;
+          } catch (saveError) {
+            if (saveError.code === 11000 && saveAttempts < maxSaveAttempts) {
+              continue;
+            }
+            throw saveError;
+          }
+        }
 
         if (remainingDevices.length === 0) {
           carton.devices = [];

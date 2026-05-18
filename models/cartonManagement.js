@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const cartonManagementSchema = new mongoose.Schema(
   {
-    cartonSerial: { type: String, required: true },
+    cartonSerial: { type: String, required: true, unique: true },
     processId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "process",
