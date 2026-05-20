@@ -136,6 +136,7 @@ const productSchema = new mongoose.Schema({
             value: { type: String, default: "" },
             actionType: { type: String, required: false, default: "" },
             command: { type: String, required: false, default: "" },
+            validationString: { type: String, required: false, default: "" },
           },
         },
       ],

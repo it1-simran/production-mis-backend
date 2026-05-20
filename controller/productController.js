@@ -35,7 +35,9 @@ module.exports = {
                 });
               }
             } else if (stepType === "jig") {
-              subStep.stepFields = {};
+              if (!subStep.stepFields) {
+                subStep.stepFields = {};
+              }
             }
           }
         }
