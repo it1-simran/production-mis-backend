@@ -164,6 +164,12 @@ const buildStageAliases = (stageName = "") => {
     );
   }
 
+  if (normalized.includes("packaging")) {
+    ["Packaging", "PACKAGING", "packaging", "Packaging Stage"].forEach((alias) =>
+      aliases.add(alias),
+    );
+  }
+
   return Array.from(aliases).map((value) => normalizeValue(value)).filter(Boolean);
 };
 
@@ -514,7 +520,7 @@ const DEVICE_LOOKUP_SELECT_FIELDS =
 
 const isLikelyImeiToken = (token = "") => /^\d{15}$/.test(String(token || "").trim());
 const isLikelyCcidToken = (token = "") =>
-  /^\d{18,22}[a-z0-9]*$/i.test(String(token || "").trim());
+  /^\d{20,30}[a-z0-9]*$/i.test(String(token || "").trim());
 
 const buildTokenVariants = (token = "") => {
   const normalized = normalizeValue(token);
@@ -598,6 +604,41 @@ const buildRootIndexedLookupOrClauses = (scanTokens = []) => {
   });
 
   return clauses;
+};
+
+const buildProductTypeMatch = (selectedProduct) => {
+  if (!selectedProduct) return null;
+  const normalized = String(selectedProduct).trim();
+  if (!normalized) return null;
+  if (mongoose.Types.ObjectId.isValid(normalized)) {
+    const objectId = new mongoose.Types.ObjectId(normalized);
+    return { $in: [objectId, normalized] };
+  }
+  return normalized;
+};
+
+const buildProcessDeviceScopeFilter = ({
+  processId,
+  selectedProduct,
+  stageAwareCurrentStage,
+} = {}) => {
+  if (!processId) return null;
+
+  const filter = {
+    processID: processId,
+    status: { $nin: ["NG"] },
+  };
+
+  const productTypeMatch = buildProductTypeMatch(selectedProduct);
+  if (productTypeMatch) {
+    filter.productType = productTypeMatch;
+  }
+
+  if (stageAwareCurrentStage !== undefined) {
+    filter.currentStage = stageAwareCurrentStage;
+  }
+
+  return filter;
 };
 
 const buildIdentityLookupOrClauses = ({
@@ -1131,12 +1172,14 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
-    process?.selectedProduct
+    process?._id
       ? deviceModel
         .find({
-          productType: process.selectedProduct,
           processID: process._id,
           status: { $nin: ["NG"] },
+          ...(buildProductTypeMatch(process?.selectedProduct)
+            ? { productType: buildProductTypeMatch(process?.selectedProduct) }
+            : {}),
           ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
         })
         .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
@@ -1433,26 +1476,16 @@ module.exports = {
       if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
         device = await deviceModel.findById(deviceId).lean();
       } else if (scanTokens.length > 0) {
-        const stageScopedFilter =
-          processId && context?.process?.selectedProduct
-            ? {
-              productType: context.process.selectedProduct,
-              processID: processId,
-              status: { $nin: ["NG"] },
-              ...(context.stageAwareCurrentStage !== undefined
-                ? { currentStage: context.stageAwareCurrentStage }
-                : {}),
-            }
-            : null;
+        const stageScopedFilter = buildProcessDeviceScopeFilter({
+          processId,
+          selectedProduct: context?.process?.selectedProduct,
+          stageAwareCurrentStage: context?.stageAwareCurrentStage,
+        });
 
-        const processScopedFilter =
-          processId && context?.process?.selectedProduct
-            ? {
-              productType: context.process.selectedProduct,
-              processID: processId,
-              status: { $nin: ["NG"] },
-            }
-            : null;
+        const processScopedFilter = buildProcessDeviceScopeFilter({
+          processId,
+          selectedProduct: context?.process?.selectedProduct,
+        });
 
         const rootIndexedClauses = buildRootIndexedLookupOrClauses(scanTokens);
         const directLookupClauses = buildIdentityLookupOrClauses({
@@ -1520,10 +1553,44 @@ module.exports = {
             return res.status(409).json(ambiguousSearchResponse);
           }
         }
+
+        // Fallback: scan customFields and non-indexed identity paths in-memory.
+        if (!device && processScopedFilter) {
+          const broadCandidates = await deviceModel
+            .find(processScopedFilter)
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(500)
+            .lean();
+          const broadResult = applyMatchResult(broadCandidates);
+          if (broadResult.ambiguous) {
+            return res.status(409).json(ambiguousSearchResponse);
+          }
+        }
+
+        // Last resort: drop productType filter (searchByJigFields does not use it).
+        if (!device && processId && scanTokens.length > 0) {
+          const processOnlyFilter = buildProcessDeviceScopeFilter({ processId });
+          if (processOnlyFilter) {
+            const processOnlyCandidates = await deviceModel
+              .find(processOnlyFilter)
+              .select(DEVICE_LOOKUP_SELECT_FIELDS)
+              .limit(500)
+              .lean();
+            const processOnlyResult = applyMatchResult(processOnlyCandidates);
+            if (processOnlyResult.ambiguous) {
+              return res.status(409).json(ambiguousSearchResponse);
+            }
+          }
+        }
       } else if (serialNo) {
-        const query = { serialNo: String(serialNo).trim() };
+        const trimmedSerial = String(serialNo).trim();
+        const serialVariants = buildTokenVariants(trimmedSerial);
+        const query =
+          serialVariants.length > 1
+            ? { serialNo: { $in: serialVariants } }
+            : { serialNo: trimmedSerial };
         if (processId) query.processID = processId;
-        device = await deviceModel.findOne(query).lean();
+        device = await deviceModel.findOne(query).select(DEVICE_LOOKUP_SELECT_FIELDS).lean();
       }
 
       if (!device?._id) {

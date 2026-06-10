@@ -1540,7 +1540,7 @@ module.exports = {
         { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
-        return res.status(404).json({ message: "No Carton Found" });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const enrichedCartons = enrichCartonDevicesForResponse({
@@ -1656,7 +1656,7 @@ module.exports = {
         { $sort: { _id: -1 } }
       ]);
       if (!cartons || cartons.length === 0) {
-        return res.status(404).json({ message: "No Carton Found" });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const enrichedCartons = enrichCartonDevicesForResponse({
