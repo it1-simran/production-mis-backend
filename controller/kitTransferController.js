@@ -2,23 +2,99 @@ const mongoose = require("mongoose");
 const { getDataAccessFilter } = require("../utils/accessControl");
 const KitTransferRequest = require("../models/kitTransferRequest");
 const ProcessModel = require("../models/process");
+const ProductModel = require("../models/Products");
 const DeviceModel = require("../models/device");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 const User = require("../models/User");
 
 const normalizeSerial = (value) => String(value || "").trim();
 const normalizeStage = (value) => String(value || "").trim().toLowerCase();
+const normalizeDispatchStatus = (value) => String(value || "").trim().toUpperCase();
+
+const assertEligibleSourceProcess = (processDoc) => {
+  if (!processDoc) {
+    return "Process not found";
+  }
+  if (normalizeDispatchStatus(processDoc.dispatchStatus) === "DISPATCHED") {
+    return "Dispatched processes cannot be used as a transfer source";
+  }
+  if (Number(processDoc.issuedKits || 0) <= 0) {
+    return "Source process has no allocated kits available for transfer";
+  }
+  return "";
+};
+
+const getDestinationRemainingKitCapacity = (processDoc) => {
+  const requiredKits = Number(processDoc?.quantity || 0);
+  const issuedKits = Number(processDoc?.issuedKits || 0);
+  if (!Number.isFinite(requiredKits) || requiredKits <= 0) {
+    return { requiredKits: 0, issuedKits, remaining: 0 };
+  }
+  return {
+    requiredKits,
+    issuedKits,
+    remaining: Math.max(0, requiredKits - issuedKits),
+  };
+};
+
+const assertDestinationKitCapacity = (processDoc, transferQuantity) => {
+  const { requiredKits, issuedKits, remaining } = getDestinationRemainingKitCapacity(processDoc);
+  if (requiredKits <= 0) {
+    return "Destination process does not have a valid required quantity";
+  }
+  if (remaining <= 0) {
+    return `Destination process is fully allocated (${issuedKits}/${requiredKits} required kits)`;
+  }
+  if (Number(transferQuantity) > remaining) {
+    return `Quantity cannot exceed destination remaining capacity (${remaining} of ${requiredKits} required kits)`;
+  }
+  return "";
+};
+
+const findDispatchedDeviceSerial = (devices = []) => {
+  const dispatched = devices.find(
+    (device) => normalizeDispatchStatus(device?.dispatchStatus) === "DISPATCHED",
+  );
+  return dispatched ? normalizeSerial(dispatched.serialNo) : "";
+};
+
+const getStageLabel = (stage) => {
+  if (typeof stage === "string") {
+    return normalizeSerial(stage);
+  }
+  return normalizeSerial(stage?.stageName || stage?.name || "");
+};
 
 const buildStageSequence = (processDoc) => {
   const stages = [];
   const pushStage = (stage) => {
-    const name = normalizeSerial(stage?.stageName || stage?.name || "");
+    const name = getStageLabel(stage);
     if (name) stages.push(name);
   };
 
   (Array.isArray(processDoc?.stages) ? processDoc.stages : []).forEach(pushStage);
   (Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : []).forEach(pushStage);
   return stages;
+};
+
+const resolveTransferStageSequence = async (toProcess, fromProcess) => {
+  const destinationStages = buildStageSequence(toProcess);
+  if (destinationStages.length > 0) {
+    return destinationStages;
+  }
+
+  const sourceStages = buildStageSequence(fromProcess);
+  if (sourceStages.length > 0) {
+    return sourceStages;
+  }
+
+  const productId = toProcess?.selectedProduct || fromProcess?.selectedProduct;
+  if (!productId) {
+    return [];
+  }
+
+  const product = await ProductModel.findById(productId).select("stages commonStages").lean();
+  return buildStageSequence(product || {});
 };
 
 const getStageIndex = (stageSequence, stageName) =>
@@ -195,6 +271,11 @@ module.exports = {
 
       const requesterUser = await User.findById(actorId).lean();
 
+      const sourceEligibilityError = assertEligibleSourceProcess(fromProcess);
+      if (sourceEligibilityError) {
+        return res.status(400).json({ status: 400, message: sourceEligibilityError });
+      }
+
       if (String(fromProcess.selectedProduct) !== String(toProcess.selectedProduct)) {
         console.log(">>> [DEBUG_TRACE] 10: Product mismatch");
         return res.status(400).json({ status: 400, message: "Transfers are allowed only between same-product processes" });
@@ -207,6 +288,11 @@ module.exports = {
           status: 400,
           message: `Quantity cannot exceed allocated kits (${availableIssuedKits})`,
         });
+      }
+
+      const destinationCapacityError = assertDestinationKitCapacity(toProcess, parsedQuantity);
+      if (destinationCapacityError) {
+        return res.status(400).json({ status: 400, message: destinationCapacityError });
       }
 
       if (normalizedSerials.length > 0) {
@@ -226,15 +312,15 @@ module.exports = {
           });
         }
 
-        const destinationStages = buildStageSequence(toProcess);
-        const stageExists = destinationStages.some(
+        const destinationStageSequence = await resolveTransferStageSequence(toProcess, fromProcess);
+        const stageExists = destinationStageSequence.some(
           (stage) => normalizeStage(stage) === normalizeStage(targetStage)
         );
         if (!stageExists) {
           console.log(">>> [DEBUG_TRACE] 15: Stage doesn't exist");
           return res.status(400).json({
             status: 400,
-            message: "Selected target stage does not exist on destination process",
+            message: "Selected target stage is not available for this transfer",
           });
         }
 
@@ -253,13 +339,20 @@ module.exports = {
           });
         }
 
-        const destinationStageSequence = buildStageSequence(toProcess);
+        const dispatchedSerial = findDispatchedDeviceSerial(devices);
+        if (dispatchedSerial) {
+          return res.status(400).json({
+            status: 400,
+            message: `Device ${dispatchedSerial} is dispatched and cannot be transferred`,
+          });
+        }
+
         const targetStageIndex = getStageIndex(destinationStageSequence, targetStage);
         if (targetStageIndex === -1) {
           console.log(">>> [DEBUG_TRACE] 17: Stage index -1");
           return res.status(400).json({
             status: 400,
-            message: "Selected target stage does not exist on destination process",
+            message: "Selected target stage is not available for this transfer",
           });
         }
 
@@ -422,8 +515,18 @@ module.exports = {
           throw new Error("Related process not found");
         }
 
+        const sourceEligibilityError = assertEligibleSourceProcess(fromProcess);
+        if (sourceEligibilityError) {
+          throw new Error(sourceEligibilityError);
+        }
+
         if (Number(fromProcess.issuedKits || 0) < Number(request.quantity || 0)) {
           throw new Error("Source process no longer has enough allocated kits");
+        }
+
+        const destinationCapacityError = assertDestinationKitCapacity(toProcess, request.quantity);
+        if (destinationCapacityError) {
+          throw new Error(destinationCapacityError);
         }
 
         const sourceDevices = Array.isArray(request.serials) && request.serials.length > 0
@@ -439,10 +542,15 @@ module.exports = {
             throw new Error("Some devices are no longer available in the source process");
           }
 
-          const destinationStageSequence = buildStageSequence(toProcess);
+          const dispatchedSerial = findDispatchedDeviceSerial(sourceDevices);
+          if (dispatchedSerial) {
+            throw new Error(`Device ${dispatchedSerial} is dispatched and cannot be transferred`);
+          }
+
+          const destinationStageSequence = await resolveTransferStageSequence(toProcess, fromProcess);
           const targetStageIndex = getStageIndex(destinationStageSequence, request.targetStage);
           if (targetStageIndex === -1) {
-            throw new Error("Selected target stage does not exist on destination process");
+            throw new Error("Selected target stage is not available for this transfer");
           }
 
           const validationFailures = [];
