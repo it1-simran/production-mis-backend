@@ -103,78 +103,9 @@ const getStageIndex = (stageSequence, stageName) =>
 const getFunctionalStageIndex = (stageSequence) =>
   stageSequence.findIndex((stage) => normalizeStage(stage).includes("functional"));
 
-const isTransferAuditRecord = (record) => {
-  const searchType = normalizeStage(record?.searchType);
-  const status = normalizeStage(record?.status);
-  const flowType = normalizeStage(record?.flowType);
-  return (
-    searchType.includes("kit transfer") ||
-    status === "transferred" ||
-    status === "reset" ||
-    flowType === "transfer" ||
-    flowType === "reset"
-  );
-};
-
 const getDeviceFlowVersion = (device) => {
   const parsed = Number(device?.flowVersion);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-};
-
-const getCurrentFlowQuery = (deviceId, flowVersion) => {
-  const parsed = Number(flowVersion || 1);
-  if (parsed > 1) {
-    return { deviceId, flowVersion: parsed };
-  }
-  return {
-    deviceId,
-    $or: [{ flowVersion: 1 }, { flowVersion: { $exists: false } }],
-  };
-};
-
-const getCurrentFlowHistory = async (deviceId, flowVersion, session) => {
-  const query = getCurrentFlowQuery(deviceId, flowVersion);
-  let cursor = DeviceTestRecordModel.find(query);
-  if (session) cursor = cursor.session(session);
-  return cursor.sort({ createdAt: 1 }).lean();
-};
-
-const getCurrentFlowProgress = (records = [], stageSequence = []) => {
-  const passed = new Set();
-  for (const record of records) {
-    if (isTransferAuditRecord(record)) continue;
-    const status = normalizeStage(record?.status);
-    if (status === "pass" || status === "completed") {
-      passed.add(normalizeStage(record?.stageName || record?.name || ""));
-    }
-  }
-
-  let highestIndex = -1;
-  for (let index = 0; index < stageSequence.length; index += 1) {
-    const stageName = stageSequence[index];
-    if (!passed.has(normalizeStage(stageName))) {
-      break;
-    }
-    highestIndex = index;
-  }
-
-  return {
-    passed,
-    highestIndex,
-  };
-};
-
-const getCurrentDeviceStageIndex = (device, stageSequence = [], highestIndex = -1) => {
-  if (highestIndex >= 0) {
-    return highestIndex;
-  }
-
-  const fallbackStage = String(device?.currentStage || "").trim();
-  if (!fallbackStage) {
-    return -1;
-  }
-
-  return getStageIndex(stageSequence, fallbackStage);
 };
 
 const buildRequestQuery = (req, query = {}) => {
@@ -363,58 +294,6 @@ module.exports = {
             message: "Destination stage must be Functional or earlier for kit transfer",
           });
         }
-
-        console.log(">>> [DEBUG_TRACE] 18: Validating flow eligibility for serials");
-        const validationFailures = [];
-        for (const device of devices) {
-          const deviceFlowVersion = getDeviceFlowVersion(device);
-          const currentFlowRecords = await getCurrentFlowHistory(device._id, deviceFlowVersion);
-          const { highestIndex } = getCurrentFlowProgress(currentFlowRecords, destinationStageSequence);
-          const effectiveCurrentIndex = getCurrentDeviceStageIndex(
-            device,
-            destinationStageSequence,
-            highestIndex,
-          );
-          const currentStageName =
-            effectiveCurrentIndex >= 0 ? destinationStageSequence[effectiveCurrentIndex] : "";
-
-          if (functionalStageIndex !== -1 && effectiveCurrentIndex > functionalStageIndex) {
-            validationFailures.push({
-              serialNo: device.serialNo,
-              currentStage: currentStageName || device.currentStage || "",
-              targetStage,
-              missingStage: "Functional",
-              reason: `Device has already passed Functional and is not eligible for kit transfer`,
-            });
-            continue;
-          }
-
-          if (targetStageIndex === effectiveCurrentIndex) {
-            continue;
-          }
-
-          if (targetStageIndex > effectiveCurrentIndex) {
-            const expectedNextStage = destinationStageSequence[effectiveCurrentIndex + 1] || "";
-            if (effectiveCurrentIndex < 0 || targetStageIndex !== effectiveCurrentIndex + 1) {
-              validationFailures.push({
-                serialNo: device.serialNo,
-                currentStage: currentStageName || device.currentStage || "",
-                targetStage: targetStage,
-                missingStage: expectedNextStage || targetStage,
-                reason: `Device must first complete ${expectedNextStage || "the earlier stage"} before moving to ${targetStage}`,
-              });
-            }
-          }
-        }
-
-        if (validationFailures.length > 0) {
-          console.log(">>> [DEBUG_TRACE] 19: Eligibility failed");
-          return res.status(400).json({
-            status: 400,
-            message: validationFailures[0].reason || "Selected device is not eligible for the target stage",
-            details: validationFailures,
-          });
-        }
       }
 
       console.log(">>> [DEBUG_TRACE] 20: Creating database record");
@@ -553,55 +432,20 @@ module.exports = {
             throw new Error("Selected target stage is not available for this transfer");
           }
 
-          const validationFailures = [];
+          const functionalStageIndex = getFunctionalStageIndex(destinationStageSequence);
+          if (functionalStageIndex !== -1 && targetStageIndex > functionalStageIndex) {
+            throw new Error("Destination stage must be Functional or earlier for kit transfer");
+          }
+
           for (const device of sourceDevices) {
             const deviceFlowVersion = getDeviceFlowVersion(device);
-            const currentFlowRecords = await getCurrentFlowHistory(device._id, deviceFlowVersion, session);
-            const { passed, highestIndex } = getCurrentFlowProgress(
-              currentFlowRecords,
-              destinationStageSequence,
-            );
-            const effectiveCurrentIndex = getCurrentDeviceStageIndex(
-              device,
-              destinationStageSequence,
-              highestIndex,
-            );
             const targetStageName = destinationStageSequence[targetStageIndex];
-            const isBackwardReset = targetStageIndex < effectiveCurrentIndex;
 
             transferContext.push({
               device,
               deviceFlowVersion,
-              isBackwardReset,
               targetStageName,
             });
-
-            if (!isBackwardReset) {
-              const requiredStages = destinationStageSequence.slice(0, targetStageIndex);
-              const missingStages = requiredStages.filter(
-                (stageName) => !passed.has(normalizeStage(stageName)),
-              );
-              if (missingStages.length > 0) {
-                validationFailures.push({
-                  serialNo: device.serialNo,
-                  currentStage: device.currentStage || "",
-                  targetStage: targetStageName,
-                  missingStage: missingStages[0],
-                  missingStages,
-                  direction: "FORWARD",
-                });
-              }
-            }
-          }
-
-          if (validationFailures.length > 0) {
-            const first = validationFailures[0];
-            const error = new Error(
-              `Device ${first.serialNo} has not passed prerequisite stage(s) for ${first.targetStage}. Missing: ${first.missingStages.join(", ")}`,
-            );
-            error.statusCode = 400;
-            error.details = validationFailures;
-            throw error;
           }
         }
 
@@ -623,38 +467,36 @@ module.exports = {
 
         if (transferContext.length > 0) {
           const now = new Date();
-          const transferEntries = transferContext.map(({ device, deviceFlowVersion, isBackwardReset }) => ({
+          const transferEntries = transferContext.map(({ device, deviceFlowVersion }) => ({
             deviceId: device._id,
             processId: toProcess._id,
             operatorId: getActorId(req.user) || null,
             serialNo: device.serialNo,
             stageName: request.targetStage || device.currentStage || "",
-            status: isBackwardReset ? "Reset" : "Transferred",
+            status: "Reset",
             productId: device.productType || request.productId || null,
             assignedDeviceTo: "",
             ngDescription: `Transferred from ${request.fromProcessName} to ${request.toProcessName}`,
             searchType: "Kit Transfer",
-            flowVersion: isBackwardReset ? getDeviceFlowVersion(device) + 1 : getDeviceFlowVersion(device),
-            flowBoundary: Boolean(isBackwardReset),
-            flowType: isBackwardReset ? "reset" : "transfer",
-            previousFlowVersion: getDeviceFlowVersion(device),
-            flowStartedAt: isBackwardReset ? now : device.flowStartedAt || null,
+            flowVersion: deviceFlowVersion + 1,
+            flowBoundary: true,
+            flowType: "reset",
+            previousFlowVersion: deviceFlowVersion,
+            flowStartedAt: now,
             logs: [
               {
                 stepName: "Kit Transfer Approval",
                 stepType: "manual",
-                status: isBackwardReset ? "Reset" : "Pass",
+                status: "Reset",
                 logData: {
                   reason: "",
-                  description: isBackwardReset
-                    ? `Reset from ${request.fromProcessName} to ${request.toProcessName} at stage ${request.targetStage || "N/A"}`
-                    : `Transferred from ${request.fromProcessName} to ${request.toProcessName} at stage ${request.targetStage || "N/A"}`,
+                  description: `Reset from ${request.fromProcessName} to ${request.toProcessName} at stage ${request.targetStage || "N/A"}`,
                   transferMeta: {
                     requestId: String(request._id),
                     fromProcessId: String(request.fromProcessId),
                     toProcessId: String(request.toProcessId),
                     targetStage: request.targetStage || "",
-                    direction: isBackwardReset ? "RESET" : "FORWARD",
+                    direction: "RESET",
                     approvedBy: approver?.name || approver?.employeeCode || "",
                   },
                 },
@@ -670,14 +512,13 @@ module.exports = {
           await DeviceTestRecordModel.insertMany(transferEntries, { session });
 
           for (const context of transferContext) {
-            const { device, deviceFlowVersion, isBackwardReset } = context;
+            const { device, deviceFlowVersion } = context;
             device.processID = toProcess._id;
             device.currentStage = request.targetStage || device.currentStage || "";
-            if (isBackwardReset) {
-              device.flowVersion = deviceFlowVersion + 1;
-              device.flowStartedAt = now;
-              device.status = "Rework";
-            }
+            device.flowVersion = deviceFlowVersion + 1;
+            device.flowStartedAt = now;
+            device.status = "";
+            device.assignedDeviceTo = "";
             device.updatedAt = now;
             await device.save({ session });
           }
