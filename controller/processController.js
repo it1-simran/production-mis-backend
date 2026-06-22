@@ -46,7 +46,7 @@ module.exports = {
       ) {
         const Processes = await ProcessModel.find(filter)
           .select(
-            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt",
+            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status dispatchStatus stages commonStages createdAt updatedAt",
           )
           .sort({ updatedAt: -1 })
           .lean();
@@ -478,8 +478,28 @@ module.exports = {
   },
   processLogs: async (req, res) => {
     try {
-      const data = req?.body;
-      const processLogs = new ProcessLogModel(data);
+      const data = req?.body || {};
+      const logData = {
+        action: data.action,
+        processId: data.processId,
+        userId: data.userId || req.user?.id,
+        description: data.description || "",
+      };
+
+      if (!logData.processId) {
+        return res.status(400).json({
+          status: 400,
+          error: "processId is required.",
+        });
+      }
+      if (!logData.userId) {
+        return res.status(400).json({
+          status: 400,
+          error: "userId is required.",
+        });
+      }
+
+      const processLogs = new ProcessLogModel(logData);
       await processLogs.save();
       return res.status(200).json({
         status: 200,

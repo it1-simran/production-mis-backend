@@ -17,6 +17,8 @@ const {
   computeProcessInsights,
   normalizeAssignedStagesPayload,
 } = require("../services/planInsightsService");
+const { buildTestingAnalytics } = require("../services/deviceTestingAnalyticsService");
+const DeviceTestRecordModel = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 
@@ -473,10 +475,16 @@ module.exports = {
       };
       const data = req?.body;
       const planingId = req?.body?.selectedProcess;
-      data.ProcessShiftMappings = safeParse(data?.ProcessShiftMappings, []);
+      data.ProcessShiftMappings = safeParse(data?.ProcessShiftMappings, {});
       data.startDate = formatDateForMongoose(data?.startDate);
       data.estimatedEndDate = formatDateForMongoose(data?.estimatedEndDate);
-      
+      if (data.repeatCount !== undefined && data.repeatCount !== "") {
+        data.repeatCount = Number(data.repeatCount);
+      }
+      if (data.isDrafted !== undefined && data.isDrafted !== "") {
+        data.isDrafted = Number(data.isDrafted);
+      }
+
       // Set ownership fields
       data.createdBy = req.user?.id;
       data.department = req.user?.department || "";
@@ -554,11 +562,17 @@ module.exports = {
         if (val === undefined || val === null) return fallback;
         return val;
       };
-      updatedData.ProcessShiftMappings = safeParse(updatedData.ProcessShiftMappings, []);
+      updatedData.ProcessShiftMappings = safeParse(updatedData.ProcessShiftMappings, {});
       updatedData.startDate = formatDateForMongoose(updatedData.startDate);
       updatedData.estimatedEndDate = formatDateForMongoose(
         updatedData.estimatedEndDate
       );
+      if (updatedData.repeatCount !== undefined && updatedData.repeatCount !== "") {
+        updatedData.repeatCount = Number(updatedData.repeatCount);
+      }
+      if (updatedData.isDrafted !== undefined && updatedData.isDrafted !== "") {
+        updatedData.isDrafted = Number(updatedData.isDrafted);
+      }
       const updatedPlaningAndScheduling =
         await PlaningAndSchedulingModel.findByIdAndUpdate(id, updatedData, {
           new: true,
@@ -1252,6 +1266,8 @@ module.exports = {
         quantity: process?.quantity || 0,
         shift,
         issuedKits: ka?.issuedKits || 0,
+        dateFrom: String(req.query.from || req.query.dateFrom || "").trim(),
+        dateTo: String(req.query.to || req.query.dateTo || "").trim(),
       });
 
       return res.status(200).json({
@@ -1263,6 +1279,106 @@ module.exports = {
       return res.status(500).json({
         status: 500,
         message: "Failed to fetch plan insights",
+        error: error.message,
+      });
+    }
+  },
+  getSeatStageTestingAnalytics: async (req, res) => {
+    try {
+      const planId = req.params.id;
+      const seatKey = String(req.query.seatKey || req.query.seatNumber || "").trim();
+      const stageName = String(req.query.stageName || "").trim();
+      const from = String(req.query.from || "").trim();
+      const to = String(req.query.to || "").trim();
+
+      if (!mongoose.Types.ObjectId.isValid(String(planId || ""))) {
+        return res.status(400).json({ status: 400, message: "Invalid plan id" });
+      }
+
+      const plan = await PlaningAndSchedulingModel.findOne({
+        _id: planId,
+        ...getUnscopedAuthorizedReadListFilter(),
+      }).lean();
+      if (!plan) {
+        return res.status(404).json({ status: 404, message: "Plan not found" });
+      }
+
+      const process = plan?.selectedProcess
+        ? await ProcessModel.findById(plan.selectedProcess).lean()
+        : null;
+      if (!process?._id) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      const baseMatch = { processId: process._id };
+      const attemptContextRecords = await DeviceTestRecordModel.find(baseMatch)
+        .populate("operatorId", "name employeeCode")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const match = { ...baseMatch };
+      if (from || to) {
+        match.createdAt = {};
+        if (from) match.createdAt.$gte = new Date(`${from}T00:00:00.000`);
+        if (to) match.createdAt.$lte = new Date(`${to}T23:59:59.999`);
+      }
+
+      const records =
+        from || to
+          ? await DeviceTestRecordModel.find(match)
+              .populate("operatorId", "name employeeCode")
+              .sort({ createdAt: -1 })
+              .lean()
+          : attemptContextRecords;
+
+      const stageDef = [...(process?.stages || []), ...(process?.commonStages || [])].find(
+        (stage) =>
+          String(stage?.stageName || stage?.name || "")
+            .trim()
+            .toLowerCase() === stageName.toLowerCase(),
+      );
+      const shift = plan?.selectedShift
+        ? await ShiftModel.findById(plan.selectedShift).lean()
+        : null;
+      const shiftStartTime =
+        plan?.ProcessShiftMappings?.startTime || shift?.startTime || "";
+      const shiftEndTime = plan?.ProcessShiftMappings?.endTime || shift?.endTime || "";
+      const shiftBreakMinutes = Number(shift?.totalBreakTime || 0);
+      const shiftSpanMinutes = (() => {
+        if (!shiftStartTime || !shiftEndTime) return 8 * 60;
+        const start = new Date(`1970-01-01T${shiftStartTime}`);
+        const end = new Date(`1970-01-01T${shiftEndTime}`);
+        let minutes = Math.floor((end.getTime() - start.getTime()) / 60000);
+        if (minutes < 0) minutes += 24 * 60;
+        return Math.max(minutes - shiftBreakMinutes, 60);
+      })();
+      const productiveHours = Math.max(1, shiftSpanMinutes / 60);
+
+      const analytics = buildTestingAnalytics({
+        records,
+        attemptContextRecords,
+        stageName,
+        seatKey,
+        targetUph: Number(stageDef?.upha || 0),
+        productiveHours,
+        shiftTiming: {
+          startTime: shiftStartTime,
+          endTime: shiftEndTime,
+          intervals: shift?.intervals || [],
+          filterDateStart: from,
+          filterDateEnd: to,
+        },
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: "Seat/stage testing analytics fetched successfully",
+        data: analytics,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to fetch seat/stage testing analytics",
         error: error.message,
       });
     }

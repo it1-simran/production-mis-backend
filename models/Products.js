@@ -33,6 +33,9 @@ const productSchema = new mongoose.Schema({
           stepType: { type: String, required: false, enum: ["manual", "jig"] },
           isPrinterEnable: { type: Boolean, required: false, default: false },
           ngTimeout: { type: Number, required: false, default: 0 },
+          retryCount: { type: Number, required: false, default: 0, min: 0 },
+          awaitNgTimeout: { type: Boolean, required: false, default: false },
+          assignDepartment: { type: String, required: false, default: "" },
           disabled: { type: Boolean, default: false },
           isCheckboxNGStatus: {
             type: Boolean,

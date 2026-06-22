@@ -43,6 +43,9 @@ const processSchema = new mongoose.Schema({
         description: { type: String, default: "" },
         stepType: { type: String, required: false, enum: ["manual", "jig"] },
         ngTimeout: { type: Number, required: false, default: 0 },
+        retryCount: { type: Number, required: false, default: 0, min: 0 },
+        awaitNgTimeout: { type: Boolean, required: false, default: false },
+        assignDepartment: { type: String, required: false, default: "" },
         isPrinterEnable: { type: Boolean, required: false, default: false },
         disabled: { type: Boolean, default: false },
         isCheckboxNGStatus: {

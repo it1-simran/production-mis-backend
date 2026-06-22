@@ -15,7 +15,7 @@ const {
   findDevicesByScanTokensStrict,
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
-const { computePlanInsights } = require("../services/planInsightsService");
+const { computePlanInsights, isResolvedStatus } = require("../services/planInsightsService");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -420,13 +420,124 @@ const getLatestStageRecordBySerial = ({ records = [], serialNo = "", stageName =
 };
 
 const getClaimSeatKey = (record = {}) => normalizeValue(record?.assignedSeatKey || record?.seatNumber || "");
+const getRecordSeatKey = (record = {}) =>
+  normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
+
+const resolveSeatIssuedKits = (kitAssignment, seatKey = "") => {
+  if (!kitAssignment || !seatKey) return 0;
+  const [row, seat] = String(seatKey).split("-").map((part) => normalizeValue(part));
+  const seatDetails = Array.isArray(kitAssignment.seatDetails) ? kitAssignment.seatDetails : [];
+
+  const exactMatch = seatDetails.find(
+    (entry) =>
+      normalizeValue(entry?.rowNumber) === row &&
+      normalizeValue(entry?.seatNumber) === seat,
+  );
+  if (exactMatch) return Number(exactMatch.issuedKits || 0);
+
+  const seatOnlyMatches = seatDetails.filter(
+    (entry) => normalizeValue(entry?.seatNumber) === seat,
+  );
+  if (seatOnlyMatches.length === 1) {
+    return Number(seatOnlyMatches[0]?.issuedKits || 0);
+  }
+
+  return 0;
+};
+
 const isRevertedEquivalentStatus = (status = "") => {
   const normalizedStatus = normalizeKey(status);
   return normalizedStatus === "reverted" || normalizedStatus === "removed";
 };
 const isTerminalStageStatus = (status = "") => {
   const normalizedStatus = normalizeKey(status);
+  if (isResolvedStatus(normalizedStatus)) return false;
   return normalizedStatus === "pass" || normalizedStatus === "completed" || normalizedStatus === "ng" || normalizedStatus === "fail";
+};
+
+const buildDeviceFlowVersionMap = (devices = []) => {
+  const map = new Map();
+  (Array.isArray(devices) ? devices : []).forEach((device) => {
+    const flowVersion = Number(device?.flowVersion || 1);
+    const deviceId = String(device?._id || "").trim();
+    const serialNo = String(device?.serialNo || "").trim();
+    if (deviceId) map.set(deviceId, flowVersion);
+    if (serialNo) map.set(serialNo, flowVersion);
+  });
+  return map;
+};
+
+const buildActiveWipDeviceKeys = (devices = [], targetStageNames = new Set()) => {
+  const keys = new Set();
+  (Array.isArray(devices) ? devices : []).forEach((device) => {
+    const stageName = normalizeKey(device?.currentStage || "");
+    const targetStages = [...targetStageNames].map((name) => normalizeKey(name));
+    const isAtTargetStage =
+      targetStages.length === 0 ||
+      targetStages.some(
+        (targetStage) => targetStage && (stageName === targetStage || stageName.includes(targetStage)),
+      );
+    const deviceStatus = normalizeKey(device?.status || "");
+    const isActiveWip = deviceStatus !== "ng" && deviceStatus !== "fail";
+    if (!isAtTargetStage || !isActiveWip) return;
+
+    const deviceId = String(device?._id || "").trim();
+    const serialNo = String(device?.serialNo || "").trim();
+    if (deviceId) keys.add(deviceId);
+    if (serialNo) keys.add(serialNo);
+  });
+  return keys;
+};
+
+const countSeatStageStats = ({
+  records = [],
+  targetStageNames,
+  seatKey = "",
+  deviceFlowVersions = new Map(),
+  activeWipDeviceKeys = new Set(),
+}) => {
+  const normalizedSeatKey = normalizeValue(seatKey);
+  let tested = 0;
+  let pass = 0;
+  let ng = 0;
+  let wip = 0;
+
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    const stageName = normalizeValue(record?.stageName);
+    if (!targetStageNames.has(stageName)) return;
+    if (normalizedSeatKey) {
+      const recordSeatKey = getRecordSeatKey(record);
+      if (!recordSeatKey || recordSeatKey !== normalizedSeatKey) return;
+    }
+
+    const recordDeviceKey = String(record?.deviceId || record?.serialNo || "").trim();
+    if (recordDeviceKey && activeWipDeviceKeys.has(recordDeviceKey)) {
+      return;
+    }
+    const currentFlowVersion = recordDeviceKey
+      ? deviceFlowVersions.get(recordDeviceKey)
+      : undefined;
+    const recordFlowVersion = Number(record?.flowVersion || 1);
+    if (
+      currentFlowVersion !== undefined &&
+      recordFlowVersion !== currentFlowVersion
+    ) {
+      return;
+    }
+
+    const status = normalizeKey(record?.status);
+    if (isResolvedStatus(status)) {
+      wip += 1;
+      return;
+    }
+    if (!isTerminalStageStatus(status)) return;
+
+    tested += 1;
+    if (status === "pass" || status === "completed") pass += 1;
+    if (status === "ng" || status === "fail") ng += 1;
+  });
+
+  return { tested, pass, ng, wip };
 };
 
 const setNoStoreHeaders = (res) => {
@@ -458,7 +569,14 @@ const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageN
     normalizedDeviceCurrentStage === normalizedTrimmedStageName ||
     (!normalizedDeviceCurrentStage && normalizedTrimmedStageName && normalizedTrimmedStageName === normalizedFirstStageName);
 
-  if (!(deviceProcessId === String(processId) && deviceStatus !== "ng" && stageMatches)) {
+  if (
+    !(
+      deviceProcessId === String(processId) &&
+      deviceStatus !== "ng" &&
+      deviceStatus !== "fail" &&
+      stageMatches
+    )
+  ) {
     return false;
   }
 
@@ -913,6 +1031,7 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
         seatNumber: 1,
         stageName: 1,
         status: 1,
+        flowVersion: 1,
         assignedSeatKey: "$seatNumber",
         nextLogicalStage: 1,
         currentStage: 1,
@@ -1168,7 +1287,12 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     firstStageName,
   });
 
-  const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
+  const planObjectId = mongoose.Types.ObjectId.isValid(String(planId))
+    ? new mongoose.Types.ObjectId(String(planId))
+    : planId;
+  const processObjectId = process?._id;
+
+  const [latestRecords, rawDevices, allProcessDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
@@ -1185,7 +1309,18 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
         .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
         .lean()
       : Promise.resolve([]),
-    assignKitsToLineModel.findOne({ planId, processId: process?._id }).lean().catch(() => null),
+    process?._id
+      ? deviceModel
+        .find({ processID: process._id })
+        .select("_id serialNo flowVersion")
+        .lean()
+      : Promise.resolve([]),
+    processObjectId
+      ? assignKitsToLineModel
+        .findOne({ planId: planObjectId, processId: processObjectId })
+        .lean()
+        .catch(() => null)
+      : Promise.resolve(null),
     getOperatorStats(operatorId, includeHistory),
   ]);
 
@@ -1194,13 +1329,12 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     ...(process?.commonStages || []),
   ];
 
-  let seatIssuedKits = 0;
-  if (kitAssignment && seatKey) {
-    const [row, seat] = String(seatKey).split("-");
-    const match = (kitAssignment.seatDetails || []).find(
-      (s) => String(s.rowNumber) === String(row) && String(s.seatNumber) === String(seat),
-    );
-    if (match) seatIssuedKits = Number(match.issuedKits || 0);
+  let seatIssuedKits = resolveSeatIssuedKits(kitAssignment, seatKey);
+  if (seatIssuedKits <= 0 && kitAssignment && Number(kitAssignment.issuedKits) > 0) {
+    const seatDetails = Array.isArray(kitAssignment.seatDetails) ? kitAssignment.seatDetails : [];
+    if (seatDetails.length === 0) {
+      seatIssuedKits = Number(kitAssignment.issuedKits);
+    }
   }
 
   const canonicalInsights = await computePlanInsights({
@@ -1228,26 +1362,28 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     })
     : [];
 
-  let overallPass = 0;
-  let overallNg = 0;
-  let overallTested = 0;
-  latestRecords.forEach((record) => {
-    const stageName = normalizeValue(record?.stageName);
-    if (!targetStageNames.has(stageName)) return;
-    const status = normalizeKey(record?.status);
-    overallTested += 1;
-    if (status === "pass" || status === "completed") overallPass += 1;
-    if (status === "ng" || status === "fail") overallNg += 1;
+  const deviceFlowVersions = buildDeviceFlowVersionMap(allProcessDevices);
+  const activeWipDeviceKeys = buildActiveWipDeviceKeys(allProcessDevices, targetStageNames);
+  const seatScopedStats = countSeatStageStats({
+    records: latestRecords,
+    targetStageNames,
+    seatKey,
+    deviceFlowVersions,
+    activeWipDeviceKeys,
   });
+  let seatScopedTested = seatScopedStats.tested;
+  let seatScopedPass = seatScopedStats.pass;
+  let seatScopedNg = seatScopedStats.ng;
+  const seatScopedResolvedWip = seatScopedStats.wip;
 
   const quantityCap = Number.parseInt(process?.quantity, 10) || 0;
-  if (quantityCap > 0 && overallPass + overallNg > quantityCap) {
-    const cappedPass = Math.min(overallPass, quantityCap);
+  if (quantityCap > 0 && seatScopedPass + seatScopedNg > quantityCap) {
+    const cappedPass = Math.min(seatScopedPass, quantityCap);
     const remaining = Math.max(quantityCap - cappedPass, 0);
-    const cappedNg = Math.min(overallNg, remaining);
-    overallPass = cappedPass;
-    overallNg = cappedNg;
-    overallTested = Math.min(overallTested, quantityCap);
+    const cappedNg = Math.min(seatScopedNg, remaining);
+    seatScopedPass = cappedPass;
+    seatScopedNg = cappedNg;
+    seatScopedTested = Math.min(seatScopedTested, quantityCap);
   }
 
   const seatStageEntries = Array.isArray(assignUserStage)
@@ -1255,11 +1391,35 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     : assignUserStage
       ? [assignUserStage]
       : [];
-  const seatProcessedTotal = seatStageEntries.reduce((sum, stageEntry) => {
-    const passed = Number(stageEntry?.passedDevice || 0);
-    const ng = Number(stageEntry?.ngDevice || 0);
-    return sum + (Number.isFinite(passed) ? passed : 0) + (Number.isFinite(ng) ? ng : 0);
-  }, 0);
+
+  const seatStageInsights = (canonicalInsights?.bySeatStage || []).filter(
+    (row) =>
+      normalizeValue(row?.seatKey) === normalizeValue(seatKey) &&
+      targetStageNames.has(normalizeValue(row?.stageName)),
+  );
+  const insightSeatWip = seatStageInsights.reduce(
+    (sum, row) => sum + Number(row?.wip || 0),
+    0,
+  );
+
+  const lineIssueKitsCount = seatIssuedKits > 0 ? seatIssuedKits : 0;
+  const wipKitsCount =
+    lineIssueKitsCount > 0
+      ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg)
+      : Math.max(Number(deviceQueue.length || 0), insightSeatWip, seatScopedResolvedWip);
+  const kitsShortageCount =
+    lineIssueKitsCount > 0
+      ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg - wipKitsCount)
+      : 0;
+
+  const operatorScope = {
+    wip: wipKitsCount,
+    lineIssueKits: lineIssueKitsCount,
+    kitsShortage: kitsShortageCount,
+    pass: seatScopedPass,
+    ng: seatScopedNg,
+    tested: seatScopedTested,
+  };
 
   const { operatorStats, operatorHistory } = operatorSummary;
   const operatorToday = canonicalInsights?.totals?.operatorToday || operatorStats;
@@ -1291,13 +1451,16 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     selectedProcess: process?._id || plan?.selectedProcess || null,
     processStagesName: (process?.stages || []).map((stage) => stage?.stageName).filter(Boolean),
     compactQueue: deviceQueue,
+    insights: {
+      operatorScope,
+    },
     counters: {
-      wipKits: deviceQueue.length,
-      lineIssueKits: deviceQueue.length + seatProcessedTotal,
-      kitsShortage: 0,
-      overallTotalCompleted: overallPass,
-      overallTotalNg: overallNg,
-      overallTotalAttempts: overallTested,
+      wipKits: wipKitsCount,
+      lineIssueKits: lineIssueKitsCount,
+      kitsShortage: kitsShortageCount,
+      overallTotalCompleted: seatScopedPass,
+      overallTotalNg: seatScopedNg,
+      overallTotalAttempts: seatScopedTested,
       ...operatorStats,
     },
     downTime: {
