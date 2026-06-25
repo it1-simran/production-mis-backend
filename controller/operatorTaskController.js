@@ -16,6 +16,8 @@ const {
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
 const { computePlanInsights } = require("../services/planInsightsService");
+const { getCachedProcess, getCachedOperator } = require("../utils/cacheManager");
+const { buildSummaryCacheKey, getCachedQueryResult } = require("../utils/queryCache");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -711,18 +713,14 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
       .lean());
 
   const process = plan?.selectedProcess
-    ? await processModel.findById(plan.selectedProcess).select("_id stages commonStages selectedProduct").lean()
+    ? await getCachedProcess(plan.selectedProcess, "_id stages commonStages selectedProduct")
     : null;
 
   const isCommon = assignedTaskDetails?.stageType === "common";
 
   // --- Common-stage path (assignedCustomStagesOp is a parallel array, not a seat-key map) ---
   if (isCommon) {
-    const operatorProfile = await userModel
-      .findById(operatorId)
-      .select("_id userType role department designation name")
-      .lean()
-      .catch(() => null);
+    const operatorProfile = await getCachedOperator(operatorId);
     const customStagesArr = normalizeIndexedSlots(plan?.assignedCustomStages);
     const customOpsArr = normalizeIndexedSlots(plan?.assignedCustomStagesOp);
 
@@ -1025,7 +1023,7 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
             createdAt: { $gte: start, $lte: end },
           },
           { serialNo: 1, stageName: 1, status: 1, assignedDeviceTo: 1, timeConsumed: 1, createdAt: 1 },
-          { sort: { createdAt: -1 } },
+          { sort: { createdAt: -1 }, limit: 500 },
         )
         .lean()
       : Promise.resolve(undefined),
@@ -1050,19 +1048,21 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     throw error;
   }
 
-  const assignedTaskDetails =
-    (await assignedOperatorsToPlanModel
+  const [assignedWithProcess, assignedFallback, process] = await Promise.all([
+    assignedOperatorsToPlanModel
       .findOne({ userId: operatorId, processId: plan?.selectedProcess })
       .sort({ updatedAt: -1 })
-      .lean()) ||
-    (await assignedOperatorsToPlanModel
+      .lean(),
+    assignedOperatorsToPlanModel
       .findOne({ userId: operatorId })
       .sort({ updatedAt: -1 })
-      .lean());
+      .lean(),
+    plan?.selectedProcess
+      ? getCachedProcess(plan.selectedProcess, "")
+      : Promise.resolve(null),
+  ]);
+  const assignedTaskDetails = assignedWithProcess || assignedFallback;
 
-  const process = plan?.selectedProcess
-    ? await processModel.findById(plan.selectedProcess).lean()
-    : null;
   const [product, shift] = await Promise.all([
     process?.selectedProduct ? productModel.findById(process.selectedProduct).lean() : Promise.resolve(null),
     plan?.selectedShift ? shiftModel.findById(plan.selectedShift).lean() : Promise.resolve(null),
@@ -1076,11 +1076,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   let currentAssignedStageName = "";
 
   if (isCommon) {
-    const operatorProfile = await userModel
-      .findById(operatorId)
-      .select("_id userType role department designation name")
-      .lean()
-      .catch(() => null);
+    const operatorProfile = await getCachedOperator(operatorId);
     // Common stages: assignedCustomStages is an array of stage name strings,
     // assignedCustomStagesOp is a parallel array of operator-arrays.
     const customStagesArr = normalizeIndexedSlots(plan?.assignedCustomStages);
@@ -1170,7 +1166,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
 
   const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
-      ? getLatestDeviceTests(planId, process._id, stageNames)
+      ? getCachedQueryResult(
+        buildSummaryCacheKey("latestTests", planId, operatorId, stageNames.join(",")),
+        () => getLatestDeviceTests(planId, process._id, stageNames),
+        10,
+      )
       : Promise.resolve([]),
     process?._id
       ? deviceModel
@@ -1186,7 +1186,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
         .lean()
       : Promise.resolve([]),
     assignKitsToLineModel.findOne({ planId, processId: process?._id }).lean().catch(() => null),
-    getOperatorStats(operatorId, includeHistory),
+    getCachedQueryResult(
+      buildSummaryCacheKey("operatorStats", planId, operatorId, includeHistory ? "history" : "summary"),
+      () => getOperatorStats(operatorId, includeHistory),
+      30,
+    ),
   ]);
 
   const mergedStagesForSeatFilter = [
@@ -1559,7 +1563,7 @@ module.exports = {
           const broadCandidates = await deviceModel
             .find(processScopedFilter)
             .select(DEVICE_LOOKUP_SELECT_FIELDS)
-            .limit(500)
+            .limit(100)
             .lean();
           const broadResult = applyMatchResult(broadCandidates);
           if (broadResult.ambiguous) {
@@ -1574,7 +1578,7 @@ module.exports = {
             const processOnlyCandidates = await deviceModel
               .find(processOnlyFilter)
               .select(DEVICE_LOOKUP_SELECT_FIELDS)
-              .limit(500)
+              .limit(100)
               .lean();
             const processOnlyResult = applyMatchResult(processOnlyCandidates);
             if (processOnlyResult.ambiguous) {

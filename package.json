@@ -23,9 +23,14 @@
     "seed:dispatch-carton:dry": "node scripts/create-dummy-dispatch-carton.js --dry-run",
     "repair:self-reserved-plans": "node scripts/repair-self-reserved-plans.js",
     "repair:self-reserved-plans:dry": "node scripts/repair-self-reserved-plans.js --dry-run",
+    "audit:carton:orphan-devices": "node scripts/find-carton-orphan-devices.js --dry-run",
+    "audit:carton:orphan-devices:fix": "node scripts/find-carton-orphan-devices.js --fix",
     "move:device:fqc": "node scripts/move-device-to-fqc.js",
     "move:device:fqc:dry": "node scripts/move-device-to-fqc.js --dry-run",
-    "smoke:portal": "node scripts/portal-smoke.js"
+    "smoke:portal": "node scripts/portal-smoke.js",
+    "loadtest:device-submit": "powershell -ExecutionPolicy Bypass -File scripts/run-k6-device-submit.ps1",
+    "loadtest:device-submit:smoke": "powershell -ExecutionPolicy Bypass -File scripts/run-k6-device-submit.ps1 -Smoke",
+    "loadtest:device-submit:prepare": "node scripts/prepare-k6-env.js"
   },
   "repository": {
     "type": "git",
@@ -53,6 +58,7 @@
     "mongoose": "^8.6.3",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cache": "^5.1.2",
     "nodemon": "^3.1.11"
   }
 }

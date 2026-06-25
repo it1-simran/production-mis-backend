@@ -38,6 +38,8 @@ const {
   PROCESS_AND_PLANNING_READ_MODULES,
   DEVICE_READ_MODULE_LABELS,
 } = require('../constants/authorizationModules');
+const { submitDeduplicationMiddleware } = require('../middleware/requestDeduplication');
+const { createRequestTimeoutMiddleware } = require('../middleware/requestTimeout');
 connectDB();
 
 /** Parses multipart fields for device PATCH/POST routes that may send FormData (e.g. TRC resolve + photo). */
@@ -189,7 +191,7 @@ router.get('/devices/countByProcessId/:processId', authController.authenticateTo
 router.get('/devices/by-process/:processId', authController.authenticateToken, deviceController.getDevicesByProcessId);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
-router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.createDeviceTestEntry);
+router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
 router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.registerDeviceAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);

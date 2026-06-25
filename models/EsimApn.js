@@ -10,4 +10,6 @@ const esimApnSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now },
 });
 
+esimApnSchema.index({ esimMake: 1, esimProfile1: 1 });
+
 module.exports = mongoose.model("EsimApn", esimApnSchema);

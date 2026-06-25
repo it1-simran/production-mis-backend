@@ -9,4 +9,6 @@ const esimMakeSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now },
 });
 
+esimMakeSchema.index({ name: 1 });
+
 module.exports = mongoose.model("EsimMake", esimMakeSchema);
