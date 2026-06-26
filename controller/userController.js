@@ -8,7 +8,7 @@ module.exports = {
       if (!userId) {
         return res.status(400).json({ error: "User ID is required" });
       }
-      const user = await User.findById(userId);
+      const user = await User.findById(userId).lean();
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
@@ -117,7 +117,7 @@ module.exports = {
   },
   getUsers: async (req, res) => {
     try {
-      const users = await User.find({ userType: { $ne: "admin" } }).select("-password").sort({ _id: -1 });
+      const users = await User.find({ userType: { $ne: "admin" } }).select("-password").sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Users Fetched Sucessfully!!",

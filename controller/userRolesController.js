@@ -23,7 +23,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const userRoles = await UserRoles.find().sort({ _id: -1 });
+      const userRoles = await UserRoles.find().sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Users Roles Fetched Sucessfully!!",
@@ -142,9 +142,9 @@ module.exports = {
       // Auto-cleanup: Remove legacy production_process permission from all roles
       await UserTypes.updateMany({}, { $unset: { "permissions.production_process": "" } });
       
-      let userType = await UserTypes.find({ 
-        name: { $nin: ["ADMIN", "ADMINISTRATOR", "admin", "administrator"] } 
-      }).sort({ name: 1 });
+      let userType = await UserTypes.find({
+        name: { $nin: ["ADMIN", "ADMINISTRATOR", "admin", "administrator"] }
+      }).sort({ name: 1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "User Roles Fetched Successfully!!",
@@ -161,7 +161,7 @@ module.exports = {
   getUserTypeByType: async (req, res) => {
     try {
       const { type } = req.query;
-      const userType = await UserTypes.findOne({ name: new RegExp(`^${type}$`, "i") });
+      const userType = await UserTypes.findOne({ name: new RegExp(`^${type}$`, "i") }).lean();
       
       if (!userType) {
         return res.status(404).json({ message: "Role not found" });

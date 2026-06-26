@@ -22,6 +22,7 @@ module.exports = {
         descripition: data?.descripition,
         stages: JSON.parse(data?.stages),
         commonStages: JSON.parse(data?.commonStages),
+        autoNgEnabled: data?.autoNgEnabled === "true" || data?.autoNgEnabled === true,
         createdBy: req.user?.id,
         department: req.user?.department || "",
       };
@@ -46,7 +47,7 @@ module.exports = {
       ) {
         const Processes = await ProcessModel.find(filter)
           .select(
-            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status stages commonStages createdAt updatedAt",
+            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status dispatchStatus stages commonStages createdAt updatedAt",
           )
           .sort({ updatedAt: -1 })
           .lean();
@@ -147,7 +148,7 @@ module.exports = {
       const Processes = await ProcessModel.find({
         ...getUnscopedAuthorizedReadListFilter(),
         ...productMatch,
-      }).sort({ _id: -1 });
+      }).sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",
@@ -271,7 +272,7 @@ module.exports = {
           $regex: `^${escapedNo}$`,
           $options: "i",
         },
-      });
+      }).lean();
 
       if (!orderConfirmation) {
         return res.status(404).json({
@@ -313,7 +314,7 @@ module.exports = {
       const id = req.params.id;
       const data = req?.body;
 
-      const oldProcess = await ProcessModel.findById(id);
+      const oldProcess = await ProcessModel.findById(id).lean();
       if (!oldProcess) {
         return res.status(404).json({ message: "Process not found" });
       }
@@ -359,6 +360,7 @@ module.exports = {
         descripition: data?.descripition,
         stages: newStages,
         commonStages: newCommonStages,
+        autoNgEnabled: data?.autoNgEnabled === "true" || data?.autoNgEnabled === true,
       };
 
       const updatedProcess = await ProcessModel.findByIdAndUpdate(
@@ -385,7 +387,7 @@ module.exports = {
       try {
         const plans = await PlaningAndSchedulingModel.find({
           selectedProcess: id,
-        });
+        }).lean();
 
         for (const plan of plans) {
           let assignedStages = JSON.parse(plan.assignedStages || "{}");
@@ -478,8 +480,28 @@ module.exports = {
   },
   processLogs: async (req, res) => {
     try {
-      const data = req?.body;
-      const processLogs = new ProcessLogModel(data);
+      const data = req?.body || {};
+      const logData = {
+        action: data.action,
+        processId: data.processId,
+        userId: data.userId || req.user?.id,
+        description: data.description || "",
+      };
+
+      if (!logData.processId) {
+        return res.status(400).json({
+          status: 400,
+          error: "processId is required.",
+        });
+      }
+      if (!logData.userId) {
+        return res.status(400).json({
+          status: 400,
+          error: "userId is required.",
+        });
+      }
+
+      const processLogs = new ProcessLogModel(logData);
       await processLogs.save();
       return res.status(200).json({
         status: 200,
@@ -502,7 +524,7 @@ module.exports = {
       let assignedOperatorsToPlan = await AssignOperatorToPlanModel.find({
         processId: id,
         status: "Occupied",
-      });
+      }).lean();
       if (assignedOperatorsToPlan.length > 0) {
         assignedOperatorsToPlan.map(async (value, index) => {
           let operatorData = { status: "Free" };

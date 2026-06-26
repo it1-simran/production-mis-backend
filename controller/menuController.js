@@ -200,7 +200,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      let getMenu = await Menu.find();
+      let getMenu = await Menu.find().limit(1);
 
       // Auto-migration: Ensure Repackaging menu exists
       if (getMenu.length > 0) {

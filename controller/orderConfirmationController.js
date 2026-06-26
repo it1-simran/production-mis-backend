@@ -84,7 +84,7 @@ module.exports = {
   //   },
   view: async (req, res) => {
     try {
-      const getOrderConfirmationNo = await OrderConfirmationNumberModel.find().sort({ _id: -1 });
+      const getOrderConfirmationNo = await OrderConfirmationNumberModel.find().sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Order Confirmation Fetched Sucessfully!!",

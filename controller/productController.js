@@ -43,14 +43,15 @@ module.exports = {
         }
       }
 
-      const newProduct = new Product({
-        name,
-        stages,
-        commonStages,
-        status: isDraft ? "draft" : "active",
-        createdBy: req.user?.id,
-        department: req.user?.department || "",
-      });
+        const newProduct = new Product({
+          name,
+          stages,
+          commonStages,
+          status: isDraft ? "draft" : "active",
+          createdBy: req.user?.id,
+          department: req.user?.department || "",
+          autoNgEnabled: !!req.body.autoNgEnabled,
+        });
 
       const savedProduct = await newProduct.save();
       if (savedProduct && savedProduct.status !== "draft") {
@@ -157,7 +158,8 @@ module.exports = {
       const id = req.params.id;
       const stages = JSON.parse(req.body.stages);
       const commonStages = JSON.parse(req.body.commonStages);
-      const updatedData = { name: req.body.name, stages, commonStages };
+      const autoNgEnabled = req.body.autoNgEnabled === "true" || req.body.autoNgEnabled === true;
+      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,
