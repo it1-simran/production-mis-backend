@@ -22,7 +22,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const RoomPlan = await RoomPlanModel.find().sort({ _id: -1 });
+      const RoomPlan = await RoomPlanModel.find().sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Jigs Fetched Sucessfully!!",
@@ -69,7 +69,7 @@ module.exports = {
   getRoomPlanByID: async (req,res) =>{
     try{
       const id = req.params.id;
-      const roomPlan = await RoomPlanModel.findById(id);
+      const roomPlan = await RoomPlanModel.findById(id).lean();
       if (!roomPlan) {
         return res.status(404).json({ error: "Room Plan not found" });
       }

@@ -16,6 +16,7 @@ const processSchema = new mongoose.Schema({
   consumedCartons: { type: Number, required: false, default: 0 },
   descripition: { type: String, required: false },
   fgToStore: { type: Number, required: false, default: 0 },
+  autoNgEnabled: { type: Boolean, default: false },
   stages: [
     {
       stageName: { type: String, required: true },

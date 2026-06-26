@@ -744,7 +744,7 @@ module.exports = {
           error: "Start Date must be earlier than Expected End Date.",
         });
       }
-      const shift = await ShiftModel.findById(shiftId);
+      const shift = await ShiftModel.findById(shiftId).lean();
       if (!shift) {
         return res.status(404).json({
           status: 404,
@@ -1206,7 +1206,7 @@ module.exports = {
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
         ...getUnscopedAuthorizedReadListFilter(),
         selectedProcess: id,
-      });
+      }).lean();
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
@@ -1443,7 +1443,7 @@ module.exports = {
     try {
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find(
         getUnscopedAuthorizedReadListFilter(),
-      );
+      ).lean();
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",

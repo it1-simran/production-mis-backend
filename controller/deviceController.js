@@ -2606,7 +2606,8 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean();
 
       if (deviceTestRecord.length === 0) {
         return res.status(200).json({
