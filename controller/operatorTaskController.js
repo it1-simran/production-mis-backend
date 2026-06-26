@@ -10,6 +10,8 @@ const userModel = require("../models/User");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
 const assignKitsToLineModel = require("../models/assignKitsToLine");
+const OperatorWorkSession = require("../models/operatorWorkSession");
+const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const {
   parseStickerScanTokens,
   findDevicesByScanTokensStrict,
@@ -803,6 +805,46 @@ const resolveMatchFromCandidates = (candidateDevices = [], scanTokens = []) => {
   return { ambiguous: false, match: null };
 };
 
+const ensureOperatorWorkSessionForBootstrap = async ({ operatorId, processId, planId }) => {
+  try {
+    const operatorObjId = new mongoose.Types.ObjectId(String(operatorId));
+    const processObjId = new mongoose.Types.ObjectId(String(processId));
+    const planObjId =
+      planId && mongoose.Types.ObjectId.isValid(String(planId))
+        ? new mongoose.Types.ObjectId(String(planId))
+        : null;
+
+    const existing = await OperatorWorkSession.findOne({
+      operatorId: operatorObjId,
+      processId: processObjId,
+      status: "active",
+    }).lean();
+    if (existing) return existing;
+
+    const assignment = await AssignOperatorToPlan.findOne({
+      userId: operatorObjId,
+      processId: processObjId,
+    }).lean();
+
+    const session = new OperatorWorkSession({
+      operatorId: operatorObjId,
+      processId: processObjId,
+      planId: planObjId,
+      taskUrl: "",
+      scheduledShift: assignment?.ProcessShiftMappings || {},
+      startedAt: new Date(),
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await session.save();
+    return session;
+  } catch (error) {
+    console.error("Failed to ensure operator work session on bootstrap:", error?.message || error);
+    return null;
+  }
+};
+
 const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
   const plan = await planningAndSchedulingModel
     .findById(planId)
@@ -1167,6 +1209,17 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     const error = new Error("Planning not found");
     error.status = 404;
     throw error;
+  }
+
+  if (
+    mongoose.Types.ObjectId.isValid(String(operatorId || "")) &&
+    mongoose.Types.ObjectId.isValid(String(plan?.selectedProcess || ""))
+  ) {
+    await ensureOperatorWorkSessionForBootstrap({
+      operatorId,
+      processId: plan.selectedProcess,
+      planId,
+    });
   }
 
   const assignedTaskDetails =

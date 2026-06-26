@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const moment = require("moment");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
+const assignOperatorToPlanModel = require("../models/assignOperatorToPlan");
+const OperatorWorkSession = require("../models/operatorWorkSession");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -655,6 +657,11 @@ const computePlanInsights = async ({
       byStage: [],
       bySeatStage: [],
       latestRecords: [],
+      operatorActivityTimestamps: {
+        stageAssignmentStart: null,
+        operatorLogin: null,
+        firstDeviceStart: null,
+      },
     };
   }
 
@@ -1285,11 +1292,189 @@ const computeProcessInsights = async ({
     0,
   );
 
+  const operatorActivityTimestamps = await computeOperatorActivityTimestamps({
+    planId,
+    processId,
+  });
+
   return {
     generatedAt: new Date().toISOString(),
     totals: uniqueProcessTotals,
     byStage,
     bySeatStage,
+    operatorActivityTimestamps,
+  };
+};
+
+const toIsoOrNull = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+};
+
+const formatOperatorRef = (operatorDoc) => {
+  if (!operatorDoc) return { operatorId: null, operatorName: null, employeeCode: null };
+  const operatorId = String(operatorDoc?._id || operatorDoc?.id || operatorDoc || "");
+  const operatorName = normalizeValue(operatorDoc?.name) || null;
+  const employeeCode = normalizeValue(operatorDoc?.employeeCode) || null;
+  return {
+    operatorId: operatorId || null,
+    operatorName: operatorName || employeeCode || null,
+    employeeCode: employeeCode || null,
+  };
+};
+
+const computeOperatorActivityTimestamps = async ({
+  planId = "",
+  processId = "",
+  seatKey = "",
+  stageName = "",
+  operatorIds = [],
+  dateFrom = "",
+  dateTo = "",
+} = {}) => {
+  const empty = {
+    stageAssignmentStart: null,
+    operatorLogin: null,
+    firstDeviceStart: null,
+  };
+
+  if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) {
+    return empty;
+  }
+
+  const processObjId = new mongoose.Types.ObjectId(String(processId));
+  const normalizedSeatKey = normalizeValue(seatKey);
+  const normalizedStageName = normalizeValue(stageName);
+
+  const parseSeatParts = (key) => {
+    const parts = String(key || "").split("-");
+    return {
+      rowNumber: normalizeValue(parts[0]) || "",
+      seatNumber: normalizeValue(parts[1]) || "",
+    };
+  };
+
+  const assignmentQuery = { processId: processObjId, status: "Occupied" };
+  if (normalizedSeatKey) {
+    const { rowNumber, seatNumber } = parseSeatParts(normalizedSeatKey);
+    if (rowNumber) assignmentQuery["seatDetails.rowNumber"] = rowNumber;
+    if (seatNumber) assignmentQuery["seatDetails.seatNumber"] = seatNumber;
+  }
+
+  const normalizedOperatorIds = (Array.isArray(operatorIds) ? operatorIds : [])
+    .map((id) => String(id || "").trim())
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const sessionQuery = { processId: processObjId };
+  if (normalizedOperatorIds.length > 0) {
+    sessionQuery.operatorId = { $in: normalizedOperatorIds };
+  }
+
+  const deviceMatch = { processId: processObjId };
+  if (normalizedStageName) {
+    deviceMatch.stageName = new RegExp(
+      `^${normalizedStageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      "i",
+    );
+  }
+  if (normalizedSeatKey) {
+    deviceMatch.seatNumber = normalizedSeatKey;
+  }
+
+  const devicePipeline = [
+    { $match: deviceMatch },
+    {
+      $addFields: {
+        effectiveStart: { $ifNull: ["$startTime", "$createdAt"] },
+      },
+    },
+    { $match: { effectiveStart: { $ne: null } } },
+  ];
+
+  const fromTrim = normalizeValue(dateFrom);
+  const toTrim = normalizeValue(dateTo);
+  if (fromTrim || toTrim) {
+    const dateFilter = {};
+    if (fromTrim) dateFilter.$gte = new Date(`${fromTrim}T00:00:00.000`);
+    if (toTrim) dateFilter.$lte = new Date(`${toTrim}T23:59:59.999`);
+    devicePipeline.push({ $match: { effectiveStart: dateFilter } });
+  }
+
+  devicePipeline.push(
+    { $sort: { effectiveStart: 1 } },
+    { $limit: 1 },
+    {
+      $lookup: {
+        from: "users",
+        localField: "operatorId",
+        foreignField: "_id",
+        as: "operator",
+      },
+    },
+    { $unwind: { path: "$operator", preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        effectiveStart: 1,
+        startTime: 1,
+        createdAt: 1,
+        serialNo: 1,
+        stageName: 1,
+        operator: { _id: 1, name: 1, employeeCode: 1 },
+      },
+    },
+  );
+
+  const [stageAssignment, operatorLogin, firstDeviceRows] = await Promise.all([
+    assignOperatorToPlanModel
+      .findOne(assignmentQuery)
+      .sort({ createdAt: 1 })
+      .populate("userId", "name employeeCode")
+      .select("createdAt userId stageType seatDetails")
+      .lean(),
+    OperatorWorkSession.findOne(sessionQuery)
+      .sort({ startedAt: 1 })
+      .populate("operatorId", "name employeeCode")
+      .select("startedAt operatorId planId")
+      .lean(),
+    deviceTestRecordModel.aggregate(devicePipeline),
+  ]);
+
+  const firstDevice = Array.isArray(firstDeviceRows) ? firstDeviceRows[0] : null;
+  const stageAssignmentOperator = formatOperatorRef(stageAssignment?.userId);
+  const loginOperator = formatOperatorRef(operatorLogin?.operatorId);
+  const deviceOperator = formatOperatorRef(firstDevice?.operator);
+
+  return {
+    stageAssignmentStart: stageAssignment?.createdAt
+      ? {
+          at: toIsoOrNull(stageAssignment.createdAt),
+          ...stageAssignmentOperator,
+          stageType: normalizeValue(stageAssignment?.stageType) || null,
+          seatKey: stageAssignment?.seatDetails
+            ? `${normalizeValue(stageAssignment.seatDetails.rowNumber)}-${normalizeValue(stageAssignment.seatDetails.seatNumber)}`.replace(
+                /^-$/,
+                "",
+              ) || null
+            : null,
+        }
+      : null,
+    operatorLogin: operatorLogin?.startedAt
+      ? {
+          at: toIsoOrNull(operatorLogin.startedAt),
+          ...loginOperator,
+          planId: operatorLogin?.planId ? String(operatorLogin.planId) : null,
+        }
+      : null,
+    firstDeviceStart: firstDevice?.effectiveStart
+      ? {
+          at: toIsoOrNull(firstDevice.effectiveStart),
+          serialNo: normalizeValue(firstDevice?.serialNo) || null,
+          stageName: normalizeValue(firstDevice?.stageName) || null,
+          ...deviceOperator,
+        }
+      : null,
   };
 };
 
@@ -1307,4 +1492,5 @@ module.exports = {
   getRecordSeatKey,
   computePlanInsights,
   computeProcessInsights,
+  computeOperatorActivityTimestamps,
 };

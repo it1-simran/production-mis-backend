@@ -599,6 +599,29 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "noOfSerialRequired must be greater than 0" });
       }
 
+      const processDoc = await processModel
+        .findById(processID)
+        .select("orderConfirmationNo quantity")
+        .lean();
+
+      const targetQuantity = Number.parseInt(processDoc?.quantity, 10) || 0;
+      if (targetQuantity > 0) {
+        const existingCount = await deviceModel.countDocuments({ processID });
+        const remaining = targetQuantity - existingCount;
+        if (remaining <= 0) {
+          return res.status(400).json({
+            status: 400,
+            message: "All serials for this process have already been generated",
+          });
+        }
+        if (noOfSerialRequired > remaining) {
+          return res.status(400).json({
+            status: 400,
+            message: `Cannot generate ${noOfSerialRequired} serials. Only ${remaining} remaining for this process.`,
+          });
+        }
+      }
+
       const parsedStartFrom = Number.parseInt(startFrom, 10);
       const serials = generateSerials(
         lastSerialNo,
@@ -614,7 +637,6 @@ module.exports = {
 
       // Fetch modelName from Order Confirmation for this process
       let modelNameFromOc = "";
-      const processDoc = await processModel.findById(processID).select("orderConfirmationNo").lean();
       if (processDoc?.orderConfirmationNo) {
         const ocDoc = await OrderConfirmationModel.findOne({ orderConfirmationNo: processDoc.orderConfirmationNo }).select("modelName").lean();
         if (ocDoc?.modelName) {

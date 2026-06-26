@@ -352,13 +352,44 @@ const buildShiftSessions = (shiftTiming) => {
 
   if (fallbackProductive.length === 0) return [];
 
+  // Capture work done just before shift start / after shift end by widening the
+  // outer productive boundary. Breaks are left untouched. The UPH divisor
+  // (productiveHours) is computed separately from the official shift span, so
+  // this padding only captures edge output without diluting the per-hour rate.
+  const padMs = Math.max(0, Number(shiftTiming.paddingMinutes) || 0) * 60 * 1000;
+
   const sessions = [];
   dateKeys.forEach((dateKey) => {
-    fallbackProductive.forEach((interval, index) => {
+    const builtWindows = fallbackProductive.map((interval) =>
+      buildWindowOnDate(dateKey, interval.startTime, interval.endTime),
+    );
+
+    if (padMs > 0 && builtWindows.length > 0) {
+      let earliestIdx = 0;
+      let latestIdx = 0;
+      builtWindows.forEach((window, idx) => {
+        if (window.start.getTime() < builtWindows[earliestIdx].start.getTime()) {
+          earliestIdx = idx;
+        }
+        if (window.end.getTime() > builtWindows[latestIdx].end.getTime()) {
+          latestIdx = idx;
+        }
+      });
+      builtWindows[earliestIdx] = {
+        ...builtWindows[earliestIdx],
+        start: new Date(builtWindows[earliestIdx].start.getTime() - padMs),
+      };
+      builtWindows[latestIdx] = {
+        ...builtWindows[latestIdx],
+        end: new Date(builtWindows[latestIdx].end.getTime() + padMs),
+      };
+    }
+
+    builtWindows.forEach((window, index) => {
       sessions.push({
         key: `${dateKey}::${index}`,
         dateKey,
-        productiveWindows: [buildWindowOnDate(dateKey, interval.startTime, interval.endTime)],
+        productiveWindows: [window],
         breakWindows: breakIntervals.map((breakInterval) =>
           buildWindowOnDate(dateKey, breakInterval.startTime, breakInterval.endTime),
         ),
@@ -915,8 +946,13 @@ const buildTestingAnalytics = ({
   };
 };
 
+// Extra minutes captured before shift start / after shift end so edge work is
+// tracked. The UPH divisor (productiveHours) still uses the official shift span.
+const SHIFT_PRODUCTIVITY_PADDING_MINUTES = 60;
+
 module.exports = {
   buildTestingAnalytics,
   formatDurationHHMMSS,
   resolveRecordTimelineTimes,
+  SHIFT_PRODUCTIVITY_PADDING_MINUTES,
 };

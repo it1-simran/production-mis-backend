@@ -15,9 +15,13 @@ const assignKitsToLineModel = require("../models/assignKitsToLine");
 const {
   computePlanInsights,
   computeProcessInsights,
+  computeOperatorActivityTimestamps,
   normalizeAssignedStagesPayload,
 } = require("../services/planInsightsService");
-const { buildTestingAnalytics } = require("../services/deviceTestingAnalyticsService");
+const {
+  buildTestingAnalytics,
+  SHIFT_PRODUCTIVITY_PADDING_MINUTES,
+} = require("../services/deviceTestingAnalyticsService");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
@@ -1270,6 +1274,32 @@ module.exports = {
         dateTo: String(req.query.to || req.query.dateTo || "").trim(),
       });
 
+      const seatKey = String(req.query.seatKey || req.query.seatNumber || "").trim();
+      const stageName = String(req.query.stageName || "").trim();
+      if (seatKey || stageName) {
+        const assignedOperators = safeParseJson(plan?.assignedOperators, {});
+        const seatOperators = seatKey
+          ? Array.isArray(assignedOperators?.[seatKey])
+            ? assignedOperators[seatKey]
+            : assignedOperators?.[seatKey]
+              ? [assignedOperators[seatKey]]
+              : []
+          : [];
+        const operatorIds = seatOperators
+          .map((op) => op?._id || op?.userId || op?.id)
+          .filter(Boolean);
+
+        insights.operatorActivityTimestamps = await computeOperatorActivityTimestamps({
+          planId,
+          processId: process?._id || "",
+          seatKey,
+          stageName,
+          operatorIds,
+          dateFrom: String(req.query.from || req.query.dateFrom || "").trim(),
+          dateTo: String(req.query.to || req.query.dateTo || "").trim(),
+        });
+      }
+
       return res.status(200).json({
         status: 200,
         message: "Plan insights fetched successfully",
@@ -1367,13 +1397,39 @@ module.exports = {
           intervals: shift?.intervals || [],
           filterDateStart: from,
           filterDateEnd: to,
+          paddingMinutes: SHIFT_PRODUCTIVITY_PADDING_MINUTES,
         },
+      });
+
+      const assignedOperators = safeParseJson(plan?.assignedOperators, {});
+      const seatOperators = seatKey
+        ? Array.isArray(assignedOperators?.[seatKey])
+          ? assignedOperators[seatKey]
+          : assignedOperators?.[seatKey]
+            ? [assignedOperators[seatKey]]
+            : []
+        : [];
+      const operatorIds = seatOperators
+        .map((op) => op?._id || op?.userId || op?.id)
+        .filter(Boolean);
+
+      const operatorActivityTimestamps = await computeOperatorActivityTimestamps({
+        planId,
+        processId: process._id,
+        seatKey,
+        stageName,
+        operatorIds,
+        dateFrom: from,
+        dateTo: to,
       });
 
       return res.status(200).json({
         status: 200,
         message: "Seat/stage testing analytics fetched successfully",
-        data: analytics,
+        data: {
+          ...analytics,
+          operatorActivityTimestamps,
+        },
       });
     } catch (error) {
       return res.status(500).json({
