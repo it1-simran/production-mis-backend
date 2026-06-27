@@ -45,7 +45,7 @@ const processSchema = new mongoose.Schema({
         stepType: { type: String, required: false, enum: ["manual", "jig"] },
         ngTimeout: { type: Number, required: false, default: 0 },
         retryCount: { type: Number, required: false, default: 0, min: 0 },
-        awaitNgTimeout: { type: Boolean, required: false, default: false },
+        awaitNgTimeout: { type: Boolean, required: false, default: true },
         assignDepartment: { type: String, required: false, default: "" },
         isPrinterEnable: { type: Boolean, required: false, default: false },
         disabled: { type: Boolean, default: false },
@@ -75,14 +75,14 @@ const processSchema = new mongoose.Schema({
             fields: [
               {
                 name: { type: String, required: false, default: "" },
-                  slug: { type: String, required: false, default: "" },
-                  sourceFields: [
-                    {
-                      name: { type: String, required: false, default: "" },
-                      slug: { type: String, required: false, default: "" },
-                    },
-                  ],
-                  x: { type: Number, required: false, default: "" },
+                slug: { type: String, required: false, default: "" },
+                sourceFields: [
+                  {
+                    name: { type: String, required: false, default: "" },
+                    slug: { type: String, required: false, default: "" },
+                  },
+                ],
+                x: { type: Number, required: false, default: "" },
                 y: { type: Number, required: false, default: "" },
                 width: { type: Number, required: false, default: "" },
                 height: { type: Number, required: false, default: "" },

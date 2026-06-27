@@ -35,7 +35,7 @@ const productSchema = new mongoose.Schema({
           isPrinterEnable: { type: Boolean, required: false, default: false },
           ngTimeout: { type: Number, required: false, default: 0 },
           retryCount: { type: Number, required: false, default: 0, min: 0 },
-          awaitNgTimeout: { type: Boolean, required: false, default: false },
+          awaitNgTimeout: { type: Boolean, required: false, default: true },
           assignDepartment: { type: String, required: false, default: "" },
           disabled: { type: Boolean, default: false },
           isCheckboxNGStatus: {
