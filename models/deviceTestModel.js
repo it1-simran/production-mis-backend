@@ -43,6 +43,9 @@ const deviceTestSchema = new mongoose.Schema({
   totalBreakTime: { type: String, required: false },
   startTime: { type: Date, required: false },
   endTime: { type: Date, required: false },
+  testDurationMs: { type: Number, required: false },
+  attemptNumber: { type: Number, required: false, default: 1 },
+  reattemptReason: { type: String, required: false, default: "" },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   status: { type: String, enum: ["draft", "active"], default: "active" },
+  autoNgEnabled: { type: Boolean, default: false },
   stages: [
     {
       stageName: { type: String, required: true },
@@ -33,6 +34,9 @@ const productSchema = new mongoose.Schema({
           stepType: { type: String, required: false, enum: ["manual", "jig"] },
           isPrinterEnable: { type: Boolean, required: false, default: false },
           ngTimeout: { type: Number, required: false, default: 0 },
+          retryCount: { type: Number, required: false, default: 0, min: 0 },
+          awaitNgTimeout: { type: Boolean, required: false, default: true },
+          assignDepartment: { type: String, required: false, default: "" },
           disabled: { type: Boolean, default: false },
           isCheckboxNGStatus: {
             type: Boolean,

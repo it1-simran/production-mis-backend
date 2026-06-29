@@ -459,7 +459,8 @@ class DispatchService {
         ],
       })
       .populate({ path: "processId", select: "name processID selectedProduct orderConfirmationNo" })
-      .populate({ path: "devices", select: "serialNo imeiNo modelName dispatchStatus currentStage cartonSerial" });
+      .populate({ path: "devices", select: "serialNo imeiNo modelName dispatchStatus currentStage cartonSerial" })
+      .lean();
 
     if (cartons.length !== normalizedSerials.length) {
       const found = new Set(cartons.map((carton) => String(carton.cartonSerial)));

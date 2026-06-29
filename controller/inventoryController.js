@@ -107,7 +107,7 @@ module.exports = {
     try {
       const Inventory = await InventoryModel.find(getUnscopedAuthorizedReadListFilter()).sort({
         _id: -1,
-      });
+      }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Inventory Fetched Sucessfully!!",
@@ -252,7 +252,7 @@ module.exports = {
     try {
       const ProcessByProductID = await ProcessModel.find({
         selectedProduct: req.params.id,
-      });
+      }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",
@@ -356,7 +356,7 @@ module.exports = {
   updateIssueKit: async (req, res) => {
     try {
       const id = req?.body?.process;
-      const process = await ProcessModel.findById(req.body.process);
+      const process = await ProcessModel.findById(req.body.process).lean();
       if (!process) {
         return res.status(404).json({ status: 404, message: "Process not found" });
       }
@@ -430,7 +430,7 @@ module.exports = {
 
 const calculateOverallInventoryAccuracy = async (physicalCounts) => {
   try {
-    const inventories = await InventoryModel.find();
+    const inventories = await InventoryModel.find().lean();
     if (inventories.length === 0) {
 
       return 0;

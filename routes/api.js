@@ -42,11 +42,25 @@ const { submitDeduplicationMiddleware } = require('../middleware/requestDeduplic
 const { createRequestTimeoutMiddleware } = require('../middleware/requestTimeout');
 connectDB();
 
-/** Parses multipart fields for device PATCH/POST routes that may send FormData (e.g. TRC resolve + photo). */
-const deviceMultipartParser = multer({
+/** Parses multipart/form-data for API routes that receive FormData from the frontend. */
+const formDataParser = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
+}).any();
+
+const MULTIPART_SKIP_PREFIXES = ["/upload-image/", "/upload-cover-image/"];
+
+router.use((req, res, next) => {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return next();
+  }
+  if (MULTIPART_SKIP_PREFIXES.some((prefix) => req.path.startsWith(prefix))) {
+    return next();
+  }
+  return formDataParser(req, res, next);
 });
+
 router.get('/items', authController.getItems);
 router.get('/product/view', authController.authenticateToken, authController.authorize("View Product", "read"), productController.view);
 router.get('/product/get/:id', authController.authenticateToken, authController.authorize("View Product", "read"), productController.getProductByID);
@@ -118,6 +132,7 @@ router.delete('/planing/delete/:id', authController.authenticateToken, authContr
 router.post('/planing/delete/multiple', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.deletePlaningMultiple);
 router.get('/planingAndScheduling/get/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByID);
 router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlanInsights);
+router.get('/planingAndScheduling/testing-analytics/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getSeatStageTestingAnalytics);
 router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getProcessInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "update"), planningAndSchedulingController.update);
@@ -200,14 +215,13 @@ router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticate
 router.patch(
   '/updateStageByDeviceId/:deviceId',
   authController.authenticateToken,
-  deviceMultipartParser.any(),
   authController.authorizeUpdateStageByDeviceId,
   deviceController.updateStageByDeviceId
 );
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
-router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceMultipartParser.any(), deviceController.markAsResolved);
+router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.getDeviceComprehensiveHistory);
 router.post('/createReport', authController.authenticateToken, reportController.create);

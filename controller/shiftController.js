@@ -16,7 +16,7 @@ module.exports = {
       }
 
       // Check for existing shift with the same timeline
-      const existingShift = await ShiftModel.findOne({ startTime, endTime });
+      const existingShift = await ShiftModel.findOne({ startTime, endTime }).lean();
       if (existingShift) {
         return res.status(400).json({
           status: 400,
@@ -51,7 +51,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const Shifts = await ShiftModel.find().sort({ _id: -1 });
+      const Shifts = await ShiftModel.find().sort({ _id: -1 }).lean();
 
       return res.status(200).json({
         status: 200,
@@ -139,7 +139,7 @@ module.exports = {
         startTime,
         endTime,
         _id: { $ne: id }
-      });
+      }).lean();
       if (existingShift) {
         return res.status(400).json({
           status: 400,
