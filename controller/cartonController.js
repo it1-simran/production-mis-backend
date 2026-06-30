@@ -1386,13 +1386,11 @@ module.exports = {
               {
                 $project: {
                   _id: 1,
-                  deviceId: 1,
-                  imei: 1,
+                  serialNo: 1,
+                  imeiNo: 1,
                   ccid: 1,
-                  itemStatus: 1,
-                  stage: 1,
-                  substage: 1,
-                  reworkCount: 1,
+                  currentStage: 1,
+                  status: 1,
                 }
               }
             ]
@@ -1490,13 +1488,11 @@ module.exports = {
               {
                 $project: {
                   _id: 1,
-                  deviceId: 1,
-                  imei: 1,
+                  serialNo: 1,
+                  imeiNo: 1,
                   ccid: 1,
-                  itemStatus: 1,
-                  stage: 1,
-                  substage: 1,
-                  reworkCount: 1,
+                  currentStage: 1,
+                  status: 1,
                 }
               }
             ]
@@ -1608,13 +1604,11 @@ module.exports = {
               {
                 $project: {
                   _id: 1,
-                  deviceId: 1,
-                  imei: 1,
+                  serialNo: 1,
+                  imeiNo: 1,
                   ccid: 1,
-                  itemStatus: 1,
-                  stage: 1,
-                  substage: 1,
-                  reworkCount: 1,
+                  currentStage: 1,
+                  status: 1,
                 }
               }
             ]
