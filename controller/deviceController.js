@@ -17,6 +17,8 @@ const {
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
 } = require("../services/deviceScanMatcher");
+const { getCachedProcess } = require("../utils/cacheManager");
+const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -1025,7 +1027,7 @@ module.exports = {
 
       const processStart = Date.now();
       const processPromise = requestedProcessId && mongoose.Types.ObjectId.isValid(requestedProcessId)
-        ? processModel.findById(requestedProcessId).select("stages commonStages").lean().then((result) => {
+        ? getCachedProcess(requestedProcessId, "stages commonStages").then((result) => {
             markTiming("processLoadMs", processStart);
             return result;
           })
@@ -1055,7 +1057,7 @@ module.exports = {
       const resolvedProcessId = normalizeText(planing?.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
       if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
         const fallbackProcessStart = Date.now();
-        products = await processModel.findById(resolvedProcessId).select("stages commonStages").lean();
+        products = await getCachedProcess(resolvedProcessId, "stages commonStages");
         markTiming("fallbackProcessLoadMs", fallbackProcessStart);
       }
       
@@ -1198,6 +1200,7 @@ module.exports = {
           stageName: data.stageName || data.currentLogicalStage || "",
           branch: "qc-trc-direct",
         });
+        invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
         return res.status(200).json({
           status: 200,
           message: actionMeta.message,
@@ -1239,8 +1242,15 @@ module.exports = {
       data.currentLogicalStage = currentStageName;
       data.currentSeatKey = currentSeatKey;
 
-      const eligibilityStart = Date.now();
-      const eligibility = await resolvePreviousStageEligibility({
+      const parallelSeats = getParallelSeatEntries({
+        assignedStages: normalizedAssignedStages,
+        stageName: currentStageName,
+        lineIndex: currentSeatStage?.lineIndex,
+        parallelGroupKey: currentSeatStage?.parallelGroupKey,
+      });
+
+      const preTransactionStart = Date.now();
+      const eligibilityPromise = resolvePreviousStageEligibility({
         processStages: [...(products?.stages || []), ...(products?.commonStages || [])],
         currentStageName,
         serialNo: data.serialNo,
@@ -1248,7 +1258,47 @@ module.exports = {
         planId: data.planId,
         processId: resolvedProcessId,
       });
-      markTiming("eligibilityMs", eligibilityStart);
+
+      const seatConflictPromise = parallelSeats.length > 1
+        ? (() => {
+            const latestRecordQuery = { serialNo: data.serialNo };
+            if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
+              latestRecordQuery.planId = new mongoose.Types.ObjectId(data.planId);
+            }
+            if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
+              latestRecordQuery.processId = new mongoose.Types.ObjectId(resolvedProcessId);
+            }
+            return deviceTestRecords
+              .findOne(latestRecordQuery)
+              .sort({ createdAt: -1 })
+              .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
+              .lean();
+          })()
+        : Promise.resolve(null);
+
+      const duplicatePromise = shouldUpdateDevice && (deviceUpdatePayload.imeiNo || deviceUpdatePayload.ccid)
+        ? (() => {
+            const conflictQuery = { _id: { $ne: deviceSnapshot._id } };
+            const conflictConditions = [];
+            if (deviceUpdatePayload.imeiNo) conflictConditions.push({ imeiNo: deviceUpdatePayload.imeiNo });
+            if (deviceUpdatePayload.ccid) conflictConditions.push({ ccid: deviceUpdatePayload.ccid });
+            if (conflictConditions.length === 0) return Promise.resolve(null);
+            conflictQuery.$or = conflictConditions;
+            return deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
+          })()
+        : Promise.resolve(null);
+
+      const [eligibility, latestSeatRecord, duplicate] = await Promise.all([
+        eligibilityPromise,
+        seatConflictPromise,
+        duplicatePromise,
+      ]);
+      markTiming("preTransactionReadsMs", preTransactionStart);
+      markTiming("eligibilityMs", preTransactionStart);
+      if (parallelSeats.length > 1) {
+        markTiming("seatConflictMs", preTransactionStart);
+      }
+
       if (!eligibility.isEligible) {
         return res.status(409).json({
           status: 409,
@@ -1256,28 +1306,7 @@ module.exports = {
         });
       }
 
-      const parallelSeats = getParallelSeatEntries({
-        assignedStages: normalizedAssignedStages,
-        stageName: currentStageName,
-        lineIndex: currentSeatStage?.lineIndex,
-        parallelGroupKey: currentSeatStage?.parallelGroupKey,
-      });
       if (parallelSeats.length > 1) {
-        const seatConflictStart = Date.now();
-        const latestRecordQuery = { serialNo: data.serialNo };
-        if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
-          latestRecordQuery.planId = new mongoose.Types.ObjectId(data.planId);
-        }
-        if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
-          latestRecordQuery.processId = new mongoose.Types.ObjectId(resolvedProcessId);
-        }
-        const latestSeatRecord = await deviceTestRecords
-          .findOne(latestRecordQuery)
-          .sort({ createdAt: -1 })
-          .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
-          .lean();
-        markTiming("seatConflictMs", seatConflictStart);
-
         const claimedSeatKey = getClaimedSeatKey(latestSeatRecord, currentStageName);
         if (claimedSeatKey && claimedSeatKey !== currentSeatKey) {
           return res.status(409).json({
@@ -1286,6 +1315,20 @@ module.exports = {
             conflictSeatKey: claimedSeatKey,
           });
         }
+      }
+
+      if (duplicate) {
+        let conflictMsg = "Data Integrity Error: ";
+        if (duplicate.imeiNo === deviceUpdatePayload.imeiNo) {
+          conflictMsg += `IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}. `;
+        }
+        if (duplicate.ccid === deviceUpdatePayload.ccid) {
+          conflictMsg += `CCID ${deviceUpdatePayload.ccid} is already linked to device ${duplicate.serialNo}. `;
+        }
+        return res.status(409).json({
+          status: 409,
+          message: conflictMsg.trim(),
+        });
       }
 
       let nextSeatRouting = {
@@ -1489,31 +1532,7 @@ module.exports = {
         shouldUpdateDevice = true;
       }
 
-      // 4. Strict Uniqueness Validation for IMEI and CCID (Critical Data Integrity Check)
-      if (shouldUpdateDevice && (deviceUpdatePayload.imeiNo || deviceUpdatePayload.ccid)) {
-        const conflictQuery = { _id: { $ne: deviceSnapshot._id } };
-        const conflictConditions = [];
-        if (deviceUpdatePayload.imeiNo) conflictConditions.push({ imeiNo: deviceUpdatePayload.imeiNo });
-        if (deviceUpdatePayload.ccid) conflictConditions.push({ ccid: deviceUpdatePayload.ccid });
-
-        if (conflictConditions.length > 0) {
-          conflictQuery.$or = conflictConditions;
-          const duplicate = await deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
-          if (duplicate) {
-            let conflictMsg = "Data Integrity Error: ";
-            if (duplicate.imeiNo === deviceUpdatePayload.imeiNo) {
-              conflictMsg += `IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}. `;
-            }
-            if (duplicate.ccid === deviceUpdatePayload.ccid) {
-              conflictMsg += `CCID ${deviceUpdatePayload.ccid} is already linked to device ${duplicate.serialNo}. `;
-            }
-            return res.status(409).json({
-              status: 409,
-              message: conflictMsg.trim(),
-            });
-          }
-        }
-      }
+      // 4. Strict Uniqueness Validation for IMEI and CCID (handled in parallel pre-check above)
 
       let savedDeviceTestRecord = null;
       const writeSession = await mongoose.startSession();
@@ -1595,6 +1614,8 @@ module.exports = {
         stageName: currentStageName,
         branch: "seat-stage",
       });
+
+      invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
 
       return res.status(200).json({
         status: 200,

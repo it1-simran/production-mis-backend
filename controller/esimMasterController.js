@@ -5,6 +5,16 @@ const EsimApn = require("../models/EsimApn");
 
 const ESIM_MASTER_SELECT = "ccid esimMake profile1 profile2 apnProfile1 apnProfile2 remarks isEditable createdAt updatedAt";
 
+const shouldLogEsimCcidTimings = String(process.env.LOG_ESIM_CCID_TIMINGS || "").toLowerCase() === "true";
+const logEsimCcidTimings = (timings = {}, meta = {}) => {
+  if (!shouldLogEsimCcidTimings) return;
+  try {
+    console.info("[esim-ccid-timing]", JSON.stringify({ ...meta, ...timings }));
+  } catch (error) {
+    console.info("[esim-ccid-timing]", { ...meta, ...timings });
+  }
+};
+
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const parsePositiveInt = (value, fallback, max = 250) => {
   const parsed = Number.parseInt(value, 10);
@@ -213,23 +223,46 @@ module.exports = {
   },
 
   getByCcid: async (req, res) => {
+    const startedAt = Date.now();
+    let masterLookupMs = 0;
+    let refLookupMs = 0;
+
     try {
       const { ccid } = req.params;
+      const masterStartedAt = Date.now();
       const result = await EsimMaster.findOne({ ccid: ccid.trim() }).lean();
+      masterLookupMs = Date.now() - masterStartedAt;
+
       if (!result) {
+        logEsimCcidTimings(
+          { totalMs: Date.now() - startedAt, masterLookupMs, outcome: "not_found" },
+          { ccid: ccid.trim() },
+        );
         return res.status(404).json({ status: 404, message: "ESIM Master not found for this CCID" });
       }
 
+      const refLookupStartedAt = Date.now();
       const [makeData, p1Data, p2Data] = await Promise.all([
         EsimMake.findOne({ name: result.esimMake }).lean(),
         EsimProfile.findOne({ name: { $in: [result.profile1] } }).lean(),
         EsimProfile.findOne({ name: { $in: [result.profile2] } }).lean(),
       ]);
+      refLookupMs = Date.now() - refLookupStartedAt;
 
       const finalData = { ...result };
       finalData.esimMakeId = makeData ? makeData.simId : result.esimMake;
       finalData.profile1Id = p1Data ? p1Data.profileId : result.profile1;
       finalData.profile2Id = p2Data ? p2Data.profileId : result.profile2;
+
+      logEsimCcidTimings(
+        {
+          totalMs: Date.now() - startedAt,
+          masterLookupMs,
+          refLookupMs,
+          outcome: "success",
+        },
+        { ccid: ccid.trim() },
+      );
 
       return res.status(200).json({
         status: 200,
@@ -237,6 +270,15 @@ module.exports = {
         data: finalData,
       });
     } catch (error) {
+      logEsimCcidTimings(
+        {
+          totalMs: Date.now() - startedAt,
+          masterLookupMs,
+          refLookupMs,
+          outcome: "error",
+        },
+        { ccid: req.params?.ccid },
+      );
       console.error("Error in ESIM Master getByCcid:", error);
       return res.status(500).json({
         status: 500,

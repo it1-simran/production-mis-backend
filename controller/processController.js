@@ -9,6 +9,7 @@ const AssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
+const { invalidateProcessCache } = require("../utils/cacheManager");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -467,6 +468,8 @@ module.exports = {
       } catch (cleanupError) {
         console.error("Error during surgical cloning cleanup:", cleanupError);
       }
+
+      invalidateProcessCache(id);
 
       return res.status(200).json({
         status: 200,

@@ -33,5 +33,7 @@ Thumbs.db
 routes.zip
 dist/
 coverage/
+scripts/k6.env
+scripts/k6-payload.json
 
 package-lock.json

@@ -1382,24 +1382,23 @@ module.exports = {
             localField: "devices",
             foreignField: "_id",
             as: "devices",
+            pipeline: [
+              {
+                $project: {
+                  _id: 1,
+                  deviceId: 1,
+                  imei: 1,
+                  ccid: 1,
+                  itemStatus: 1,
+                  stage: 1,
+                  substage: 1,
+                  reworkCount: 1,
+                }
+              }
+            ]
           },
         },
         { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
-        {
-          $lookup: {
-            from: "devicetestrecords",
-            localField: "devices._id",
-            foreignField: "deviceId",
-            as: "deviceTestRecords",
-          },
-        },
-
-        // ✅ Merge testRecords into devices
-        {
-          $addFields: {
-            "devices.testRecords": "$deviceTestRecords",
-          },
-        },
 
         // 🌀 Group back to carton level
         {
@@ -1487,22 +1486,23 @@ module.exports = {
             localField: "devices",
             foreignField: "_id",
             as: "devices",
+            pipeline: [
+              {
+                $project: {
+                  _id: 1,
+                  deviceId: 1,
+                  imei: 1,
+                  ccid: 1,
+                  itemStatus: 1,
+                  stage: 1,
+                  substage: 1,
+                  reworkCount: 1,
+                }
+              }
+            ]
           },
         },
         { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
-        {
-          $lookup: {
-            from: "devicetestrecords",
-            localField: "devices._id",
-            foreignField: "deviceId",
-            as: "deviceTestRecords",
-          },
-        },
-        {
-          $addFields: {
-            "devices.testRecords": "$deviceTestRecords",
-          },
-        },
         {
           $group: {
             _id: "$_id",
@@ -1597,28 +1597,30 @@ module.exports = {
             normalizedCartonStatus: "PDI",
           },
         },
+        { $limit: 500 },
         {
           $lookup: {
             from: "devices",
             localField: "devices",
             foreignField: "_id",
             as: "devices",
+            pipeline: [
+              {
+                $project: {
+                  _id: 1,
+                  deviceId: 1,
+                  imei: 1,
+                  ccid: 1,
+                  itemStatus: 1,
+                  stage: 1,
+                  substage: 1,
+                  reworkCount: 1,
+                }
+              }
+            ]
           },
         },
         { $unwind: { path: "$devices", preserveNullAndEmptyArrays: true } },
-        {
-          $lookup: {
-            from: "devicetestrecords",
-            localField: "devices._id",
-            foreignField: "deviceId",
-            as: "deviceTestRecords",
-          },
-        },
-        {
-          $addFields: {
-            "devices.testRecords": "$deviceTestRecords",
-          },
-        },
         {
           $group: {
             _id: "$_id",

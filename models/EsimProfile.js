@@ -9,4 +9,6 @@ const esimProfileSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now },
 });
 
+esimProfileSchema.index({ name: 1 });
+
 module.exports = mongoose.model("EsimProfile", esimProfileSchema);

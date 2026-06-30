@@ -25,6 +25,11 @@ const connectDB = async () => {
         ensureDnsResolvers();
         await mongoose.connect(process.env.MONGODB_URI, {
             autoIndex: true,
+            maxPoolSize: 50,
+            minPoolSize: 5,
+            maxIdleTimeMS: 30000,
+            socketTimeoutMS: 45000,
+            serverSelectionTimeoutMS: 10000,
         });
         console.log('Connected !!');
     } catch (err) {
