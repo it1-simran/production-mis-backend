@@ -418,6 +418,7 @@ const findOvertimeConflict = async ({ planId, selectedRoom, selectedShift, from,
 
   const plans = await PlaningAndSchedulingModel.find(query)
     .select("_id processName selectedProcess startDate estimatedEndDate totalTimeEstimation status")
+    .limit(500)
     .lean();
 
   for (const candidate of plans) {
@@ -650,7 +651,8 @@ module.exports = {
             },
           },
         },
-        { $sort: { _id: -1 } }
+        { $sort: { _id: -1 } },
+        { $limit: 500 }
       ]);
       return res.status(200).json({
         status: 200,
@@ -1344,6 +1346,7 @@ module.exports = {
       const attemptContextRecords = await DeviceTestRecordModel.find(baseMatch)
         .populate("operatorId", "name employeeCode")
         .sort({ createdAt: -1 })
+        .limit(5000)
         .lean();
 
       const match = { ...baseMatch };
@@ -1358,6 +1361,7 @@ module.exports = {
           ? await DeviceTestRecordModel.find(match)
               .populate("operatorId", "name employeeCode")
               .sort({ createdAt: -1 })
+              .limit(5000)
               .lean()
           : attemptContextRecords;
 

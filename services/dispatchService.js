@@ -186,6 +186,7 @@ class DispatchService {
 
     const cartons = await cartonModel
       .find(query)
+      .limit(1000)
       .populate({ path: "processId", select: "name processID orderConfirmationNo" })
       .populate({ path: "devices", select: "serialNo imeiNo modelName currentStage dispatchStatus cartonSerial" })
       .sort({ updatedAt: -1, createdAt: -1 })

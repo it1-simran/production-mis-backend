@@ -720,6 +720,7 @@ module.exports = {
           serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` },
         })
         .sort({ createdAt: -1 })
+        .lean()
         .exec();
       return res.status(200).json({
         status: 200,
@@ -821,6 +822,7 @@ module.exports = {
         .populate("deviceId")
         .populate("processId")
         .sort({ _id: -1 })
+        .lean()
         .lean();
 
       return res.status(200).json({
@@ -881,7 +883,7 @@ module.exports = {
           },
         },
         { $sort: { _id: -1 } }
-      ]);
+      ]).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "IMEI Fetched Sucessfully!!",
@@ -950,22 +952,23 @@ module.exports = {
       const terminalDevicesInProcess = await deviceTestRecords.aggregate([
         { $match: { productId: new mongoose.Types.ObjectId(id) } },
         { $sort: { createdAt: -1 } },
-        { 
-          $group: { 
-            _id: "$deviceId", 
+        { $limit: 1000 },
+        {
+          $group: {
+            _id: "$deviceId",
             latestStatus: { $first: "$status" },
             latestAssignedTo: { $first: "$assignedDeviceTo" }
-          } 
+          }
         },
-        { 
-          $match: { 
+        {
+          $match: {
             $or: [
               { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
               { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
             ]
-          } 
+          }
         }
-      ]);
+      ]).lean();
 
       const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
 
@@ -973,7 +976,7 @@ module.exports = {
         productType: new mongoose.Types.ObjectId(id),
         status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
         _id: { $nin: excludedIds }
-      }).sort({ _id: -1 }).lean();
+      }).sort({ _id: -1 }).lean().lean();
       
       if (devices.length === 0) {
         return res.status(404).json({
@@ -1020,6 +1023,7 @@ module.exports = {
         .findById(data.planId)
         .select("selectedProcess assignedStages assignedOperators assignedCustomStagesOp consumedKit")
         .lean()
+        .lean()
         .then((result) => {
           markTiming("planLoadMs", planStart);
           return result;
@@ -1038,12 +1042,12 @@ module.exports = {
 
       const deviceLookupStart = Date.now();
       const devicePromise = data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)
-        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().then((result) => {
+        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().lean().then((result) => {
             markTiming("deviceLookupMs", deviceLookupStart);
             return result;
           })
         : serialNo
-          ? deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().then((result) => {
+          ? deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().lean().then((result) => {
               markTiming("deviceLookupMs", deviceLookupStart);
               return result;
             })
@@ -1070,7 +1074,7 @@ module.exports = {
 
       if (!deviceSnapshot && serialNo) {
         const fallbackDeviceStart = Date.now();
-        deviceSnapshot = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean();
+        deviceSnapshot = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().lean();
         markTiming("fallbackDeviceLookupMs", fallbackDeviceStart);
       }
       if (!deviceSnapshot?._id) {
@@ -1272,6 +1276,7 @@ module.exports = {
               .findOne(latestRecordQuery)
               .sort({ createdAt: -1 })
               .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
+              .lean()
               .lean();
           })()
         : Promise.resolve(null);
@@ -1284,7 +1289,7 @@ module.exports = {
             if (deviceUpdatePayload.ccid) conflictConditions.push({ ccid: deviceUpdatePayload.ccid });
             if (conflictConditions.length === 0) return Promise.resolve(null);
             conflictQuery.$or = conflictConditions;
-            return deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean();
+            return deviceModel.findOne(conflictQuery).select("serialNo imeiNo ccid").lean().lean();
           })()
         : Promise.resolve(null);
 
@@ -1650,7 +1655,7 @@ module.exports = {
       if (!resolvedDeviceId && serialNo) {
         const query = { serialNo: String(serialNo).trim() };
         if (processId) query.processID = processId;
-        const device = await deviceModel.findOne(query).lean();
+        const device = await deviceModel.findOne(query).lean().lean();
         if (!device?._id) {
           return res.status(404).json({
             status: 404,
@@ -1672,9 +1677,9 @@ module.exports = {
         try {
           let deviceDoc = null;
           if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) {
-            deviceDoc = await deviceModel.findById(deviceId).select("currentStage").lean();
+            deviceDoc = await deviceModel.findById(deviceId).select("currentStage").lean().lean();
           } else if (serialNo) {
-            deviceDoc = await deviceModel.findOne({ serialNo }).select("currentStage").lean();
+            deviceDoc = await deviceModel.findOne({ serialNo }).select("currentStage").lean().lean();
           }
           resolvedStageName = String(deviceDoc?.currentStage || "").trim();
         } catch (e) {
@@ -1786,6 +1791,7 @@ module.exports = {
           .find(statusFilter, projection, { sort: { createdAt: -1 } })
           .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
           .populate({ path: "processId", select: "name processName" })
+          .lean()
           .lean();
       }
       return res.status(200).json({
@@ -1841,6 +1847,7 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
+        .lean()
         .lean();
 
       if (deviceTestRecord.length === 0) {
@@ -1880,6 +1887,7 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
+        .lean()
         .lean();
 
 
@@ -1919,6 +1927,7 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
+        .lean()
         .lean();
 
       if (devices.length === 0) {
@@ -2628,6 +2637,7 @@ module.exports = {
         .populate("productId", "name")
         .populate("planId", "processName")
         .sort({ createdAt: -1 })
+        .limit(1000)
         .lean();
 
       if (deviceTestRecord.length === 0) {

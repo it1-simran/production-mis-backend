@@ -1061,6 +1061,7 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const pipeline = [
     { $match: match },
     { $sort: { createdAt: -1 } },
+    { $limit: 5000 },
     {
       $project: {
         _id: 1,
@@ -1110,7 +1111,7 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
     { $project: { normalizedStageName: 0, deviceKey: 0 } },
   ];
 
-  return deviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
+  return deviceTestRecordModel.aggregate(pipeline);
 };
 
 const getTodayRange = () => {
