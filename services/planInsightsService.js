@@ -486,6 +486,7 @@ const sortSeatStageRows = (rows = [], orderMap = new Map()) =>
 const buildLatestRecordPipeline = (match = {}) => [
   { $match: match },
   { $sort: { createdAt: -1 } },
+  { $limit: 5000 },
   {
     $project: {
       _id: 1,
@@ -596,8 +597,7 @@ const getTodayLatestTestedCount = async ({ planId = "", processId = "" }) => {
   }
 
   const rows = await deviceTestRecordModel
-    .aggregate(buildLatestRecordPipeline(match))
-    .allowDiskUse(true);
+    .aggregate(buildLatestRecordPipeline(match));
   return Array.isArray(rows)
     ? rows.filter((row) => isCountableStatus(row?.status)).length
     : 0;
@@ -627,7 +627,7 @@ const countInclusiveCalendarDays = (dateFrom = "", dateTo = "") => {
   return Math.max(end.diff(start, "days") + 1, 1);
 };
 
-const computePlanInsights = async ({
+const computePlanInsightsUncached = async ({
   planId = "",
   processId = "",
   operatorId = "",
@@ -683,8 +683,7 @@ const computePlanInsights = async ({
     latestMatch.planId = new mongoose.Types.ObjectId(String(planId));
   }
   const latestRecords = await deviceTestRecordModel
-    .aggregate(buildLatestRecordPipeline(latestMatch))
-    .allowDiskUse(true);
+    .aggregate(buildLatestRecordPipeline(latestMatch));
 
   const byStageMap = new Map();
   const bySeatStageMap = new Map();
@@ -889,20 +888,21 @@ const computePlanInsights = async ({
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
-    { 
-      $group: { 
-        _id: "$deviceId", 
+    { $limit: 2000 },
+    {
+      $group: {
+        _id: "$deviceId",
         latestStatus: { $first: "$status" },
         latestAssignedTo: { $first: "$assignedDeviceTo" }
-      } 
+      }
     },
-    { 
-      $match: { 
+    {
+      $match: {
         $or: [
           { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
           { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
         ]
-      } 
+      }
     }
   ]);
 
@@ -1072,6 +1072,53 @@ const computePlanInsights = async ({
   };
 };
 
+// Every open operator seat polls computePlanInsights every ~10-30s. The heavy
+// aggregation work above is identical for every operator on the same
+// plan/process within a short window, so we collapse concurrent/near-concurrent
+// calls into a single computation and only recompute the cheap per-operator
+// fields (operatorToday, lineIssueKits, kitsShortage) on every call.
+const SHARED_PLAN_INSIGHTS_CACHE_TTL_MS = 12000;
+const sharedPlanInsightsCache = new Map();
+
+const computePlanInsights = async (params) => {
+  const { planId = "", processId = "", operatorId = "", issuedKits = 0 } = params || {};
+
+  if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) {
+    return computePlanInsightsUncached(params);
+  }
+
+  const cacheKey = [planId, processId, params.dateFrom || "", params.dateTo || ""].join("|");
+  const now = Date.now();
+  const cached = sharedPlanInsightsCache.get(cacheKey);
+
+  let basePromise;
+  if (cached && cached.expiresAt > now) {
+    basePromise = cached.promise;
+  } else {
+    basePromise = computePlanInsightsUncached(params);
+    basePromise.catch(() => sharedPlanInsightsCache.delete(cacheKey));
+    sharedPlanInsightsCache.set(cacheKey, { expiresAt: now + SHARED_PLAN_INSIGHTS_CACHE_TTL_MS, promise: basePromise });
+  }
+
+  const base = await basePromise;
+  const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
+
+  const totalsBase = base.totals || {};
+  const producedTotal = Number(totalsBase.pass || 0) + Number(totalsBase.ng || 0) + Number(totalsBase.wip || 0);
+  const lineIssueKitsCount = Number(issuedKits) || producedTotal;
+  const kitsShortageCount = Math.max(0, lineIssueKitsCount - producedTotal);
+
+  return {
+    ...base,
+    totals: {
+      ...totalsBase,
+      lineIssueKits: lineIssueKitsCount,
+      kitsShortage: kitsShortageCount,
+      operatorToday,
+    },
+  };
+};
+
 const computeProcessInsights = async ({
   processId = "",
   processStages = [],
@@ -1092,8 +1139,7 @@ const computeProcessInsights = async ({
 
   const latestMatch = { processId: new mongoose.Types.ObjectId(String(processId)) };
   const latestRecords = await deviceTestRecordModel
-    .aggregate(buildLatestRecordPipeline(latestMatch))
-    .allowDiskUse(true);
+    .aggregate(buildLatestRecordPipeline(latestMatch));
 
   const byStageMap = new Map();
   const upsertStage = (stageName) => {
@@ -1112,20 +1158,21 @@ const computeProcessInsights = async ({
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
-    { 
-      $group: { 
-        _id: "$deviceId", 
+    { $limit: 2000 },
+    {
+      $group: {
+        _id: "$deviceId",
         latestStatus: { $first: "$status" },
         latestAssignedTo: { $first: "$assignedDeviceTo" }
-      } 
+      }
     },
-    { 
-      $match: { 
+    {
+      $match: {
         $or: [
           { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
           { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
         ]
-      } 
+      }
     }
   ]);
 
