@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { cachedCompute } = require("../utils/ttlCache");
 const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl");
 const ProcessModel = require("../models/process");
 const ProcessLogModel = require("../models/ProcessLogs");
@@ -964,42 +965,47 @@ module.exports = {
         },
       ];
 
-      const latestRecords =
-        await DeviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
-      const stageSummary = {};
-      const seatStageSummary = {};
+      // Polled every ~30s by the operator, viewPlaning and process-details pages. The result is
+      // identical for the same plan/process within a short window, so collapse concurrent/repeat
+      // calls into a single aggregation via a short-lived cache.
+      const cacheKey = `latestTests:${planId}:${processId || "all"}`;
+      const payload = await cachedCompute(cacheKey, 10000, async () => {
+        const latestRecords =
+          await DeviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
+        const stageSummary = {};
+        const seatStageSummary = {};
 
-      latestRecords.forEach((record) => {
-        const stageName = String(record?.stageName || "").trim();
-        if (!stageName) return;
-        const status = String(record?.status || "").toUpperCase();
-        if (!stageSummary[stageName]) {
-          stageSummary[stageName] = { pass: 0, ng: 0, total: 0 };
-        }
-        if (status === "PASS" || status === "COMPLETED")
-          stageSummary[stageName].pass += 1;
-        if (status === "NG" || status === "FAIL")
-          stageSummary[stageName].ng += 1;
-        stageSummary[stageName].total += 1;
-
-        const seatKey = String(record?.seatNumber || "").trim();
-        if (seatKey) {
-          const key = `${seatKey}:${stageName}`;
-          if (!seatStageSummary[key])
-            seatStageSummary[key] = { pass: 0, ng: 0 };
+        latestRecords.forEach((record) => {
+          const stageName = String(record?.stageName || "").trim();
+          if (!stageName) return;
+          const status = String(record?.status || "").toUpperCase();
+          if (!stageSummary[stageName]) {
+            stageSummary[stageName] = { pass: 0, ng: 0, total: 0 };
+          }
           if (status === "PASS" || status === "COMPLETED")
-            seatStageSummary[key].pass += 1;
+            stageSummary[stageName].pass += 1;
           if (status === "NG" || status === "FAIL")
-            seatStageSummary[key].ng += 1;
-        }
+            stageSummary[stageName].ng += 1;
+          stageSummary[stageName].total += 1;
+
+          const seatKey = String(record?.seatNumber || "").trim();
+          if (seatKey) {
+            const key = `${seatKey}:${stageName}`;
+            if (!seatStageSummary[key])
+              seatStageSummary[key] = { pass: 0, ng: 0 };
+            if (status === "PASS" || status === "COMPLETED")
+              seatStageSummary[key].pass += 1;
+            if (status === "NG" || status === "FAIL")
+              seatStageSummary[key].ng += 1;
+          }
+        });
+        return { deviceTestRecords: latestRecords, stageSummary, seatStageSummary };
       });
 
       return res.status(200).json({
         status: 200,
         message: "Latest device tests fetched successfully",
-        deviceTestRecords: latestRecords,
-        stageSummary,
-        seatStageSummary,
+        ...payload,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

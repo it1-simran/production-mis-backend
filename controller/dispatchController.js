@@ -1,4 +1,5 @@
 const DispatchService = require("../services/dispatchService");
+const { cachedCompute } = require("../utils/ttlCache");
 
 const dispatchService = new DispatchService();
 
@@ -12,7 +13,12 @@ const sendError = (res, error, fallbackMessage) =>
 module.exports = {
   getProcessDispatchSummaries: async (req, res) => {
     try {
-      const summaries = await dispatchService.getProcessDispatchSummaries(req.query || {});
+      // Polled by the planning view every ~30s; identical per processId set within a short window.
+      const query = req.query || {};
+      const cacheKey = `dispatchSummary:${query.processIds || "all"}`;
+      const summaries = await cachedCompute(cacheKey, 12000, () =>
+        dispatchService.getProcessDispatchSummaries(query),
+      );
       return res.status(200).json({ success: true, data: summaries });
     } catch (error) {
       return sendError(res, error, "Failed to fetch dispatch summaries.");
