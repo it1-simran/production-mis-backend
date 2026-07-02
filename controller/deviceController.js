@@ -2700,7 +2700,7 @@ module.exports = {
       const devices = await deviceModel.find({
         serialNo: { $in: serials },
         processID: processId,
-      });
+      }).select("_id serialNo").lean();
 
       if (!devices || devices.length === 0) {
         return res.status(404).json({ status: 404, message: "No matching devices found" });
