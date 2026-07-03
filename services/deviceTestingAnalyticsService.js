@@ -1,3 +1,10 @@
+const moment = require("moment-timezone");
+
+// Shift clock times and day keys are plant-local, not server-local. On a UTC
+// server, building them with `new Date(...)`/`getHours()` shifts every window
+// by the plant offset (5.5h for IST).
+const PLANNING_TIMEZONE = process.env.PLANNING_TIMEZONE || "Asia/Kolkata";
+
 const formatDurationHHMMSS = (totalMs) => {
   const ms = Math.max(0, Number(totalMs) || 0);
   const totalSeconds = Math.floor(ms / 1000);
@@ -286,23 +293,19 @@ const statusLabel = (record = {}) => {
 
 const IDLE_THRESHOLD_MS = 5000;
 
-const formatDateKey = (date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-    date.getDate(),
-  ).padStart(2, "0")}`;
+const formatDateKey = (date) => moment(date).tz(PLANNING_TIMEZONE).format("YYYY-MM-DD");
 
 const parseClockOnDate = (dateKey, timeStr) => {
   const [hours = 0, minutes = 0] = String(timeStr || "00:00")
     .split(":")
     .map((part) => Number(part));
-  const date = new Date(`${dateKey}T00:00:00`);
-  date.setHours(
-    Number.isFinite(hours) ? hours : 0,
-    Number.isFinite(minutes) ? minutes : 0,
-    0,
-    0,
-  );
-  return date;
+  return moment
+    .tz(dateKey, "YYYY-MM-DD", PLANNING_TIMEZONE)
+    .hour(Number.isFinite(hours) ? hours : 0)
+    .minute(Number.isFinite(minutes) ? minutes : 0)
+    .second(0)
+    .millisecond(0)
+    .toDate();
 };
 
 const listDateKeysInRange = (from = "", to = "") => {
@@ -311,16 +314,16 @@ const listDateKeysInRange = (from = "", to = "") => {
   if (!fromTrim && !toTrim) {
     return [formatDateKey(new Date())];
   }
-  const start = new Date(`${fromTrim || toTrim}T00:00:00`);
-  const end = new Date(`${toTrim || fromTrim}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+  const start = moment.tz(fromTrim || toTrim, "YYYY-MM-DD", PLANNING_TIMEZONE);
+  const end = moment.tz(toTrim || fromTrim, "YYYY-MM-DD", PLANNING_TIMEZONE);
+  if (!start.isValid() || !end.isValid() || start.isAfter(end)) {
     return [];
   }
   const keys = [];
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    keys.push(formatDateKey(cursor));
-    cursor.setDate(cursor.getDate() + 1);
+  const cursor = start.clone();
+  while (!cursor.isAfter(end)) {
+    keys.push(cursor.format("YYYY-MM-DD"));
+    cursor.add(1, "day");
   }
   return keys;
 };

@@ -290,7 +290,7 @@ module.exports = {
           },
         },
         { $sort: { _id: 1 } },
-      ]);
+      ]).lean();
 
       const movementMap = movement.reduce((acc, row) => {
         acc[row._id] = { kits: row.kits, cartons: row.cartons };
@@ -318,7 +318,7 @@ module.exports = {
           },
         },
         { $sort: { _id: 1 } },
-      ]);
+      ]).lean();
 
       const lowStock = await InventoryModel.find({
         quantity: { $lte: threshold },

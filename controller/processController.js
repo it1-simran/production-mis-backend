@@ -52,6 +52,7 @@ module.exports = {
             "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status dispatchStatus stages commonStages createdAt updatedAt",
           )
           .sort({ updatedAt: -1 })
+          .limit(500)
           .lean();
 
         return res.status(200).json({
@@ -116,7 +117,8 @@ module.exports = {
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
         },
-        { $sort: { _id: -1 } }
+        { $sort: { _id: -1 } },
+        { $limit: 500 }
       ]);
       return res.status(200).json({
         status: 200,
@@ -321,11 +323,14 @@ module.exports = {
         return res.status(404).json({ message: "Process not found" });
       }
 
-      let newStages = JSON.parse(data?.stages || "[]");
-      let newCommonStages = JSON.parse(data?.commonStages || "[]");
+      // Determine if this is a cloning operation (stages/commonStages explicitly provided)
+      const isCloning = data?.isCloning === "true" || (data?.stages && data?.commonStages);
+
+      let newStages = isCloning ? JSON.parse(data?.stages || "[]") : oldProcess.stages;
+      let newCommonStages = isCloning ? JSON.parse(data?.commonStages || "[]") : oldProcess.commonStages;
 
       // Preserving operator/jig assignments for existing stages during cloning if they match by name
-      if (data?.isCloning === "true") {
+      if (isCloning && (data?.stages || data?.commonStages)) {
         newStages = newStages.map((ns) => {
           const matchingOld = oldProcess.stages.find(
             (os) => os.stageName === ns.stageName,

@@ -17,6 +17,7 @@ const {
   computeProcessInsights,
   computeOperatorActivityTimestamps,
   normalizeAssignedStagesPayload,
+  getPlanningDayRange,
 } = require("../services/planInsightsService");
 const {
   buildTestingAnalytics,
@@ -25,6 +26,9 @@ const {
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
+// Newest-first scan cap for testing analytics; the old 5000 cap silently
+// dropped older stage records on large plans (2000 devices × 12 stages ≈ 24k).
+const ANALYTICS_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 50000;
 
 const toObjectId = (id) => {
   if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
@@ -418,6 +422,7 @@ const findOvertimeConflict = async ({ planId, selectedRoom, selectedShift, from,
 
   const plans = await PlaningAndSchedulingModel.find(query)
     .select("_id processName selectedProcess startDate estimatedEndDate totalTimeEstimation status")
+    .limit(500)
     .lean();
 
   for (const candidate of plans) {
@@ -650,7 +655,8 @@ module.exports = {
             },
           },
         },
-        { $sort: { _id: -1 } }
+        { $sort: { _id: -1 } },
+        { $limit: 500 }
       ]);
       return res.status(200).json({
         status: 200,
@@ -1009,6 +1015,9 @@ module.exports = {
   getPlaningAnDschedulingByID: async (req, res) => {
     try {
       const id = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(String(id || ""))) {
+        return res.status(400).json({ status: 400, message: "Invalid plan id" });
+      }
       const PlaningAndScheduling = await PlaningAndSchedulingModel.aggregate([
         {
           $match: { _id: new mongoose.Types.ObjectId(id) },
@@ -1195,9 +1204,7 @@ module.exports = {
       return res.status(200).json(currentPlan);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
-      return res
-        .status(500)
-        .json({ message: "Server error", error: error.message });
+      return res.status(500).json({ message: "Server error" });
     }
   },
   getPlaningAnDschedulingByProcessId: async (req, res) => {
@@ -1213,9 +1220,7 @@ module.exports = {
       return res.status(200).json(PlaningAndScheduling[0]);
     } catch (error) {
       console.error("Error Fetching Planing And Scheduling :", error);
-      return res
-        .status(500)
-        .json({ message: "Server error", error: error.message });
+      return res.status(500).json({ message: "Server error" });
     }
   },
   getPlanInsights: async (req, res) => {
@@ -1306,10 +1311,10 @@ module.exports = {
         data: insights,
       });
     } catch (error) {
+      console.error("Error fetching plan insights:", error);
       return res.status(500).json({
         status: 500,
         message: "Failed to fetch plan insights",
-        error: error.message,
       });
     }
   },
@@ -1344,13 +1349,17 @@ module.exports = {
       const attemptContextRecords = await DeviceTestRecordModel.find(baseMatch)
         .populate("operatorId", "name employeeCode")
         .sort({ createdAt: -1 })
+        .limit(ANALYTICS_SCAN_LIMIT)
         .lean();
 
       const match = { ...baseMatch };
       if (from || to) {
         match.createdAt = {};
-        if (from) match.createdAt.$gte = new Date(`${from}T00:00:00.000`);
-        if (to) match.createdAt.$lte = new Date(`${to}T23:59:59.999`);
+        // Interpret day boundaries in the plant timezone — server-local parsing
+        // shifts the window by the server/plant offset (e.g. 5.5h on a UTC box).
+        const { start: rangeStart, end: rangeEnd } = getPlanningDayRange(from, to);
+        if (rangeStart) match.createdAt.$gte = rangeStart;
+        if (rangeEnd) match.createdAt.$lte = rangeEnd;
       }
 
       const records =
@@ -1358,6 +1367,7 @@ module.exports = {
           ? await DeviceTestRecordModel.find(match)
               .populate("operatorId", "name employeeCode")
               .sort({ createdAt: -1 })
+              .limit(ANALYTICS_SCAN_LIMIT)
               .lean()
           : attemptContextRecords;
 
@@ -1432,10 +1442,10 @@ module.exports = {
         },
       });
     } catch (error) {
+      console.error("Error fetching seat/stage testing analytics:", error);
       return res.status(500).json({
         status: 500,
         message: "Failed to fetch seat/stage testing analytics",
-        error: error.message,
       });
     }
   },

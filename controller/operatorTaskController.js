@@ -17,7 +17,7 @@ const {
   findDevicesByScanTokensStrict,
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
-const { computePlanInsights, isResolvedStatus } = require("../services/planInsightsService");
+const { computePlanInsights, isResolvedStatus, toPlanningDateKey } = require("../services/planInsightsService");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -1061,6 +1061,7 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const pipeline = [
     { $match: match },
     { $sort: { createdAt: -1 } },
+    { $limit: 5000 },
     {
       $project: {
         _id: 1,
@@ -1110,7 +1111,7 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
     { $project: { normalizedStageName: 0, deviceKey: 0 } },
   ];
 
-  return deviceTestRecordModel.aggregate(pipeline).allowDiskUse(true);
+  return deviceTestRecordModel.aggregate(pipeline);
 };
 
 const getTodayRange = () => {
@@ -1439,6 +1440,20 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     seatScopedTested = Math.min(seatScopedTested, quantityCap);
   }
 
+  // The operator page shows the CURRENT DAY's seat summary (plant timezone),
+  // not the seat's lifetime totals. The all-time numbers above are still used
+  // for the WIP-kits math, which must subtract everything completed so far.
+  const todayDateKey = toPlanningDateKey(new Date());
+  const seatScopedTodayStats = countSeatStageStats({
+    records: (Array.isArray(latestRecords) ? latestRecords : []).filter(
+      (record) => record?.createdAt && toPlanningDateKey(record.createdAt) === todayDateKey,
+    ),
+    targetStageNames,
+    seatKey,
+    deviceFlowVersions,
+    activeWipDeviceKeys,
+  });
+
   const seatStageEntries = Array.isArray(assignUserStage)
     ? assignUserStage
     : assignUserStage
@@ -1455,11 +1470,18 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     0,
   );
 
-  const lineIssueKitsCount = seatIssuedKits > 0 ? seatIssuedKits : 0;
+  const isFirstStage = !isCommon && normalizeValue(currentAssignedStageName) === firstStageName;
+
+  const stageInsight = (canonicalInsights?.byStage || []).find(
+    (row) => targetStageNames.has(normalizeValue(row?.stageName))
+  );
+  const insightStageWip = stageInsight ? Number(stageInsight.wip || 0) : 0;
+
+  const lineIssueKitsCount = isFirstStage && seatIssuedKits > 0 ? seatIssuedKits : 0;
   const wipKitsCount =
-    lineIssueKitsCount > 0
+    lineIssueKitsCount > 0 && !(insightSeatWip > 0 || insightStageWip > 0)
       ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg)
-      : Math.max(Number(deviceQueue.length || 0), insightSeatWip, seatScopedResolvedWip);
+      : Math.max(Number(deviceQueue.length || 0), insightSeatWip, insightStageWip, seatScopedResolvedWip);
   const kitsShortageCount =
     lineIssueKitsCount > 0
       ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg - wipKitsCount)
@@ -1469,9 +1491,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     wip: wipKitsCount,
     lineIssueKits: lineIssueKitsCount,
     kitsShortage: kitsShortageCount,
-    pass: seatScopedPass,
-    ng: seatScopedNg,
-    tested: seatScopedTested,
+    pass: seatScopedTodayStats.pass,
+    ng: seatScopedTodayStats.ng,
+    tested: seatScopedTodayStats.tested,
   };
 
   const { operatorStats, operatorHistory } = operatorSummary;
@@ -1511,9 +1533,10 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       wipKits: wipKitsCount,
       lineIssueKits: lineIssueKitsCount,
       kitsShortage: kitsShortageCount,
-      overallTotalCompleted: seatScopedPass,
-      overallTotalNg: seatScopedNg,
-      overallTotalAttempts: seatScopedTested,
+      // Today-scoped seat summary — drives the Devices card and Achieved UPH.
+      overallTotalCompleted: seatScopedTodayStats.pass,
+      overallTotalNg: seatScopedTodayStats.ng,
+      overallTotalAttempts: seatScopedTodayStats.tested,
       ...operatorStats,
     },
     downTime: {

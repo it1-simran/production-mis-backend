@@ -76,7 +76,7 @@ module.exports = {
   view: async (req, res) => {
     try {
       const filter = getUnscopedAuthorizedReadListFilter();
-      const Products = await Product.find(filter).sort({ _id: -1 });
+      const Products = await Product.find(filter).sort({ _id: -1 }).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Products Fetched Sucessfully!!",
@@ -105,7 +105,7 @@ module.exports = {
   getProductByID: async (req, res) => {
     try {
       const id = req.params.id;
-      const product = await Product.findById(id);
+      const product = await Product.findById(id).lean();
       // const product = await Product.aggregate([
       //   {
       //     $match: { _id: ObjectId(id) },
@@ -145,7 +145,7 @@ module.exports = {
         return res.status(404).json({ error: "Product not found" });
       }
       if(product){
-        let inventory = await InventoryModel.findOne({ productType: product._id });
+        let inventory = await InventoryModel.findOne({ productType: product._id }).lean();
         return res.status(200).json({product,inventory});
       }
     } catch (error) {
@@ -185,7 +185,7 @@ module.exports = {
   activate: async (req, res) => {
     try {
       const id = req.params.id;
-      const product = await Product.findById(id);
+      const product = await Product.findById(id).lean();
       if (!product) {
         return res.status(404).json({ message: "Product not found" });
       }

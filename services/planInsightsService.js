@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const moment = require("moment");
+const moment = require("moment-timezone");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
 const assignOperatorToPlanModel = require("../models/assignOperatorToPlan");
@@ -7,6 +7,24 @@ const OperatorWorkSession = require("../models/operatorWorkSession");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
+
+// Date-range boundaries must be interpreted in the plant's timezone, not the
+// server's. On a UTC server, server-local parsing shifts "today" by 5.5 hours
+// for IST operators, so records from the first hours of the shift fall outside
+// the requested day.
+const PLANNING_TIMEZONE = process.env.PLANNING_TIMEZONE || "Asia/Kolkata";
+
+/** YYYY-MM-DD key of a timestamp in the plant timezone. */
+const toPlanningDateKey = (value) => moment(value).tz(PLANNING_TIMEZONE).format("YYYY-MM-DD");
+
+/** Start/end Date objects of a YYYY-MM-DD day (or day range) in the plant timezone. */
+const getPlanningDayRange = (dateFrom = "", dateTo = "") => {
+  const from = normalizeValue(dateFrom);
+  const to = normalizeValue(dateTo);
+  const start = from ? moment.tz(from, "YYYY-MM-DD", PLANNING_TIMEZONE).startOf("day").toDate() : null;
+  const end = to ? moment.tz(to, "YYYY-MM-DD", PLANNING_TIMEZONE).endOf("day").toDate() : null;
+  return { start, end };
+};
 const normalizeStageKeyFlexible = (value) =>
   normalizeValue(value)
     .toLowerCase()
@@ -483,10 +501,15 @@ const sortSeatStageRows = (rows = [], orderMap = new Map()) =>
     return String(left?.stageName || "").localeCompare(String(right?.stageName || ""));
   });
 
+// Newest-first scan cap for insight aggregations. The old 5000/2000 caps were
+// already exceeded by large plans (2000 devices × 12 stages ≈ 24k records),
+// silently dropping older stage records from the metrics.
+const INSIGHTS_RECORD_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 50000;
+
 const buildLatestRecordPipeline = (match = {}) => [
   { $match: match },
   { $sort: { createdAt: -1 } },
-  { $limit: 5000 },
+  { $limit: INSIGHTS_RECORD_SCAN_LIMIT },
   {
     $project: {
       _id: 1,
@@ -511,15 +534,33 @@ const buildLatestRecordPipeline = (match = {}) => [
   },
 ];
 
+// getOperatorTodayStats runs on EVERY insights request — including shared-cache
+// hits — so with operators polling it becomes a steady stream of redundant
+// aggregations. A short promise cache collapses them.
+const OPERATOR_TODAY_CACHE_TTL_MS = 15000;
+const operatorTodayStatsCache = new Map();
+const getOperatorTodayStatsCached = (params = {}) => {
+  const key = [params.operatorId || "", params.planId || "", params.processId || ""].join("|");
+  const now = Date.now();
+  const hit = operatorTodayStatsCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.promise;
+  if (operatorTodayStatsCache.size > 500) {
+    operatorTodayStatsCache.forEach((entry, entryKey) => {
+      if (entry.expiresAt <= now) operatorTodayStatsCache.delete(entryKey);
+    });
+  }
+  const promise = getOperatorTodayStats(params);
+  promise.catch(() => operatorTodayStatsCache.delete(key));
+  operatorTodayStatsCache.set(key, { promise, expiresAt: now + OPERATOR_TODAY_CACHE_TTL_MS });
+  return promise;
+};
+
 const getOperatorTodayStats = async ({ operatorId = "", planId = "", processId = "" }) => {
   if (!operatorId || !mongoose.Types.ObjectId.isValid(String(operatorId))) {
     return { totalAttempts: 0, totalCompleted: 0, totalNg: 0 };
   }
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
+  const start = moment.tz(PLANNING_TIMEZONE).startOf("day").toDate();
+  const end = moment.tz(PLANNING_TIMEZONE).endOf("day").toDate();
   const match = {
     operatorId: new mongoose.Types.ObjectId(String(operatorId)),
     createdAt: { $gte: start, $lte: end },
@@ -582,11 +623,8 @@ const getOperatorTodayStats = async ({ operatorId = "", planId = "", processId =
 
 const getTodayLatestTestedCount = async ({ planId = "", processId = "" }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) return 0;
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
+  const start = moment.tz(PLANNING_TIMEZONE).startOf("day").toDate();
+  const end = moment.tz(PLANNING_TIMEZONE).endOf("day").toDate();
 
   const match = {
     planId: new mongoose.Types.ObjectId(String(planId)),
@@ -610,7 +648,7 @@ const filterRecordsByDateKey = (records = [], dateFrom = "", dateTo = "") => {
   return (Array.isArray(records) ? records : []).filter((record) => {
     const createdAt = record?.createdAt ? new Date(record.createdAt) : null;
     if (!createdAt || Number.isNaN(createdAt.getTime())) return false;
-    const key = moment(createdAt).format("YYYY-MM-DD");
+    const key = toPlanningDateKey(createdAt);
     if (from && key < from) return false;
     if (to && key > to) return false;
     return true;
@@ -888,7 +926,7 @@ const computePlanInsightsUncached = async ({
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
-    { $limit: 2000 },
+    { $limit: INSIGHTS_RECORD_SCAN_LIMIT },
     {
       $group: {
         _id: "$deviceId",
@@ -961,41 +999,40 @@ const computePlanInsightsUncached = async ({
     else uniquePlanTotals.wip += 1;
   };
 
-  if (hasDateFilter) {
-    uniquePlanTotals.tested = 0;
-    uniquePlanTotals.pass = 0;
-    uniquePlanTotals.ng = 0;
-    byStageMap.forEach((row) => {
-      uniquePlanTotals.pass += Number(row?.pass || 0);
-      uniquePlanTotals.ng += Number(row?.ng || 0);
-      uniquePlanTotals.tested += Number(row?.pass || 0) + Number(row?.ng || 0);
-    });
-  } else {
-    latestBySerial.forEach((record, serial) => {
-      if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
-      const status = normalizeKey(record?.status);
-      if (isResolvedStatus(status)) {
-        incrementUniqueTotals(serial, "wip");
-        return;
+  // latestBySerial is already scoped to the requested date range (it is built
+  // from scopedLatestRecords), so unique-per-device totals work for both the
+  // overall and date-filtered cases. The previous date-filtered branch summed
+  // per-stage rows instead, which counted the same device once per stage it
+  // cleared — and the live-WIP augmentation below then inflated `tested` with
+  // devices never tested in the range, making "today" totals exceed "overall".
+  latestBySerial.forEach((record, serial) => {
+    if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
+    const status = normalizeKey(record?.status);
+    if (isResolvedStatus(status)) {
+      incrementUniqueTotals(serial, "wip");
+      return;
+    }
+    incrementUniqueTotals(serial, status);
+  });
+
+  if (!hasDateFilter) {
+    // Live devices with no test record yet count toward the plan-wide totals,
+    // but only for the overall view — they have no activity inside a date range.
+    (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
+      const deviceId = String(device?._id || "");
+      if (processedDeviceIds.has(deviceId)) return;
+      const serial = normalizeValue(device.serialNo);
+      if (!serial || countedSerials.has(serial)) return;
+      countedSerials.add(serial);
+      uniquePlanTotals.tested += 1;
+      if (isDeviceTerminalNg(device)) uniquePlanTotals.ng += 1;
+      else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched") {
+        uniquePlanTotals.pass += 1;
+      } else {
+        uniquePlanTotals.wip += 1;
       }
-      incrementUniqueTotals(serial, status);
     });
   }
-
-  (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
-    const deviceId = String(device?._id || "");
-    if (processedDeviceIds.has(deviceId)) return;
-    const serial = normalizeValue(device.serialNo);
-    if (!serial || countedSerials.has(serial)) return;
-    countedSerials.add(serial);
-    uniquePlanTotals.tested += 1;
-    if (isDeviceTerminalNg(device)) uniquePlanTotals.ng += 1;
-    else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched") {
-      uniquePlanTotals.pass += 1;
-    } else {
-      uniquePlanTotals.wip += 1;
-    }
-  });
 
   mergeAliasedStageRows(byStageMap, stageAliasLookup);
   const pipelineDevices = Array.from(
@@ -1044,7 +1081,7 @@ const computePlanInsightsUncached = async ({
   const todayTested = await getTodayLatestTestedCount({ planId, processId });
   const processEfficiency = denominator > 0 ? Number(((uniquePlanTotals.tested / denominator) * 100).toFixed(2)) : 0;
   const todayEfficiency = denominator > 0 ? Number(((todayTested / denominator) * 100).toFixed(2)) : 0;
-  const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
+  const operatorToday = await getOperatorTodayStatsCached({ operatorId, planId, processId });
 
   const lineIssueKitsCount = Number(issuedKits) || (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip);
   const kitsShortageCount = Math.max(0, lineIssueKitsCount - (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip));
@@ -1101,7 +1138,7 @@ const computePlanInsights = async (params) => {
   }
 
   const base = await basePromise;
-  const operatorToday = await getOperatorTodayStats({ operatorId, planId, processId });
+  const operatorToday = await getOperatorTodayStatsCached({ operatorId, planId, processId });
 
   const totalsBase = base.totals || {};
   const producedTotal = Number(totalsBase.pass || 0) + Number(totalsBase.ng || 0) + Number(totalsBase.wip || 0);
@@ -1158,7 +1195,7 @@ const computeProcessInsights = async ({
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
     { $sort: { createdAt: -1 } },
-    { $limit: 2000 },
+    { $limit: INSIGHTS_RECORD_SCAN_LIMIT },
     {
       $group: {
         _id: "$deviceId",
@@ -1444,8 +1481,9 @@ const computeOperatorActivityTimestamps = async ({
   const toTrim = normalizeValue(dateTo);
   if (fromTrim || toTrim) {
     const dateFilter = {};
-    if (fromTrim) dateFilter.$gte = new Date(`${fromTrim}T00:00:00.000`);
-    if (toTrim) dateFilter.$lte = new Date(`${toTrim}T23:59:59.999`);
+    const { start: rangeStart, end: rangeEnd } = getPlanningDayRange(fromTrim, toTrim);
+    if (rangeStart) dateFilter.$gte = rangeStart;
+    if (rangeEnd) dateFilter.$lte = rangeEnd;
     devicePipeline.push({ $match: { effectiveStart: dateFilter } });
   }
 
@@ -1528,6 +1566,9 @@ const computeOperatorActivityTimestamps = async ({
 module.exports = {
   normalizeValue,
   normalizeKey,
+  PLANNING_TIMEZONE,
+  toPlanningDateKey,
+  getPlanningDayRange,
   safeJsonParse,
   sortSeatKeys,
   normalizeAssignedStagesPayload,

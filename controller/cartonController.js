@@ -1557,6 +1557,10 @@ module.exports = {
   getCartonByProcessIdToPDI: async (req, res) => {
     try {
       const { processId } = req.params;
+      const { page = 1, limit = 20, deviceLimit = 20 } = req.query;  // 🚀 FIX #2: Pagination
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const devicePageSize = parseInt(deviceLimit, 10);
+
       const processIdMatch = buildProcessIdMatch(processId);
       if (!processIdMatch) {
         return res.status(400).json({ message: "Invalid process id." });
@@ -1649,10 +1653,21 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
-        { $sort: { _id: -1 } }
+        { $sort: { _id: -1 } },
+        // 🚀 FIX #2: Pagination stages
+        { $skip: skip },
+        { $limit: parseInt(limit, 10) },
+        // Limit devices per carton
+        {
+          $addFields: {
+            "devices": {
+              $slice: ["$devices", devicePageSize]
+            }
+          }
+        }
       ]);
       if (!cartons || cartons.length === 0) {
-        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [], pagination: { page, limit, total: 0 } });
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const enrichedCartons = enrichCartonDevicesForResponse({
@@ -1661,9 +1676,18 @@ module.exports = {
       });
       const cartonSerials = enrichedCartons.map((c) => c.cartonSerial);
 
+      // Get total count for pagination info
+      const totalCartons = await cartonModel.countDocuments({ processId: processIdMatch });
+
       return res.json({
         cartonSerials,
         cartonDetails: enrichedCartons,
+        pagination: {
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          total: totalCartons,
+          totalPages: Math.ceil(totalCartons / parseInt(limit, 10))
+        }
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
