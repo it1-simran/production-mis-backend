@@ -17,7 +17,13 @@ const {
   findDevicesByScanTokensStrict,
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
-const { computePlanInsights, isResolvedStatus, toPlanningDateKey } = require("../services/planInsightsService");
+const { computePlanInsights, isResolvedStatus, toPlanningDateKey, PLANNING_TIMEZONE } = require("../services/planInsightsService");
+const {
+  computeHourlyUpha,
+  getCurrentShiftHourBoundsInTimezone,
+  collectPassTimestampsInHour,
+} = require("../services/hourlyUphaMetrics");
+const momentTz = require("moment-timezone");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -491,6 +497,40 @@ const buildActiveWipDeviceKeys = (devices = [], targetStageNames = new Set()) =>
   return keys;
 };
 
+/**
+ * Shared eligibility gate for a seat+stage record: correct stage, correct
+ * seat, not a device currently mid-retry at that stage, and not a stale
+ * record from a flow version the device has since moved past. Used by both
+ * countSeatStageStats (pass/ng/wip totals) and the hourly-UPHA pass-timestamp
+ * collector below, so the two never disagree on which records are "this
+ * seat's this stage's" records.
+ */
+const recordPassesSeatStageGates = (
+  record,
+  { targetStageNames, normalizedSeatKey, deviceFlowVersions, activeWipDeviceKeys },
+) => {
+  const stageName = normalizeValue(record?.stageName);
+  if (!targetStageNames.has(stageName)) return false;
+  if (normalizedSeatKey) {
+    const recordSeatKey = getRecordSeatKey(record);
+    if (!recordSeatKey || recordSeatKey !== normalizedSeatKey) return false;
+  }
+
+  const recordDeviceKey = String(record?.deviceId || record?.serialNo || "").trim();
+  if (recordDeviceKey && activeWipDeviceKeys.has(recordDeviceKey)) {
+    return false;
+  }
+  const currentFlowVersion = recordDeviceKey
+    ? deviceFlowVersions.get(recordDeviceKey)
+    : undefined;
+  const recordFlowVersion = Number(record?.flowVersion || 1);
+  if (currentFlowVersion !== undefined && recordFlowVersion !== currentFlowVersion) {
+    return false;
+  }
+
+  return true;
+};
+
 const countSeatStageStats = ({
   records = [],
   targetStageNames,
@@ -505,24 +545,13 @@ const countSeatStageStats = ({
   let wip = 0;
 
   (Array.isArray(records) ? records : []).forEach((record) => {
-    const stageName = normalizeValue(record?.stageName);
-    if (!targetStageNames.has(stageName)) return;
-    if (normalizedSeatKey) {
-      const recordSeatKey = getRecordSeatKey(record);
-      if (!recordSeatKey || recordSeatKey !== normalizedSeatKey) return;
-    }
-
-    const recordDeviceKey = String(record?.deviceId || record?.serialNo || "").trim();
-    if (recordDeviceKey && activeWipDeviceKeys.has(recordDeviceKey)) {
-      return;
-    }
-    const currentFlowVersion = recordDeviceKey
-      ? deviceFlowVersions.get(recordDeviceKey)
-      : undefined;
-    const recordFlowVersion = Number(record?.flowVersion || 1);
     if (
-      currentFlowVersion !== undefined &&
-      recordFlowVersion !== currentFlowVersion
+      !recordPassesSeatStageGates(record, {
+        targetStageNames,
+        normalizedSeatKey,
+        deviceFlowVersions,
+        activeWipDeviceKeys,
+      })
     ) {
       return;
     }
@@ -540,6 +569,32 @@ const countSeatStageStats = ({
   });
 
   return { tested, pass, ng, wip };
+};
+
+/**
+ * Pass timestamps for one seat+stage inside an hour window, for the hourly
+ * UPHA calculator (devices produced, average cycle time, etc. — see
+ * services/hourlyUphaMetrics.js). Reuses the same gating as
+ * countSeatStageStats so "devices produced this hour" is drawn from exactly
+ * the same record set as the shift-level pass/ng totals.
+ */
+const collectSeatPassTimestampsInHour = ({
+  records = [],
+  targetStageNames,
+  seatKey = "",
+  deviceFlowVersions = new Map(),
+  activeWipDeviceKeys = new Set(),
+  hourBounds,
+}) => {
+  const normalizedSeatKey = normalizeValue(seatKey);
+  return collectPassTimestampsInHour(records, hourBounds, (record) =>
+    recordPassesSeatStageGates(record, {
+      targetStageNames,
+      normalizedSeatKey,
+      deviceFlowVersions,
+      activeWipDeviceKeys,
+    }),
+  );
 };
 
 const setNoStoreHeaders = (res) => {
@@ -1454,6 +1509,39 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     activeWipDeviceKeys,
   });
 
+  // Hourly UPHA: "Achieved UPH" on the operator page is the devices produced
+  // in the CURRENT hour bucket, aligned to the shift's own start/end time
+  // (plant timezone) rather than a wall-clock hour — see
+  // services/hourlyUphaMetrics.js for the full formula set and why shift
+  // alignment matters (overnight shifts, breaks, off-shift periods).
+  const seatStageForTarget = Array.isArray(assignUserStage) ? assignUserStage[0] : assignUserStage;
+  const targetUphaForSeat = Number(seatStageForTarget?.upha || 0);
+  const currentHourBounds = getCurrentShiftHourBoundsInTimezone(momentTz, PLANNING_TIMEZONE, shift, new Date());
+  let currentHourUpha;
+  if (!currentHourBounds) {
+    // Outside the shift's active window (before/after shift, or on a break) —
+    // there is no current hour to report against.
+    currentHourUpha = {
+      hourLabel: "Off shift",
+      ...computeHourlyUpha([], targetUphaForSeat, 1),
+    };
+  } else {
+    const currentHourPassTimestamps = collectSeatPassTimestampsInHour({
+      records: latestRecords,
+      targetStageNames,
+      seatKey,
+      deviceFlowVersions,
+      activeWipDeviceKeys,
+      hourBounds: currentHourBounds,
+    });
+    currentHourUpha = {
+      hourLabel: `${momentTz.tz(currentHourBounds.start, PLANNING_TIMEZONE).format("HH:mm")} - ${momentTz
+        .tz(currentHourBounds.end, PLANNING_TIMEZONE)
+        .format("HH:mm")}`,
+      ...computeHourlyUpha(currentHourPassTimestamps, targetUphaForSeat, 1),
+    };
+  }
+
   const seatStageEntries = Array.isArray(assignUserStage)
     ? assignUserStage
     : assignUserStage
@@ -1494,6 +1582,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     pass: seatScopedTodayStats.pass,
     ng: seatScopedTodayStats.ng,
     tested: seatScopedTodayStats.tested,
+    currentHourUpha,
   };
 
   const { operatorStats, operatorHistory } = operatorSummary;
