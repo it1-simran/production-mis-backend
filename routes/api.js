@@ -289,7 +289,7 @@ router.get('/planing/downtime-reasons', authController.authenticateToken, planni
 router.get('/cartons/full', authController.authenticateToken, cartonController.getFullCartons);
 router.post('/carton/updatePrinting', authController.authenticateToken, cartonController.updatePrinting);
 router.put('/carton/updateWeight', authController.authenticateToken, CartonController.updateWeight);
-router.post('/carton/createCarton', authController.authenticateToken, CartonController.createOrUpdate);
+router.post('/carton/createCarton', authController.authenticateToken, submitDeduplicationMiddleware, CartonController.createOrUpdate);
 router.put('/carton/removeDevice', authController.authenticateToken, CartonController.removeDevice);
 router.post('/carton/verifySticker', authController.authenticateToken, CartonController.verifySticker);
 router.get("/cartons/:processId/partial", authController.authenticateToken, CartonController.getPartialCarton);
