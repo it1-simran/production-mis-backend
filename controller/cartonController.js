@@ -397,15 +397,64 @@ const resolveReturnContextForCarton = async (carton) => {
   };
 };
 
-const findCartonConflicts = async (deviceIds = [], excludeCartonIds = []) => {
+const normalizeScanIdentityToken = (value) =>
+  String(value ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .toLowerCase();
+
+const collectDeviceIdentityTokens = (deviceDoc) => {
+  const tokens = new Set();
+  const add = (raw) => {
+    const token = normalizeScanIdentityToken(raw);
+    if (token) tokens.add(token);
+  };
+  add(deviceDoc?.serialNo);
+  add(deviceDoc?.serial_no);
+  add(deviceDoc?.imeiNo);
+  add(deviceDoc?.imei);
+  add(deviceDoc?.ccid);
+  add(deviceDoc?.iccid);
+  return tokens;
+};
+
+// Server-side counterpart to the frontend's scan/sticker verification step —
+// re-checks that the scanned Serial/IMEI/CCID actually belongs to the
+// device(s) being added, so a device can never be packaged under the wrong
+// identity even if the client-side check is ever bypassed or buggy.
+const verifyScanMatchesDevices = async (deviceIds = [], rawScanInput = "") => {
+  const scanTokens = Array.from(
+    new Set(
+      String(rawScanInput || "")
+        .replace(/[\r\n]+/g, ",")
+        .split(",")
+        .map(normalizeScanIdentityToken)
+        .filter(Boolean),
+    ),
+  );
+  if (scanTokens.length === 0) return true;
+
+  const devicesToVerify = await deviceModel
+    .find({ _id: { $in: deviceIds } })
+    .select("serialNo serial_no imeiNo imei ccid iccid")
+    .lean();
+
+  return devicesToVerify.every((deviceDoc) => {
+    const identityTokens = collectDeviceIdentityTokens(deviceDoc);
+    return scanTokens.every((token) => identityTokens.has(token));
+  });
+};
+
+const findCartonConflicts = async (deviceIds = [], excludeCartonIds = [], session = null) => {
   const normalizedDeviceIds = normalizeObjectIdList(deviceIds);
   if (normalizedDeviceIds.length === 0) return null;
 
   const normalizedExcludeIds = normalizeObjectIdList(excludeCartonIds);
-  return cartonModel.findOne({
+  const query = cartonModel.findOne({
     _id: { $nin: normalizedExcludeIds },
     devices: { $in: normalizedDeviceIds },
   });
+  return session ? query.session(session) : query;
 };
 
 const resolveCartonMaxCapacity = (carton) => {
@@ -1037,7 +1086,13 @@ const generateNextCartonSerial = async (cleanOc, attempt = 1) => {
 module.exports = {
   createOrUpdate: async (req, res) => {
     try {
-      const { processId, devices, packagingData: rawPackagingData, selectedCarton: rawSelectedCarton } = req.body;
+      const {
+        processId,
+        devices,
+        packagingData: rawPackagingData,
+        selectedCarton: rawSelectedCarton,
+        verificationScan,
+      } = req.body;
       const deviceIds = Array.from(
         new Set(
           (Array.isArray(devices) ? devices : [])
@@ -1100,6 +1155,16 @@ module.exports = {
         });
       }
 
+      if (verificationScan) {
+        const scanMatches = await verifyScanMatchesDevices(deviceIds, verificationScan);
+        if (!scanMatches) {
+          return res.status(400).json({
+            status: 400,
+            message: "Scanned Serial / IMEI / CCID does not match the device being packaged.",
+          });
+        }
+      }
+
       let existingCarton = null;
 
       if (selectedCarton) {
@@ -1127,84 +1192,125 @@ module.exports = {
       }
 
       if (existingCarton) {
-        const existingDeviceSet = new Set(
-          Array.isArray(existingCarton.devices)
-            ? existingCarton.devices.map((deviceId) => String(deviceId))
-            : [],
-        );
-        const alreadyInThisCarton = deviceIds.some((deviceId) =>
-          existingDeviceSet.has(String(deviceId)),
-        );
-        if (alreadyInThisCarton) {
-          return res.status(400).json({
-            status: 400,
-            message: "Device already exists in this carton.",
+        const existingCartonId = existingCarton._id;
+        const fallbackPackagingValues = {
+          tolerance: Number(effectivePackagingData.cartonWeightTolerance || 0),
+          weight: Number(effectivePackagingData.cartonWeight || 0),
+          maxCapacity: Number(effectivePackagingData.maxCapacity || 0),
+        };
+
+        const session = await mongoose.startSession();
+        let updatedCarton = null;
+        try {
+          // Re-read and re-validate the carton inside the transaction so a
+          // concurrent request (double-scan, double-click, retry) that raced
+          // past the checks above can't both append the same device — the
+          // transaction guarantees only one writer wins per document.
+          await session.withTransaction(async () => {
+            const cartonDoc = await cartonModel
+              .findOne({
+                _id: existingCartonId,
+                status: { $in: ["partial", "empty"] },
+                cartonStatus: { $in: [""] },
+              })
+              .session(session);
+
+            if (!cartonDoc) {
+              const err = new Error(
+                selectedCarton
+                  ? `Selected carton ${selectedCarton} is not open for packaging updates.`
+                  : "Open carton is no longer available for packaging updates.",
+              );
+              err.status = 409;
+              throw err;
+            }
+
+            const existingDeviceSet = new Set(
+              Array.isArray(cartonDoc.devices)
+                ? cartonDoc.devices.map((deviceId) => String(deviceId))
+                : [],
+            );
+            const alreadyInThisCarton = deviceIds.some((deviceId) =>
+              existingDeviceSet.has(String(deviceId)),
+            );
+            if (alreadyInThisCarton) {
+              const err = new Error("Device already exists in this carton.");
+              err.status = 400;
+              throw err;
+            }
+
+            const conflict = await findCartonConflicts(deviceIds, [cartonDoc._id], session);
+            if (conflict) {
+              const err = new Error(`Device already assigned to carton ${conflict.cartonSerial}.`);
+              err.status = 409;
+              throw err;
+            }
+
+            const existingPackagingData =
+              cartonDoc?.packagingData && typeof cartonDoc.packagingData === "object"
+                ? cartonDoc.packagingData
+                : {};
+            const existingTolerance = Number(existingPackagingData?.cartonWeightTolerance ?? 0);
+            const existingWeight = Number(existingPackagingData?.cartonWeight ?? 0);
+            const existingCapacity = Number(cartonDoc.maxCapacity || existingPackagingData?.maxCapacity || 0);
+
+            if (existingTolerance <= 0 && fallbackPackagingValues.tolerance > 0) {
+              cartonDoc.packagingData = {
+                ...existingPackagingData,
+                cartonWeightTolerance: fallbackPackagingValues.tolerance,
+              };
+            }
+            if (existingWeight <= 0 && fallbackPackagingValues.weight > 0) {
+              cartonDoc.packagingData = {
+                ...(cartonDoc.packagingData || existingPackagingData),
+                cartonWeight: fallbackPackagingValues.weight,
+              };
+            }
+            if (existingCapacity <= 0 && fallbackPackagingValues.maxCapacity > 0) {
+              cartonDoc.maxCapacity = String(fallbackPackagingValues.maxCapacity);
+              cartonDoc.packagingData = {
+                ...(cartonDoc.packagingData || existingPackagingData),
+                maxCapacity: fallbackPackagingValues.maxCapacity,
+              };
+            }
+
+            const resolvedExistingCapacity = resolveCartonMaxCapacity(cartonDoc);
+            if (
+              resolvedExistingCapacity > 0 &&
+              cartonDoc.devices.length + deviceIds.length > resolvedExistingCapacity
+            ) {
+              const err = new Error(`Carton capacity exceeded. Allowed max is ${resolvedExistingCapacity}.`);
+              err.status = 409;
+              throw err;
+            }
+
+            // Defensive dedupe: only append ids not already present, so a
+            // duplicate can never land in the devices array even under a race.
+            const newDeviceIds = deviceIds.filter((deviceId) => !existingDeviceSet.has(String(deviceId)));
+            cartonDoc.devices.push(...newDeviceIds);
+            cartonDoc.status = resolveCartonStatusFromDeviceCount(
+              cartonDoc.devices.length,
+              resolvedExistingCapacity,
+            );
+            await cartonDoc.save({ session });
+
+            // ✅ Sync cartonSerial to devices (same transaction as the carton write)
+            await deviceModel.updateMany(
+              { _id: { $in: deviceIds } },
+              { $set: { cartonSerial: cartonDoc.cartonSerial } },
+              { session },
+            );
+
+            updatedCarton = cartonDoc;
           });
+        } finally {
+          await session.endSession();
         }
 
-        const conflict = await findCartonConflicts(deviceIds, [existingCarton._id]);
-        if (conflict) {
-          return res.status(409).json({
-            status: 409,
-            message: `Device already assigned to carton ${conflict.cartonSerial}.`,
-          });
-        }
-
-        const existingPackagingData =
-          existingCarton?.packagingData && typeof existingCarton.packagingData === "object"
-            ? existingCarton.packagingData
-            : {};
-        const existingTolerance = Number(existingPackagingData?.cartonWeightTolerance ?? 0);
-        const existingWeight = Number(existingPackagingData?.cartonWeight ?? 0);
-        const existingCapacity = Number(existingCarton.maxCapacity || existingPackagingData?.maxCapacity || 0);
-
-        if (existingTolerance <= 0 && Number(effectivePackagingData.cartonWeightTolerance || 0) > 0) {
-          existingCarton.packagingData = {
-            ...existingPackagingData,
-            cartonWeightTolerance: Number(effectivePackagingData.cartonWeightTolerance || 0),
-          };
-        }
-        if (existingWeight <= 0 && Number(effectivePackagingData.cartonWeight || 0) > 0) {
-          existingCarton.packagingData = {
-            ...(existingCarton.packagingData || {}),
-            cartonWeight: Number(effectivePackagingData.cartonWeight || 0),
-          };
-        }
-        if (existingCapacity <= 0 && Number(effectivePackagingData.maxCapacity || 0) > 0) {
-          existingCarton.maxCapacity = String(Number(effectivePackagingData.maxCapacity || 0));
-          existingCarton.packagingData = {
-            ...(existingCarton.packagingData || {}),
-            maxCapacity: Number(effectivePackagingData.maxCapacity || 0),
-          };
-        }
-
-        const resolvedExistingCapacity = resolveCartonMaxCapacity(existingCarton);
-        if (
-          resolvedExistingCapacity > 0 &&
-          existingCarton.devices.length + deviceIds.length > resolvedExistingCapacity
-        ) {
-          return res.status(409).json({
-            status: 409,
-            message: `Carton capacity exceeded. Allowed max is ${resolvedExistingCapacity}.`,
-          });
-        }
-
-        existingCarton.devices.push(...deviceIds);
-        existingCarton.status = resolveCartonStatusFromDeviceCount(
-          existingCarton.devices.length,
-          resolvedExistingCapacity,
-        );
-        await existingCarton.save();
-        
-        // ✅ Sync cartonSerial to devices
-        await deviceModel.updateMany(
-          { _id: { $in: deviceIds } },
-          { $set: { cartonSerial: existingCarton.cartonSerial } }
-        );
         return res.status(200).json({
           status: 200,
           message: "Device added to existing carton",
-          carton: existingCarton,
+          carton: updatedCarton,
         });
       }
 
@@ -1309,9 +1415,10 @@ module.exports = {
         carton: newCarton,
       });
     } catch (error) {
-      return res.status(500).json({
-        status: 500,
-        message: "An error occurred while creating/updating carton.",
+      const statusCode = Number(error?.status || 500);
+      return res.status(statusCode).json({
+        status: statusCode,
+        message: error?.message || "An error occurred while creating/updating carton.",
         error: error.message,
       });
     }
@@ -1373,7 +1480,11 @@ module.exports = {
         },
         {
           $addFields: {
-            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+            // Dedupe before counting so a stray duplicate id written into the
+            // devices array (e.g. from a past race) can't inflate this count
+            // past what $lookup will actually resolve, which used to produce
+            // a phantom "MISSING DEVICE" placeholder on the frontend.
+            actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
           },
         },
         {
@@ -1468,7 +1579,11 @@ module.exports = {
       const cartons = await cartonModel.aggregate([
         {
           $addFields: {
-            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+            // Dedupe before counting so a stray duplicate id written into the
+            // devices array (e.g. from a past race) can't inflate this count
+            // past what $lookup will actually resolve, which used to produce
+            // a phantom "MISSING DEVICE" placeholder on the frontend.
+            actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
           },
         },
         {
@@ -1574,7 +1689,11 @@ module.exports = {
         },
         {
           $addFields: {
-            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+            // Dedupe before counting so a stray duplicate id written into the
+            // devices array (e.g. from a past race) can't inflate this count
+            // past what $lookup will actually resolve, which used to produce
+            // a phantom "MISSING DEVICE" placeholder on the frontend.
+            actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
             normalizedStatus: {
               $toUpper: {
                 $trim: {
@@ -1794,7 +1913,11 @@ module.exports = {
         },
         {
           $addFields: {
-            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+            // Dedupe before counting so a stray duplicate id written into the
+            // devices array (e.g. from a past race) can't inflate this count
+            // past what $lookup will actually resolve, which used to produce
+            // a phantom "MISSING DEVICE" placeholder on the frontend.
+            actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
           },
         },
         {
@@ -1846,7 +1969,11 @@ module.exports = {
         },
         {
           $addFields: {
-            actualDeviceCount: { $size: { $ifNull: ["$devices", []] } },
+            // Dedupe before counting so a stray duplicate id written into the
+            // devices array (e.g. from a past race) can't inflate this count
+            // past what $lookup will actually resolve, which used to produce
+            // a phantom "MISSING DEVICE" placeholder on the frontend.
+            actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
           },
         },
         {
@@ -3245,134 +3372,113 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Carton serial is required." });
       }
 
-      const carton = await cartonModel.findOne({ cartonSerial });
+      const session = await mongoose.startSession();
+      let responsePayload = null;
+      try {
+        // Re-read the carton and re-validate inside the transaction so a
+        // concurrent close/split/packaging-add request on the same carton
+        // can't race past these checks with a stale snapshot of `devices`.
+        await session.withTransaction(async () => {
+          const carton = await cartonModel.findOne({ cartonSerial }).session(session);
 
-      if (!carton) {
-        return res.status(404).json({ status: 404, message: "Carton not found." });
-      }
-
-      const currentStatus = String(carton.status || "").toLowerCase();
-      if (currentStatus !== "partial") {
-        return res.status(400).json({
-          status: 400,
-          message: "Only partial cartons can be closed as loose cartons.",
-        });
-      }
-
-      if (carton.cartonStatus && String(carton.cartonStatus).trim() !== "") {
-        return res.status(400).json({
-          status: 400,
-          message: "This carton has already been processed.",
-        });
-      }
-
-      const sourceDevices = Array.isArray(carton.devices) ? carton.devices.filter(Boolean) : [];
-      const sourceQuantity = sourceDevices.length;
-
-      if (sourceQuantity === 0) {
-        return res.status(400).json({
-          status: 400,
-          message: "Partial carton has no devices to process.",
-        });
-      }
-
-      if (action === "assign-new") {
-        const resolvedQty = Number(quantity);
-        const resolvedLength = Number(
-          packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
-        );
-        const resolvedWidth = Number(packagingData?.cartonWidth ?? cartonWidth);
-        const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
-        const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
-        const { processDoc, productDoc } = await getProcessAndProductDocs(carton.processId);
-        const looseCartonResolvedPackaging = resolveEffectivePackagingConfig({
-          cartonPackagingData: {
-            ...(packagingData && typeof packagingData === "object" ? packagingData : {}),
-            cartonLength: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
-            cartonDepth: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
-            cartonWeight: packagingData?.cartonWeight ?? cartonWeight,
-            cartonWeightTolerance: packagingData?.cartonWeightTolerance ?? cartonWeightTolerance,
-            maxCapacity: resolvedQty,
-          },
-          processDoc,
-          productDoc,
-        });
-        const resolvedTolerance = Number(looseCartonResolvedPackaging?.cartonWeightTolerance ?? 0);
-
-        if (!Number.isInteger(resolvedQty) || resolvedQty <= 0) {
-          return res.status(400).json({
-            status: 400,
-            message: "Quantity must be a positive integer.",
-          });
-        }
-
-        if (resolvedQty > sourceQuantity) {
-          return res.status(400).json({
-            status: 400,
-            message: "Quantity cannot exceed the devices available in the partial carton.",
-          });
-        }
-
-        if (!resolvedWidth || resolvedWidth <= 0 || !resolvedHeight || resolvedHeight <= 0 || !resolvedLength || resolvedLength <= 0) {
-          return res.status(400).json({
-            status: 400,
-            message: "Carton dimensions must be greater than zero.",
-          });
-        }
-
-        if (!resolvedWeight || resolvedWeight <= 0) {
-          return res.status(400).json({
-            status: 400,
-            message: "Carton weight must be greater than zero.",
-          });
-        }
-
-        if (!Number.isFinite(resolvedTolerance) || resolvedTolerance < 0) {
-          return res.status(400).json({
-            status: 400,
-            message: "Carton weight tolerance must be zero or greater.",
-          });
-        }
-
-        const movedDevices = sourceDevices.slice(0, resolvedQty);
-        const remainingDevices = sourceDevices.slice(resolvedQty);
-        const conflict = await findCartonConflicts(movedDevices, [carton._id]);
-        if (conflict) {
-          return res.status(409).json({
-            status: 409,
-            message: `Device already assigned to carton ${conflict.cartonSerial}.`,
-          });
-        }
-        const isPackagingCarton = checkIsPackagingCarton(processDoc, productDoc, {
-          packagingType: packagingData?.packagingType,
-        });
-
-        let newCartonSerial = `CARTON-${Date.now()}`;
-        if (isPackagingCarton) {
-          let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
-          if (!ocNumber) {
-            const planDoc = await planingModel.findOne({ processId: carton.processId }).lean();
-            if (planDoc?.orderConfirmationNo) {
-              ocNumber = String(planDoc.orderConfirmationNo).trim();
-            }
+          if (!carton) {
+            const err = new Error("Carton not found.");
+            err.status = 404;
+            throw err;
           }
-          const rawOc = String(ocNumber || "01").trim();
-          const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
-          newCartonSerial = await generateNextCartonSerial(cleanOc);
-        }
 
-        let newCarton = null;
-        let isSaved = false;
-        let saveAttempts = 0;
-        const maxSaveAttempts = 5;
+          const currentStatus = String(carton.status || "").toLowerCase();
+          if (currentStatus !== "partial") {
+            const err = new Error("Only partial cartons can be closed as loose cartons.");
+            err.status = 400;
+            throw err;
+          }
 
-        while (saveAttempts < maxSaveAttempts) {
-          saveAttempts++;
-          try {
-            if (isPackagingCarton && saveAttempts > 1) {
+          if (carton.cartonStatus && String(carton.cartonStatus).trim() !== "") {
+            const err = new Error("This carton has already been processed.");
+            err.status = 400;
+            throw err;
+          }
+
+          const sourceDevices = Array.isArray(carton.devices) ? carton.devices.filter(Boolean) : [];
+          const sourceQuantity = sourceDevices.length;
+
+          if (sourceQuantity === 0) {
+            const err = new Error("Partial carton has no devices to process.");
+            err.status = 400;
+            throw err;
+          }
+
+          if (action === "assign-new") {
+            const resolvedQty = Number(quantity);
+            const resolvedLength = Number(
+              packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
+            );
+            const resolvedWidth = Number(packagingData?.cartonWidth ?? cartonWidth);
+            const resolvedHeight = Number(packagingData?.cartonHeight ?? cartonHeight);
+            const resolvedWeight = Number(packagingData?.cartonWeight ?? cartonWeight);
+            const { processDoc, productDoc } = await getProcessAndProductDocs(carton.processId);
+            const looseCartonResolvedPackaging = resolveEffectivePackagingConfig({
+              cartonPackagingData: {
+                ...(packagingData && typeof packagingData === "object" ? packagingData : {}),
+                cartonLength: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
+                cartonDepth: packagingData?.cartonLength ?? packagingData?.cartonDepth ?? cartonLength ?? cartonDepth,
+                cartonWeight: packagingData?.cartonWeight ?? cartonWeight,
+                cartonWeightTolerance: packagingData?.cartonWeightTolerance ?? cartonWeightTolerance,
+                maxCapacity: resolvedQty,
+              },
+              processDoc,
+              productDoc,
+            });
+            const resolvedTolerance = Number(looseCartonResolvedPackaging?.cartonWeightTolerance ?? 0);
+
+            if (!Number.isInteger(resolvedQty) || resolvedQty <= 0) {
+              const err = new Error("Quantity must be a positive integer.");
+              err.status = 400;
+              throw err;
+            }
+
+            if (resolvedQty > sourceQuantity) {
+              const err = new Error("Quantity cannot exceed the devices available in the partial carton.");
+              err.status = 400;
+              throw err;
+            }
+
+            if (!resolvedWidth || resolvedWidth <= 0 || !resolvedHeight || resolvedHeight <= 0 || !resolvedLength || resolvedLength <= 0) {
+              const err = new Error("Carton dimensions must be greater than zero.");
+              err.status = 400;
+              throw err;
+            }
+
+            if (!resolvedWeight || resolvedWeight <= 0) {
+              const err = new Error("Carton weight must be greater than zero.");
+              err.status = 400;
+              throw err;
+            }
+
+            if (!Number.isFinite(resolvedTolerance) || resolvedTolerance < 0) {
+              const err = new Error("Carton weight tolerance must be zero or greater.");
+              err.status = 400;
+              throw err;
+            }
+
+            const movedDevices = sourceDevices.slice(0, resolvedQty);
+            const remainingDevices = sourceDevices.slice(resolvedQty);
+            const conflict = await findCartonConflicts(movedDevices, [carton._id], session);
+            if (conflict) {
+              const err = new Error(`Device already assigned to carton ${conflict.cartonSerial}.`);
+              err.status = 409;
+              throw err;
+            }
+            const isPackagingCarton = checkIsPackagingCarton(processDoc, productDoc, {
+              packagingType: packagingData?.packagingType,
+            });
+
+            let newCartonSerial = `CARTON-${Date.now()}`;
+            if (isPackagingCarton) {
               let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
               if (!ocNumber) {
-                const planDoc = await planingModel.findOne({ processId: carton.processId }).lean();
+                const planDoc = await planingModel.findOne({ processId: carton.processId }).session(session).lean();
                 if (planDoc?.orderConfirmationNo) {
                   ocNumber = String(planDoc.orderConfirmationNo).trim();
                 }
@@ -3382,93 +3488,121 @@ module.exports = {
               newCartonSerial = await generateNextCartonSerial(cleanOc);
             }
 
-            newCarton = await cartonModel.create({
-              cartonSerial: newCartonSerial,
-              processId: carton.processId,
-              devices: movedDevices,
-              packagingData: {
-                ...packagingData,
-                cartonLength: resolvedLength,
-                cartonWidth: resolvedWidth,
-                cartonHeight: resolvedHeight,
-                cartonDepth: resolvedLength,
-                cartonWeight: resolvedWeight,
-                cartonWeightTolerance: resolvedTolerance,
-                maxCapacity: resolvedQty,
-              },
-              cartonSize: {
-                length: String(resolvedLength),
-                width: String(resolvedWidth),
-                height: String(resolvedHeight),
-                depth: String(resolvedLength),
-              },
-              maxCapacity: String(resolvedQty),
-              status: "full",
-              cartonStatus: "",
-              weightCarton: String(resolvedWeight),
-              isLooseCarton: false,
-              looseCartonAction: "assign-new",
-              sourceCartonSerial: carton.cartonSerial,
-              reassignedQuantity: resolvedQty,
-              reassignedCartonSerial: newCartonSerial,
-            });
-            isSaved = true;
-            break;
-          } catch (saveError) {
-            if (saveError.code === 11000 && saveAttempts < maxSaveAttempts) {
-              continue;
+            let newCarton = null;
+            let saveAttempts = 0;
+            const maxSaveAttempts = 5;
+
+            while (saveAttempts < maxSaveAttempts) {
+              saveAttempts++;
+              try {
+                if (isPackagingCarton && saveAttempts > 1) {
+                  let ocNumber = String(processDoc?.orderConfirmationNo || "").trim();
+                  if (!ocNumber) {
+                    const planDoc = await planingModel.findOne({ processId: carton.processId }).session(session).lean();
+                    if (planDoc?.orderConfirmationNo) {
+                      ocNumber = String(planDoc.orderConfirmationNo).trim();
+                    }
+                  }
+                  const rawOc = String(ocNumber || "01").trim();
+                  const cleanOc = /^\d+$/.test(rawOc) ? rawOc.padStart(2, "0") : rawOc;
+                  newCartonSerial = await generateNextCartonSerial(cleanOc);
+                }
+
+                newCarton = new cartonModel({
+                  cartonSerial: newCartonSerial,
+                  processId: carton.processId,
+                  devices: movedDevices,
+                  packagingData: {
+                    ...packagingData,
+                    cartonLength: resolvedLength,
+                    cartonWidth: resolvedWidth,
+                    cartonHeight: resolvedHeight,
+                    cartonDepth: resolvedLength,
+                    cartonWeight: resolvedWeight,
+                    cartonWeightTolerance: resolvedTolerance,
+                    maxCapacity: resolvedQty,
+                  },
+                  cartonSize: {
+                    length: String(resolvedLength),
+                    width: String(resolvedWidth),
+                    height: String(resolvedHeight),
+                    depth: String(resolvedLength),
+                  },
+                  maxCapacity: String(resolvedQty),
+                  status: "full",
+                  cartonStatus: "",
+                  weightCarton: String(resolvedWeight),
+                  isLooseCarton: false,
+                  looseCartonAction: "assign-new",
+                  sourceCartonSerial: carton.cartonSerial,
+                  reassignedQuantity: resolvedQty,
+                  reassignedCartonSerial: newCartonSerial,
+                });
+                await newCarton.save({ session });
+                break;
+              } catch (saveError) {
+                if (saveError.code === 11000 && saveAttempts < maxSaveAttempts) {
+                  continue;
+                }
+                throw saveError;
+              }
             }
-            throw saveError;
+
+            carton.devices = remainingDevices;
+            carton.status = remainingDevices.length === 0 ? "empty" : "partial";
+            carton.isLooseCarton = true;
+            carton.cartonStatus = "LOOSE_CLOSED";
+            carton.looseCartonAction = "assign-new";
+            carton.sourceCartonSerial = carton.cartonSerial;
+            carton.reassignedCartonSerial = newCarton.cartonSerial;
+            carton.reassignedQuantity = resolvedQty;
+            carton.looseCartonClosedAt = new Date();
+            await carton.save({ session });
+
+            // Keep device.cartonSerial in sync with the carton they now
+            // actually belong to — previously left pointing at the old carton.
+            await deviceModel.updateMany(
+              { _id: { $in: movedDevices } },
+              { $set: { cartonSerial: newCarton.cartonSerial } },
+              { session },
+            );
+
+            responsePayload = {
+              status: 200,
+              message: "Loose carton reassigned successfully.",
+              carton,
+              newCarton,
+            };
+            return;
           }
-        }
 
-        if (remainingDevices.length === 0) {
-          carton.devices = [];
-          carton.status = "empty";
+          // Existing carton path: close the partial carton as loose, in place.
+          carton.status = "full";
           carton.isLooseCarton = true;
           carton.cartonStatus = "LOOSE_CLOSED";
-        } else {
-          carton.devices = [];
-          carton.devices = remainingDevices;
-          carton.status = "partial";
-          carton.isLooseCarton = true;
-          carton.cartonStatus = "LOOSE_CLOSED";
-        }
-        carton.looseCartonAction = "assign-new";
-        carton.sourceCartonSerial = carton.cartonSerial;
-        carton.reassignedCartonSerial = newCarton.cartonSerial;
-        carton.reassignedQuantity = resolvedQty;
-        carton.looseCartonClosedAt = new Date();
-        await carton.save();
+          carton.looseCartonAction = "existing";
+          carton.sourceCartonSerial = carton.cartonSerial;
+          carton.reassignedQuantity = sourceQuantity;
+          carton.looseCartonClosedAt = new Date();
+          await carton.save({ session });
 
-        return res.status(200).json({
-          status: 200,
-          message: "Loose carton reassigned successfully.",
-          carton,
-          newCarton,
+          responsePayload = {
+            status: 200,
+            message: "Loose carton closed successfully. It is now marked as full.",
+            carton,
+          };
         });
+      } finally {
+        await session.endSession();
       }
 
-      // Existing carton path remains the same: close the partial carton as loose.
-      carton.status = "full";
-      carton.isLooseCarton = true;
-      carton.cartonStatus = "LOOSE_CLOSED";
-      carton.looseCartonAction = "existing";
-      carton.sourceCartonSerial = carton.cartonSerial;
-      carton.reassignedQuantity = sourceQuantity;
-      carton.looseCartonClosedAt = new Date();
-      await carton.save();
-
-      return res.status(200).json({
-        status: 200,
-        message: "Loose carton closed successfully. It is now marked as full.",
-        carton,
-      });
+      return res.status(responsePayload.status).json(responsePayload);
     } catch (error) {
       console.error("Error in closeLooseCarton:", error);
-      return res.status(500).json({
-        status: 500,
-        message: "Error closing loose carton.",
+      const statusCode = Number(error?.status || 500);
+      return res.status(statusCode).json({
+        status: statusCode,
+        message: error?.message || "Error closing loose carton.",
         error: error.message,
       });
     }

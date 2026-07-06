@@ -6,11 +6,20 @@ const ORPHAN_TTL_MS = 3000;
 const buildSubmitSignature = (req) => {
   const body = req.body || {};
   const userId = String(req.user?.id || req.user?._id || "").trim();
+  const deviceIdsSignature = Array.isArray(body.devices)
+    ? body.devices
+        .map((deviceId) => String(deviceId || "").trim())
+        .filter(Boolean)
+        .sort()
+        .join(",")
+    : "";
   const parts = [
     userId,
     String(body.deviceId || "").trim(),
+    deviceIdsSignature,
     String(body.planId || "").trim(),
     String(body.processId || "").trim(),
+    String(body.selectedCarton || "").trim(),
     String(body.stageName || body.currentLogicalStage || "").trim(),
     String(body.status || "").trim().toLowerCase(),
   ];
