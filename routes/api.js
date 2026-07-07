@@ -199,6 +199,11 @@ router.get(
   authController.authenticateToken,
   operatorWorkController.getSessionWorkDetails
 );
+router.post(
+  "/operator-work/sessions/expire-stale",
+  authController.authenticateToken,
+  operatorWorkController.expireStaleSessionsAdmin
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
@@ -208,6 +213,7 @@ router.get('/ng-devices/process/:processId', authController.authenticateToken, d
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
 router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.registerDeviceAttempt);
+router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.logDeviceRetryAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
@@ -267,6 +273,7 @@ router.put('/jig/updateStatus/:id', authController.authenticateToken, jigControl
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, processController.updateIssuedKitsToLine);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
+router.get("/devices/retry-logs/:id", authController.authenticateToken, deviceController.getDeviceRetryLogsByProcessId);
 router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);
 router.post("/kit-transfer/request", authController.authenticateToken, authController.authorize(["Kit Transfer", "Transfer Requests"], "create"), kitTransferController.createRequest);
 router.get("/kit-transfer/request", authController.authenticateToken, authController.authorize(["Kit Transfer", "Transfer Requests"], "read"), kitTransferController.listRequests);

@@ -18,6 +18,38 @@ const {
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
 const { computePlanInsights, isResolvedStatus, toPlanningDateKey, PLANNING_TIMEZONE } = require("../services/planInsightsService");
+
+/** Sessions older than this limit are auto-expired on next device scan (mirrors operatorWorkController). */
+const SESSION_MAX_HOURS_TASK = Number(process.env.SESSION_MAX_HOURS || 10);
+const SESSION_MAX_MS_TASK = SESSION_MAX_HOURS_TASK * 60 * 60 * 1000;
+
+/**
+ * Auto-expire a stale operator session (>SESSION_MAX_HOURS_TASK old).
+ * Returns the closed session document or null if no action was taken.
+ */
+async function autoExpireStaleSessionTask(session) {
+  if (!session || session.status !== "active") return null;
+  const startedAt = session.startedAt ? new Date(session.startedAt) : null;
+  if (!startedAt) return null;
+  const ageMs = Date.now() - startedAt.getTime();
+  if (ageMs < SESSION_MAX_MS_TASK) return null;
+
+  const now = new Date();
+  if (Array.isArray(session.breaks) && session.breaks.length > 0) {
+    const lastBreak = session.breaks[session.breaks.length - 1];
+    if (lastBreak && !lastBreak.endedAt) lastBreak.endedAt = now;
+  }
+  session.status = "stopped";
+  session.endedAt = now;
+  session.stopReason = `auto_expired_${SESSION_MAX_HOURS_TASK}h`;
+  session.updatedAt = now;
+  await session.save();
+  console.info(
+    `[SESSION_EXPIRE_TASK] Session ${session._id} for operator ${session.operatorId} ` +
+    `auto-expired after ${Math.round(ageMs / 3600000)}h on device scan.`
+  );
+  return session;
+}
 const {
   computeHourlyUpha,
   getCurrentShiftHourBoundsInTimezone,
@@ -873,8 +905,16 @@ const ensureOperatorWorkSessionForBootstrap = async ({ operatorId, processId, pl
       operatorId: operatorObjId,
       processId: processObjId,
       status: "active",
-    }).lean();
-    if (existing) return existing;
+    });
+    if (existing) {
+      // Auto-expire sessions that started more than SESSION_MAX_HOURS_TASK ago.
+      // When an operator scans their first device of a new day the stale overnight
+      // session is closed here and a fresh one is created below, so the device
+      // test record will be stamped with today's login time.
+      const expired = await autoExpireStaleSessionTask(existing);
+      if (!expired) return existing.toObject ? existing.toObject() : existing;
+      // Expired — fall through to create a new session.
+    }
 
     const assignment = await AssignOperatorToPlan.findOne({
       userId: operatorObjId,

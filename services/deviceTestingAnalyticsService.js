@@ -291,8 +291,6 @@ const statusLabel = (record = {}) => {
   return record?.status || "-";
 };
 
-const IDLE_THRESHOLD_MS = 5000;
-
 const formatDateKey = (date) => moment(date).tz(PLANNING_TIMEZONE).format("YYYY-MM-DD");
 
 const parseClockOnDate = (dateKey, timeStr) => {
@@ -414,18 +412,6 @@ const findSessionForTimestamp = (timestamp, sessions) => {
   );
 };
 
-const subtractBreakOverlapMs = (from, to, breakWindows) => {
-  let idleMs = Math.max(0, to.getTime() - from.getTime());
-  breakWindows.forEach((breakWindow) => {
-    const overlapStart = Math.max(from.getTime(), breakWindow.start.getTime());
-    const overlapEnd = Math.min(to.getTime(), breakWindow.end.getTime());
-    if (overlapEnd > overlapStart) {
-      idleMs -= overlapEnd - overlapStart;
-    }
-  });
-  return Math.max(0, idleMs);
-};
-
 const getPerTestDurationMs = (record) =>
   Number(record.__durationMs || getRecordDurationMs(record) || 0);
 
@@ -513,14 +499,6 @@ const getShiftScopedDurationMs = (record, sessions, asOf) => {
   return timerMs > 0 ? Math.min(clippedMs, timerMs) : clippedMs;
 };
 
-const computeShiftIdleMs = (previousEnd, nextStart, session) =>
-  session.productiveWindows.reduce((sum, window) => {
-    const gapStart = new Date(Math.max(previousEnd.getTime(), window.start.getTime()));
-    const gapEnd = new Date(Math.min(nextStart.getTime(), window.end.getTime()));
-    if (gapEnd <= gapStart) return sum;
-    return sum + subtractBreakOverlapMs(gapStart, gapEnd, session.breakWindows);
-  }, 0);
-
 const buildTestingAnalytics = ({
   records = [],
   attemptContextRecords,
@@ -578,25 +556,13 @@ const buildTestingAnalytics = ({
       const previous = chronological[index - 1];
       const previousResolved = resolveRecordTimelineTimes(previous);
       const previousEnd = previousResolved.end;
-      const previousOperator = previous.__operatorName;
-      if (
-        previousEnd &&
-        start &&
-        previousOperator &&
-        previousOperator === operatorName
-      ) {
-        let idleMs = start.getTime() - previousEnd.getTime();
-        if (useShiftTiming) {
-          const previousSession = findSessionForTimestamp(previousEnd, shiftSessions);
-          const nextSession = findSessionForTimestamp(start, shiftSessions);
-          idleMs =
-            previousSession &&
-            nextSession &&
-            previousSession.key === nextSession.key
-              ? computeShiftIdleMs(previousEnd, start, previousSession)
-              : 0;
-        }
-        if (idleMs >= IDLE_THRESHOLD_MS) {
+      if (previousEnd && start) {
+        // Record the full, continuous elapsed gap as idle time — no minimum
+        // duration threshold, no same-operator requirement, and no shift/break
+        // carve-out. Every second between the end of one record and the start
+        // of the next is captured, so the idle report has no gaps of its own.
+        const idleMs = start.getTime() - previousEnd.getTime();
+        if (idleMs > 0) {
           timeline.push({
             rowType: "idle",
             startTime: previousEnd.toISOString(),

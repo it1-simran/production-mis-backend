@@ -8,8 +8,44 @@ const DeviceTestRecord = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 
+/** Sessions older than this are auto-expired so next-day logins always start fresh. */
+const SESSION_MAX_HOURS = Number(process.env.SESSION_MAX_HOURS || 10);
+const SESSION_MAX_MS = SESSION_MAX_HOURS * 60 * 60 * 1000;
+
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id);
+}
+
+/**
+ * If `session` has been active for longer than SESSION_MAX_HOURS, mark it as
+ * "stopped" with reason "auto_expired" and return the saved document.
+ * Returns null when no action was needed.
+ */
+async function autoExpireStaleSession(session) {
+  if (!session || session.status !== "active") return null;
+  const startedAt = session.startedAt ? new Date(session.startedAt) : null;
+  if (!startedAt) return null;
+  const ageMs = Date.now() - startedAt.getTime();
+  if (ageMs < SESSION_MAX_MS) return null; // Still within limit
+
+  const now = new Date();
+  // Close any still-open break
+  if (Array.isArray(session.breaks) && session.breaks.length > 0) {
+    const lastBreak = session.breaks[session.breaks.length - 1];
+    if (lastBreak && !lastBreak.endedAt) {
+      lastBreak.endedAt = now;
+    }
+  }
+  session.status = "stopped";
+  session.endedAt = now;
+  session.stopReason = `auto_expired_${SESSION_MAX_HOURS}h`;
+  session.updatedAt = now;
+  await session.save();
+  console.info(
+    `[SESSION_EXPIRE] Operator ${session.operatorId} session ${session._id} ` +
+    `auto-expired after ${Math.round(ageMs / 3600000)}h (limit: ${SESSION_MAX_HOURS}h)`
+  );
+  return session;
 }
 
 function parseDateOnly(value) {
@@ -111,11 +147,19 @@ module.exports = {
         status: "active",
       });
       if (existing) {
-        return res.status(200).json({
-          status: 200,
-          message: "Session already active",
-          session: existing,
-        });
+        // Auto-expire if the session has been active for more than SESSION_MAX_HOURS.
+        // This handles overnight / cross-day sessions so operators always get a
+        // fresh session tied to today when they start the next morning.
+        const expired = await autoExpireStaleSession(existing);
+        if (!expired) {
+          // Session is still valid – return it as-is.
+          return res.status(200).json({
+            status: 200,
+            message: "Session already active",
+            session: existing,
+          });
+        }
+        // Expired session was closed; fall through to create a new one below.
       }
 
       const assignment = await AssignOperatorToPlan.findOne({
@@ -173,6 +217,14 @@ module.exports = {
       }
 
       const session = await OperatorWorkSession.findOne(query).sort({ startedAt: -1 });
+      if (session) {
+        // Auto-expire stale session; if expired the caller receives null so it
+        // knows to create/start a new session.
+        const expired = await autoExpireStaleSession(session);
+        if (expired) {
+          return res.status(200).json({ status: 200, session: null, autoExpired: true });
+        }
+      }
       return res.status(200).json({ status: 200, session: session || null });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -524,6 +576,60 @@ module.exports = {
       return res.status(200).json({
         status: 200,
         details: stats,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  /**
+   * Admin / cron endpoint: sweeps all active sessions that have exceeded
+   * SESSION_MAX_HOURS and closes them.  Call this at shift start (e.g. 07:00)
+   * so stale overnight sessions are cleaned up before operators log in.
+   *
+   * POST /api/operator-work/sessions/expire-stale
+   * Requires a valid auth token (admin role preferred).
+   */
+  expireStaleSessionsAdmin: async (req, res) => {
+    try {
+      const cutoffDate = new Date(Date.now() - SESSION_MAX_MS);
+
+      // Find all active sessions started before the cutoff (i.e. older than SESSION_MAX_HOURS)
+      const staleSessions = await OperatorWorkSession.find({
+        status: "active",
+        startedAt: { $lt: cutoffDate },
+      });
+
+      if (!staleSessions.length) {
+        return res.status(200).json({ status: 200, message: "No stale sessions found", expired: 0 });
+      }
+
+      let expiredCount = 0;
+      const now = new Date();
+
+      for (const session of staleSessions) {
+        // Close any open break
+        if (Array.isArray(session.breaks) && session.breaks.length > 0) {
+          const lastBreak = session.breaks[session.breaks.length - 1];
+          if (lastBreak && !lastBreak.endedAt) {
+            lastBreak.endedAt = now;
+          }
+        }
+        session.status = "stopped";
+        session.endedAt = now;
+        session.stopReason = `auto_expired_${SESSION_MAX_HOURS}h`;
+        session.updatedAt = now;
+        await session.save();
+        expiredCount++;
+        console.info(
+          `[SESSION_EXPIRE_SWEEP] Closed stale session ${session._id} for operator ${session.operatorId}`
+        );
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: `Expired ${expiredCount} stale session(s)`,
+        expired: expiredCount,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
