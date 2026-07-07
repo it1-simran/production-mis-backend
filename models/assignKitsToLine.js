@@ -30,6 +30,9 @@ const assignKitsToLineSchema = new mongoose.Schema({
   updatedAt: {type: Date, default: Date.now},
 });
 
+assignKitsToLineSchema.index({ planId: 1 });
+assignKitsToLineSchema.index({ processId: 1 });
+
 const assignKitsToLine = mongoose.model(
   "assignKitsToLine",
   assignKitsToLineSchema

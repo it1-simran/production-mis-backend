@@ -841,6 +841,8 @@ module.exports = {
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
       const shouldPaginate = pageRaw || limitRaw;
+      const brief = req.query.brief === "true";
+      const projection = brief ? { logs: 0 } : null;
       let deviceTestRecords;
       let meta;
       if (shouldPaginate) {
@@ -848,7 +850,7 @@ module.exports = {
         const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
         const skip = (page - 1) * limit;
         const [entries, total] = await Promise.all([
-          DeviceTestRecordModel.find({ processId }, null, {
+          DeviceTestRecordModel.find({ processId }, projection, {
             sort: { createdAt: -1 },
           })
             .populate("operatorId", "name employeeCode")
@@ -862,7 +864,7 @@ module.exports = {
       } else {
         deviceTestRecords = await DeviceTestRecordModel.find(
           { processId },
-          null,
+          projection,
           { sort: { createdAt: -1 } },
         )
           .populate("operatorId", "name employeeCode")

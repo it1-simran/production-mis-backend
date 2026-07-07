@@ -11,6 +11,8 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 const OrderConfirmationModel = require("../models/orderConfirmationNumber");
 const DeviceAttempt = require("../models/deviceAttempt");
+const DeviceRetryLog = require("../models/deviceRetryLog");
+const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const cartonModel = require("../models/cartonManagement");
 const AssignNgDevice = require("../models/assignNgDevice");
 const {
@@ -159,6 +161,16 @@ const logOperatorPassTimings = (timings = {}, meta = {}) => {
   } catch (error) {
     console.info("[operator-pass-timing]", { ...meta, ...timings });
   }
+};
+const resolveOperatorSeatKey = async (processId, operatorId) => {
+  if (!operatorId || !mongoose.Types.ObjectId.isValid(operatorId)) return "";
+  const assignment = await AssignOperatorToPlan.findOne({
+    processId,
+    userId: operatorId,
+    status: "Occupied",
+  }).select("seatDetails").lean();
+  if (!assignment?.seatDetails?.rowNumber && !assignment?.seatDetails?.seatNumber) return "";
+  return `${assignment.seatDetails.rowNumber || ""}-${assignment.seatDetails.seatNumber || ""}`;
 };
 const buildCompactDeviceTestRecord = (record = {}) => ({
   _id: record?._id || null,
@@ -1692,6 +1704,73 @@ module.exports = {
         normalizedStageName.length > 0 ? normalizedStageName : "__default__"
       ).toString("base64url");
 
+      // Every path that abandons an attempt (Retry click, Cancel-then-rescan, walking
+      // away and rescanning) eventually leads back here for the *next* attempt. Before
+      // bumping the counter, check whether the attempt we're about to move past ever
+      // got a real result saved — if not, it was silently discarded, so backfill a
+      // DeviceRetryLog for it here rather than depending on every UI path to log it.
+      const existingCounter = await DeviceAttempt.findOne({
+        deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
+        planId: new mongoose.Types.ObjectId(planId),
+        processId: new mongoose.Types.ObjectId(processId),
+      }).lean();
+
+      if (existingCounter) {
+        const priorStageAttempts = existingCounter.stageAttempts || {};
+        const priorStageCount =
+          typeof priorStageAttempts?.get === "function"
+            ? priorStageAttempts.get(stageKey) || 0
+            : priorStageAttempts?.[stageKey] || 0;
+
+        if (priorStageCount > 0) {
+          const resolvedSerialForCheck =
+            String(serialNo || "").trim() ||
+            (await deviceModel.findById(resolvedDeviceId).select("serialNo").lean())?.serialNo ||
+            "";
+
+          const [hasSavedRecord, alreadyLogged] = await Promise.all([
+            deviceTestRecords.exists({
+              processId: new mongoose.Types.ObjectId(processId),
+              $or: [
+                { deviceId: new mongoose.Types.ObjectId(resolvedDeviceId) },
+                ...(resolvedSerialForCheck ? [{ serialNo: resolvedSerialForCheck }] : []),
+              ],
+              stageName: normalizedStageName,
+              attemptNumber: priorStageCount,
+            }),
+            DeviceRetryLog.exists({
+              processId: new mongoose.Types.ObjectId(processId),
+              deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
+              stageName: normalizedStageName,
+              attemptNumber: priorStageCount,
+            }),
+          ]);
+
+          if (!hasSavedRecord && !alreadyLogged) {
+            const backfillStart = existingCounter.lastAttemptAt || null;
+            const backfillEnd = new Date();
+            const seatKeyForBackfill = await resolveOperatorSeatKey(
+              processId,
+              existingCounter.operatorId || operatorId,
+            );
+            await new DeviceRetryLog({
+              deviceId: resolvedDeviceId,
+              serialNo: resolvedSerialForCheck,
+              planId,
+              processId,
+              operatorId: existingCounter.operatorId || (operatorId && mongoose.Types.ObjectId.isValid(operatorId) ? operatorId : undefined),
+              stageName: normalizedStageName,
+              seatKey: seatKeyForBackfill,
+              attemptNumber: priorStageCount,
+              startTime: backfillStart,
+              endTime: backfillEnd,
+              durationMs: backfillStart ? Math.max(0, backfillEnd.getTime() - new Date(backfillStart).getTime()) : 0,
+              failureReason: "No result recorded before the device was rescanned.",
+            }).save();
+          }
+        }
+      }
+
       const attempt = await DeviceAttempt.findOneAndUpdate(
         {
           deviceId: new mongoose.Types.ObjectId(resolvedDeviceId),
@@ -1729,6 +1808,114 @@ module.exports = {
         message: "Error registering device attempt",
         error: error.message,
       });
+    }
+  },
+  logDeviceRetryAttempt: async (req, res) => {
+    try {
+      const {
+        deviceId,
+        serialNo,
+        planId,
+        processId,
+        operatorId,
+        stageName,
+        seatKey,
+        attemptNumber,
+        startTime,
+        endTime,
+        failureReason,
+      } = req.body || {};
+
+      const normalizedSerial = String(serialNo || "").trim();
+      if (!planId || !processId || !normalizedSerial) {
+        return res.status(400).json({
+          status: 400,
+          message: "planId, processId and serialNo are required",
+        });
+      }
+      if (!mongoose.Types.ObjectId.isValid(planId) || !mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid planId or processId" });
+      }
+
+      const parsedStart = startTime ? new Date(startTime) : null;
+      const parsedEnd = endTime ? new Date(endTime) : new Date();
+      const validStart = parsedStart && !Number.isNaN(parsedStart.getTime()) ? parsedStart : null;
+      const validEnd = !Number.isNaN(parsedEnd.getTime()) ? parsedEnd : new Date();
+      const durationMs = validStart ? Math.max(0, validEnd.getTime() - validStart.getTime()) : 0;
+
+      const resolvedSeatKey =
+        String(seatKey || "").trim() || (await resolveOperatorSeatKey(processId, operatorId));
+
+      const retryLog = await new DeviceRetryLog({
+        deviceId: deviceId && mongoose.Types.ObjectId.isValid(deviceId) ? deviceId : undefined,
+        serialNo: normalizedSerial,
+        planId,
+        processId,
+        operatorId: operatorId && mongoose.Types.ObjectId.isValid(operatorId) ? operatorId : undefined,
+        stageName: String(stageName || "").trim(),
+        seatKey: resolvedSeatKey,
+        attemptNumber: Math.max(1, Number(attemptNumber || 1)),
+        startTime: validStart,
+        endTime: validEnd,
+        durationMs,
+        failureReason: String(failureReason || "").trim(),
+      }).save();
+
+      return res.status(201).json({
+        status: 201,
+        message: "Retry attempt logged",
+        retryLogId: retryLog._id,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Error logging retry attempt",
+        error: error.message,
+      });
+    }
+  },
+  getDeviceRetryLogsByProcessId: async (req, res) => {
+    try {
+      const processId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid processId" });
+      }
+
+      const retryLogs = await DeviceRetryLog.find({ processId })
+        .populate("operatorId", "name employeeCode")
+        .sort({ startTime: -1 })
+        .lean();
+
+      // Reshaped to look like a minimal deviceTestRecords entry so the existing
+      // attempt-trail/timeline builders can consume it with no further mapping.
+      const deviceTestRecords = retryLogs.map((log) => ({
+        _id: log._id,
+        deviceId: log.deviceId || null,
+        serialNo: log.serialNo,
+        planId: log.planId,
+        processId: log.processId,
+        operatorId: log.operatorId,
+        stageName: log.stageName,
+        seatNumber: log.seatKey,
+        status: "NG",
+        attemptNumber: log.attemptNumber,
+        startTime: log.startTime,
+        endTime: log.endTime,
+        testDurationMs: log.durationMs,
+        reattemptReason: log.failureReason,
+        reason: log.failureReason,
+        isRetryLogOnly: true,
+        logs: [],
+        createdAt: log.startTime || log.createdAt,
+      }));
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device retry logs fetched successfully",
+        deviceTestRecords,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getOverallDeviceTestEntry: async (req, res) => {

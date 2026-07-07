@@ -4,6 +4,7 @@ const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
 const assignOperatorToPlanModel = require("../models/assignOperatorToPlan");
 const OperatorWorkSession = require("../models/operatorWorkSession");
+const OperatorWorkEvent = require("../models/operatorWorkEvent");
 
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
@@ -1451,10 +1452,37 @@ const computeOperatorActivityTimestamps = async ({
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
+  const fromTrim = normalizeValue(dateFrom);
+  const toTrim = normalizeValue(dateTo);
+  const hasDateRange = Boolean(fromTrim || toTrim);
+  const { start: rangeStart, end: rangeEnd } = hasDateRange
+    ? getPlanningDayRange(fromTrim, toTrim)
+    : { start: null, end: null };
+  const applyDateRange = (query, field) => {
+    if (!hasDateRange) return query;
+    const filter = {};
+    if (rangeStart) filter.$gte = rangeStart;
+    if (rangeEnd) filter.$lte = rangeEnd;
+    if (Object.keys(filter).length) query[field] = filter;
+    return query;
+  };
+
   const sessionQuery = { processId: processObjId };
   if (normalizedOperatorIds.length > 0) {
     sessionQuery.operatorId = { $in: normalizedOperatorIds };
   }
+  applyDateRange(sessionQuery, "startedAt");
+
+  // "Stage Assignment Start" must reflect the operator's TASK_START click for
+  // TODAY's session, not assignOperatorToPlan.createdAt — that document is
+  // upserted once per (processId, userId) and its createdAt is permanently
+  // stuck at the first-ever assignment date, which is why this kept showing
+  // stale/old dates instead of today's start time.
+  const taskStartEventQuery = { processId: processObjId, actionName: "TASK_START" };
+  if (normalizedOperatorIds.length > 0) {
+    taskStartEventQuery.operatorId = { $in: normalizedOperatorIds };
+  }
+  applyDateRange(taskStartEventQuery, "occurredAt");
 
   const deviceMatch = { processId: processObjId };
   if (normalizedStageName) {
@@ -1477,11 +1505,8 @@ const computeOperatorActivityTimestamps = async ({
     { $match: { effectiveStart: { $ne: null } } },
   ];
 
-  const fromTrim = normalizeValue(dateFrom);
-  const toTrim = normalizeValue(dateTo);
-  if (fromTrim || toTrim) {
+  if (hasDateRange) {
     const dateFilter = {};
-    const { start: rangeStart, end: rangeEnd } = getPlanningDayRange(fromTrim, toTrim);
     if (rangeStart) dateFilter.$gte = rangeStart;
     if (rangeEnd) dateFilter.$lte = rangeEnd;
     devicePipeline.push({ $match: { effectiveStart: dateFilter } });
@@ -1511,12 +1536,17 @@ const computeOperatorActivityTimestamps = async ({
     },
   );
 
-  const [stageAssignment, operatorLogin, firstDeviceRows] = await Promise.all([
+  const [stageAssignment, taskStartEvent, operatorLogin, firstDeviceRows] = await Promise.all([
     assignOperatorToPlanModel
       .findOne(assignmentQuery)
       .sort({ createdAt: 1 })
       .populate("userId", "name employeeCode")
       .select("createdAt userId stageType seatDetails")
+      .lean(),
+    OperatorWorkEvent.findOne(taskStartEventQuery)
+      .sort({ occurredAt: 1 })
+      .populate("operatorId", "name employeeCode")
+      .select("occurredAt operatorId planId")
       .lean(),
     OperatorWorkSession.findOne(sessionQuery)
       .sort({ startedAt: 1 })
@@ -1527,15 +1557,15 @@ const computeOperatorActivityTimestamps = async ({
   ]);
 
   const firstDevice = Array.isArray(firstDeviceRows) ? firstDeviceRows[0] : null;
-  const stageAssignmentOperator = formatOperatorRef(stageAssignment?.userId);
+  const taskStartOperator = formatOperatorRef(taskStartEvent?.operatorId);
   const loginOperator = formatOperatorRef(operatorLogin?.operatorId);
   const deviceOperator = formatOperatorRef(firstDevice?.operator);
 
   return {
-    stageAssignmentStart: stageAssignment?.createdAt
+    stageAssignmentStart: taskStartEvent?.occurredAt
       ? {
-          at: toIsoOrNull(stageAssignment.createdAt),
-          ...stageAssignmentOperator,
+          at: toIsoOrNull(taskStartEvent.occurredAt),
+          ...taskStartOperator,
           stageType: normalizeValue(stageAssignment?.stageType) || null,
           seatKey: stageAssignment?.seatDetails
             ? `${normalizeValue(stageAssignment.seatDetails.rowNumber)}-${normalizeValue(stageAssignment.seatDetails.seatNumber)}`.replace(
