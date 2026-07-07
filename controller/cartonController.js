@@ -918,26 +918,23 @@ const enrichCartonDevicesForResponse = ({
   return (Array.isArray(cartons) ? cartons : []).map((carton) => {
     const cartonModelName = normalizeStageText(carton?.modelName || resolvedFallbackModelName);
     const rawDevices = Array.isArray(carton?.devices) ? carton.devices : [];
-    
-    // ✅ Identify if some devices were lost during aggregation/population (e.g. non-existent ObjectIds)
+
+    // Some of the carton's device references may not resolve to a real device
+    // document (deleted device, or a reference written before its device was
+    // ever created). We used to backfill fake "MISSING DEVICE" rows to keep the
+    // displayed count matching actualDeviceCount, but operators have no way to
+    // act on a synthetic row — it's pure noise. Just log the discrepancy and
+    // show only the devices that actually exist; actualDeviceCount is still
+    // returned as-is for callers that use it as a capacity/quantity figure.
     const expectedCount = Number(carton?.actualDeviceCount) || 0;
     const currentCount = rawDevices.length;
-    
-    // ✅ Create placeholders for missing devices to maintain correct "Net Qty" count
-    const paddedDevices = [...rawDevices];
     if (expectedCount > currentCount) {
-      for (let i = currentCount; i < expectedCount; i++) {
-        paddedDevices.push({
-          _id: null,
-          serialNo: "MISSING DEVICE",
-          isMissing: true,
-          status: "Data Error",
-          currentStage: "N/A"
-        });
-      }
+      console.warn(
+        `[carton ${carton?.cartonSerial || carton?._id}] ${expectedCount - currentCount} device reference(s) did not resolve to an existing device document (expected ${expectedCount}, resolved ${currentCount}).`,
+      );
     }
 
-    const enrichedDevices = paddedDevices.map((rawDevice, index) => {
+    const enrichedDevices = rawDevices.map((rawDevice, index) => {
       const device = rawDevice && typeof rawDevice === "object"
         ? { ...rawDevice }
         : { _id: rawDevice, serialNo: normalizeStageText(rawDevice), status: "", currentStage: "" };
@@ -1672,9 +1669,14 @@ module.exports = {
   getCartonByProcessIdToPDI: async (req, res) => {
     try {
       const { processId } = req.params;
-      const { page = 1, limit = 20, deviceLimit = 20 } = req.query;  // 🚀 FIX #2: Pagination
+      // deviceLimit used to default to 20, silently truncating every carton's
+      // device list beyond that (via the $slice below) with no UI anywhere to
+      // page through the rest — PDI needs to see every unit in the carton to
+      // verify it. Only slice when a caller explicitly asks for a page size;
+      // otherwise return every device the carton actually has.
+      const { page = 1, limit = 20, deviceLimit } = req.query;  // 🚀 FIX #2: Pagination
       const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-      const devicePageSize = parseInt(deviceLimit, 10);
+      const devicePageSize = deviceLimit ? parseInt(deviceLimit, 10) : null;
 
       const processIdMatch = buildProcessIdMatch(processId);
       if (!processIdMatch) {
@@ -1776,14 +1778,11 @@ module.exports = {
         // 🚀 FIX #2: Pagination stages
         { $skip: skip },
         { $limit: parseInt(limit, 10) },
-        // Limit devices per carton
-        {
-          $addFields: {
-            "devices": {
-              $slice: ["$devices", devicePageSize]
-            }
-          }
-        }
+        // Only slice the per-carton device list when explicitly requested —
+        // see comment above devicePageSize for why this must not run by default.
+        ...(devicePageSize
+          ? [{ $addFields: { devices: { $slice: ["$devices", devicePageSize] } } }]
+          : []),
       ]);
       if (!cartons || cartons.length === 0) {
         return res.status(200).json({ cartonSerials: [], cartonDetails: [], pagination: { page, limit, total: 0 } });
