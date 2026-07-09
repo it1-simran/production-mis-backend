@@ -6,8 +6,17 @@ const OperatorWorkSession = require("../models/operatorWorkSession");
 const OperatorWorkEvent = require("../models/operatorWorkEvent");
 const OperatorIdleLog = require("../models/operatorIdleLog");
 const DeviceTestRecord = require("../models/deviceTestModel");
+const PlaningAndScheduling = require("../models/planingAndSchedulingModel");
+const ShiftManagement = require("../models/shiftManagement");
+const { computeBreakEntitlements } = require("../utils/breakEntitlements");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
+
+/** Break reasons that are limited per shift, mapped to their entitlement key. */
+const LIMITED_BREAK_REASONS = {
+  LUNCH_BREAK: "lunchAllowed",
+  TEA_BREAK: "teaAllowed",
+};
 
 /** Sessions older than this are auto-expired so next-day logins always start fresh. */
 const SESSION_MAX_HOURS = Number(process.env.SESSION_MAX_HOURS || 10);
@@ -191,6 +200,46 @@ module.exports = {
         status: 201,
         message: "Session started",
         session,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  setPendingIdle: async (req, res) => {
+    try {
+      const operatorId = req?.user?.id;
+      const { processId, idleStartTime } = req.body || {};
+      if (!operatorId || !isValidObjectId(operatorId)) {
+        return res.status(401).json({ status: 401, message: "Invalid operator" });
+      }
+      if (!processId || !isValidObjectId(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid processId" });
+      }
+      const start = new Date(idleStartTime);
+      if (Number.isNaN(start.getTime())) {
+        return res.status(400).json({ status: 400, message: "Invalid idleStartTime" });
+      }
+
+      const session = await OperatorWorkSession.findOne({
+        operatorId: new mongoose.Types.ObjectId(operatorId),
+        processId: new mongoose.Types.ObjectId(processId),
+        status: "active",
+      }).sort({ startedAt: -1 });
+      if (!session) {
+        return res.status(200).json({ status: 200, session: null });
+      }
+      // Keep the EARLIEST pending start so a re-fire never shortens the episode.
+      const existing = session.pendingIdleStartAt
+        ? new Date(session.pendingIdleStartAt).getTime()
+        : null;
+      if (existing == null || start.getTime() < existing) {
+        session.pendingIdleStartAt = start;
+        await session.save();
+      }
+      return res.status(200).json({
+        status: 200,
+        pendingIdleStartAt: session.pendingIdleStartAt,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -507,6 +556,46 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Invalid idle start/end time" });
       }
 
+      // Per-shift break limits: lunch/tea are capped by how many matching break
+      // intervals the plan's shift configures (client disables over-limit options,
+      // but that is advisory — enforce here too). Fail-open if the shift can't be
+      // resolved, so a config gap never blocks legitimate idle logging.
+      const entitlementKey = LIMITED_BREAK_REASONS[reasonCode];
+      if (entitlementKey && planId && isValidObjectId(planId)) {
+        try {
+          const plan = await PlaningAndScheduling.findById(planId)
+            .select("selectedShift")
+            .lean();
+          const shift = plan?.selectedShift
+            ? await ShiftManagement.findById(plan.selectedShift).lean()
+            : null;
+          const entitlements = computeBreakEntitlements(shift);
+          if (entitlements.hasConfig) {
+            const allowed = entitlements[entitlementKey] || 0;
+            const dayStart = moment.tz(start, TZ).startOf("day").toDate();
+            const dayEnd = moment.tz(start, TZ).endOf("day").toDate();
+            const alreadyTaken = await OperatorIdleLog.countDocuments({
+              operatorId: new mongoose.Types.ObjectId(operatorId),
+              planId: new mongoose.Types.ObjectId(planId),
+              reasonCode,
+              idleStartTime: { $gte: dayStart, $lte: dayEnd },
+            });
+            if (alreadyTaken >= allowed) {
+              return res.status(409).json({
+                status: 409,
+                message:
+                  allowed === 0
+                    ? `${reasonLabel} is not available for this shift.`
+                    : `${reasonLabel} limit reached for this shift (${allowed} allowed).`,
+              });
+            }
+          }
+        } catch (limitError) {
+          // Fail-open: never block idle logging on a break-limit lookup error.
+          console.error("Break-limit check failed:", limitError.message);
+        }
+      }
+
       // Resolve the operator's active session when the client didn't send one,
       // so idle episodes stay linked to the same per-day session as events/breaks.
       let resolvedSessionId = sessionId && isValidObjectId(sessionId) ? sessionId : null;
@@ -529,9 +618,21 @@ module.exports = {
         durationMs: end.getTime() - start.getTime(),
         reasonCode,
         reasonLabel,
+        category: OperatorIdleLog.IDLE_REASON_CATEGORY[reasonCode] || "DOWNTIME",
         remarks: trimmedRemarks,
         stageName: String(stageName || "").trim(),
       }).save();
+
+      // Episode is now explained — clear the pending flag so it won't re-fire
+      // on the next login.
+      await OperatorWorkSession.updateMany(
+        {
+          operatorId: new mongoose.Types.ObjectId(operatorId),
+          processId: new mongoose.Types.ObjectId(processId),
+          status: "active",
+        },
+        { $set: { pendingIdleStartAt: null } },
+      );
 
       return res.status(201).json({
         status: 201,
