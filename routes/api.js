@@ -204,6 +204,16 @@ router.post(
   authController.authenticateToken,
   operatorWorkController.expireStaleSessionsAdmin
 );
+router.post(
+  "/operator-work/idle-logs",
+  authController.authenticateToken,
+  operatorWorkController.createIdleLog
+);
+router.get(
+  "/operator-work/idle-logs",
+  authController.authenticateToken,
+  operatorWorkController.getIdleLogs
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);

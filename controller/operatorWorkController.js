@@ -4,6 +4,7 @@ const moment = require("moment-timezone");
 const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const OperatorWorkSession = require("../models/operatorWorkSession");
 const OperatorWorkEvent = require("../models/operatorWorkEvent");
+const OperatorIdleLog = require("../models/operatorIdleLog");
 const DeviceTestRecord = require("../models/deviceTestModel");
 
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
@@ -458,6 +459,136 @@ module.exports = {
 
       await event.save();
       return res.status(201).json({ status: 201, message: "Event captured", eventId: event._id });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  createIdleLog: async (req, res) => {
+    try {
+      const operatorId = req?.user?.id;
+      const {
+        processId,
+        planId = null,
+        sessionId = null,
+        idleStartTime,
+        idleEndTime,
+        reasonCode,
+        remarks = "",
+        stageName = "",
+      } = req.body || {};
+
+      if (!operatorId || !isValidObjectId(operatorId)) {
+        return res.status(401).json({ status: 401, message: "Invalid operator" });
+      }
+      if (!processId || !isValidObjectId(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid processId" });
+      }
+
+      const reasonLabel = OperatorIdleLog.IDLE_REASONS[String(reasonCode || "").trim()];
+      if (!reasonLabel) {
+        return res.status(400).json({
+          status: 400,
+          message: `Invalid reasonCode. Allowed: ${Object.keys(OperatorIdleLog.IDLE_REASONS).join(", ")}`,
+        });
+      }
+      const trimmedRemarks = String(remarks || "").trim();
+      if (reasonCode === "OTHER" && !trimmedRemarks) {
+        return res.status(400).json({
+          status: 400,
+          message: "Remarks are required when reason is Other",
+        });
+      }
+
+      const start = new Date(idleStartTime);
+      // End defaults to now — the operator answering the popup is the resume moment.
+      const end = idleEndTime ? new Date(idleEndTime) : new Date();
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+        return res.status(400).json({ status: 400, message: "Invalid idle start/end time" });
+      }
+
+      // Resolve the operator's active session when the client didn't send one,
+      // so idle episodes stay linked to the same per-day session as events/breaks.
+      let resolvedSessionId = sessionId && isValidObjectId(sessionId) ? sessionId : null;
+      if (!resolvedSessionId) {
+        const activeSession = await OperatorWorkSession.findOne({
+          operatorId: new mongoose.Types.ObjectId(operatorId),
+          processId: new mongoose.Types.ObjectId(processId),
+          status: "active",
+        }).select("_id").lean();
+        resolvedSessionId = activeSession?._id || null;
+      }
+
+      const idleLog = await new OperatorIdleLog({
+        operatorId,
+        processId,
+        planId: planId && isValidObjectId(planId) ? planId : null,
+        sessionId: resolvedSessionId,
+        idleStartTime: start,
+        idleEndTime: end,
+        durationMs: end.getTime() - start.getTime(),
+        reasonCode,
+        reasonLabel,
+        remarks: trimmedRemarks,
+        stageName: String(stageName || "").trim(),
+      }).save();
+
+      return res.status(201).json({
+        status: 201,
+        message: "Idle time recorded",
+        idleLog,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  getIdleLogs: async (req, res) => {
+    try {
+      const { operatorId, processId, planId, startDate, endDate } = req.query || {};
+
+      const query = {};
+      if (operatorId) {
+        if (!isValidObjectId(operatorId)) {
+          return res.status(400).json({ status: 400, message: "Invalid operatorId" });
+        }
+        query.operatorId = new mongoose.Types.ObjectId(operatorId);
+      }
+      if (processId) {
+        if (!isValidObjectId(processId)) {
+          return res.status(400).json({ status: 400, message: "Invalid processId" });
+        }
+        query.processId = new mongoose.Types.ObjectId(processId);
+      }
+      if (planId) {
+        if (!isValidObjectId(planId)) {
+          return res.status(400).json({ status: 400, message: "Invalid planId" });
+        }
+        query.planId = new mongoose.Types.ObjectId(planId);
+      }
+      if (startDate || endDate) {
+        query.idleStartTime = {};
+        const startKey = parseDateOnly(startDate);
+        const endKey = parseDateOnly(endDate);
+        if (startKey) query.idleStartTime.$gte = moment.tz(startKey, "YYYY-MM-DD", TZ).startOf("day").toDate();
+        if (endKey) query.idleStartTime.$lte = moment.tz(endKey, "YYYY-MM-DD", TZ).endOf("day").toDate();
+        if (Object.keys(query.idleStartTime).length === 0) delete query.idleStartTime;
+      }
+
+      const idleLogs = await OperatorIdleLog.find(query)
+        .populate("operatorId", "name employeeCode")
+        .sort({ idleStartTime: -1 })
+        .limit(1000)
+        .lean();
+
+      const totalIdleMs = idleLogs.reduce((sum, log) => sum + Number(log.durationMs || 0), 0);
+
+      return res.status(200).json({
+        status: 200,
+        message: "Idle logs fetched successfully",
+        idleLogs,
+        summary: { count: idleLogs.length, totalIdleMs },
+      });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
