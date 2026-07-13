@@ -721,6 +721,7 @@ module.exports = {
       const sessions = await OperatorWorkSession.find(query)
         .populate("processId", "name")
         .sort({ startedAt: -1 })
+        .limit(200)
         .lean();
 
       const processedSessions = sessions.map((s) => {
@@ -830,7 +831,7 @@ module.exports = {
       const staleSessions = await OperatorWorkSession.find({
         status: "active",
         startedAt: { $lt: cutoffDate },
-      });
+      }).limit(500);
 
       if (!staleSessions.length) {
         return res.status(200).json({ status: 200, message: "No stale sessions found", expired: 0 });
