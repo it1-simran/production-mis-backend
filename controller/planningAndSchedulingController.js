@@ -19,6 +19,7 @@ const {
   normalizeAssignedStagesPayload,
   getPlanningDayRange,
 } = require("../services/planInsightsService");
+const { queryResultCache } = require("../config/cache");
 const {
   buildTestingAnalytics,
   SHIFT_PRODUCTIVITY_PADDING_MINUTES,
@@ -1232,6 +1233,10 @@ module.exports = {
           message: "Invalid plan id",
         });
       }
+
+      const cacheKey = `planInsights:${planId}:${req.query.from || ""}:${req.query.to || ""}:${req.query.seatKey || ""}:${req.query.stageName || ""}`;
+      const cached = queryResultCache.get(cacheKey);
+      if (cached) return res.status(200).json(cached);
       const plan = await PlaningAndSchedulingModel.findOne({
         _id: planId,
         ...getUnscopedAuthorizedReadListFilter(),
@@ -1305,11 +1310,13 @@ module.exports = {
         });
       }
 
-      return res.status(200).json({
+      const response = {
         status: 200,
         message: "Plan insights fetched successfully",
         data: insights,
-      });
+      };
+      queryResultCache.set(cacheKey, response, 10);
+      return res.status(200).json(response);
     } catch (error) {
       console.error("Error fetching plan insights:", error);
       return res.status(500).json({
