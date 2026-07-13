@@ -285,6 +285,7 @@ router.post('/production/returnKitsToStore', authController.authenticateToken, k
 router.put('/store/updateKitsStatus/:id', authController.authenticateToken, kitsController.updateKitsStatus);
 router.get('/process/viewReturnToStore', authController.authenticateToken, kitsController.viewReturnKitStore);
 router.get('/operators/getVacantOperator', authController.authenticateToken, processController.getVacantOperator);
+router.post('/operators/reassign', authController.authenticateToken, processController.reassignOperator);
 router.put('/operator/updateStatus/:id', authController.authenticateToken, processController.updateStatusAssignedOperator);
 router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, jigController.updateJigStatus);
