@@ -862,13 +862,16 @@ module.exports = {
         deviceTestRecords = entries;
         meta = { page, limit, total };
       } else {
-        deviceTestRecords = await DeviceTestRecordModel.find(
-          { processId },
-          projection,
-          { sort: { createdAt: -1 } },
-        )
-          .populate("operatorId", "name employeeCode")
-          .lean();
+        const defaultLimit = 300;
+        const [entries, total] = await Promise.all([
+          DeviceTestRecordModel.find({ processId }, projection, { sort: { createdAt: -1 } })
+            .populate("operatorId", "name employeeCode")
+            .limit(defaultLimit)
+            .lean(),
+          DeviceTestRecordModel.countDocuments({ processId }),
+        ]);
+        deviceTestRecords = entries;
+        meta = { page: 1, limit: defaultLimit, total };
       }
       return res.status(200).json({
         status: 200,
