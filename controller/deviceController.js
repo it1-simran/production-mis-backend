@@ -15,6 +15,7 @@ const DeviceRetryLog = require("../models/deviceRetryLog");
 const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const cartonModel = require("../models/cartonManagement");
 const AssignNgDevice = require("../models/assignNgDevice");
+const StickerReprintLog = require("../models/stickerReprintLog");
 const {
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
@@ -592,6 +593,110 @@ const resolveDeviceIdentity = (device) => {
 };
 
 module.exports = {
+  createStickerReprintLog: async (req, res) => {
+    try {
+      const printedBy = req?.user?.id;
+      const {
+        serialNo,
+        deviceId = null,
+        processId = null,
+        stageName = "",
+        templateNames = [],
+        copies = 1,
+        source = "device-history",
+      } = req.body || {};
+
+      if (!printedBy || !mongoose.isValidObjectId(printedBy)) {
+        return res.status(401).json({ status: 401, message: "Invalid user" });
+      }
+      const trimmedSerial = String(serialNo || "").trim();
+      if (!trimmedSerial) {
+        return res.status(400).json({ status: 400, message: "serialNo is required" });
+      }
+
+      const reprintLog = await new StickerReprintLog({
+        serialNo: trimmedSerial,
+        deviceId: deviceId && mongoose.isValidObjectId(deviceId) ? deviceId : null,
+        processId: processId && mongoose.isValidObjectId(processId) ? processId : null,
+        stageName: String(stageName || "").trim(),
+        templateNames: Array.isArray(templateNames)
+          ? templateNames.map((name) => String(name || "").trim()).filter(Boolean)
+          : [],
+        copies: Math.max(1, Number(copies) || 1),
+        printedBy,
+        source: String(source || "device-history").trim(),
+      }).save();
+
+      return res.status(201).json({
+        status: 201,
+        message: "Sticker reprint recorded",
+        reprintLog,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  markStickerReprintVerified: async (req, res) => {
+    try {
+      const { id } = req.params || {};
+      if (!id || !mongoose.isValidObjectId(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid reprint log id" });
+      }
+      const reprintLog = await StickerReprintLog.findByIdAndUpdate(
+        id,
+        { $set: { verified: true, verifiedAt: new Date() } },
+        { new: true }
+      ).lean();
+      if (!reprintLog) {
+        return res.status(404).json({ status: 404, message: "Reprint log not found" });
+      }
+      return res.status(200).json({
+        status: 200,
+        message: "Sticker reprint marked as verified",
+        reprintLog,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  getStickerReprintLogs: async (req, res) => {
+    try {
+      const { serialNo, processId, startDate, endDate } = req.query || {};
+      const query = {};
+      if (serialNo) query.serialNo = String(serialNo).trim();
+      if (processId) {
+        if (!mongoose.isValidObjectId(processId)) {
+          return res.status(400).json({ status: 400, message: "Invalid processId" });
+        }
+        query.processId = new mongoose.Types.ObjectId(processId);
+      }
+      if (startDate || endDate) {
+        query.createdAt = {};
+        const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
+        const end = endDate ? new Date(`${endDate}T23:59:59.999`) : null;
+        if (start && !Number.isNaN(start.getTime())) query.createdAt.$gte = start;
+        if (end && !Number.isNaN(end.getTime())) query.createdAt.$lte = end;
+        if (Object.keys(query.createdAt).length === 0) delete query.createdAt;
+      }
+
+      const reprintLogs = await StickerReprintLog.find(query)
+        .populate("printedBy", "name employeeCode")
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean();
+
+      return res.status(200).json({
+        status: 200,
+        message: "Sticker reprint logs fetched successfully",
+        reprintLogs,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
   create: async (req, res) => {
     try {
       const data = req.body || {};

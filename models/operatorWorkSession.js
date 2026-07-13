@@ -43,6 +43,12 @@ const operatorWorkSessionSchema = new mongoose.Schema({
   breaks: { type: [breakSchema], required: false, default: [] },
   breakTotalMs: { type: Number, required: false, default: 0 },
 
+  // Set when an idle-reason popup fires but hasn't been answered yet. Persists
+  // the true idle start server-side so the popup can be re-shown after a
+  // browser close / re-login (incognito wipes localStorage) — the operator
+  // cannot escape logging the idle episode. Cleared when a reason is submitted.
+  pendingIdleStartAt: { type: Date, required: false, default: null },
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

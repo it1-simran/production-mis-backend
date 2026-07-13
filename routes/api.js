@@ -204,6 +204,21 @@ router.post(
   authController.authenticateToken,
   operatorWorkController.expireStaleSessionsAdmin
 );
+router.post(
+  "/operator-work/idle-pending",
+  authController.authenticateToken,
+  operatorWorkController.setPendingIdle
+);
+router.post(
+  "/operator-work/idle-logs",
+  authController.authenticateToken,
+  operatorWorkController.createIdleLog
+);
+router.get(
+  "/operator-work/idle-logs",
+  authController.authenticateToken,
+  operatorWorkController.getIdleLogs
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
@@ -230,6 +245,9 @@ router.post('/devices/validate-identity-at-connection', authController.authentic
 router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.getDeviceComprehensiveHistory);
+router.post('/devices/sticker-reprint-log', authController.authenticateToken, deviceController.createStickerReprintLog);
+router.get('/devices/sticker-reprint-log', authController.authenticateToken, deviceController.getStickerReprintLogs);
+router.patch('/devices/sticker-reprint-log/:id/verify', authController.authenticateToken, deviceController.markStickerReprintVerified);
 router.post('/createReport', authController.authenticateToken, reportController.create);
 router.get('/getOverallProgressByOperatorId/:planId/:operatorId', authController.authenticateToken, deviceController.getOverallProcessByOperatorId);
 router.post('/sticker/fields/create', authController.authenticateToken, stickerController.createStickerField);
