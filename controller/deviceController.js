@@ -1220,8 +1220,8 @@ module.exports = {
       // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
       if (Array.isArray(data.logs) && data.logs.length > 0) {
         data.logs.forEach(log => {
-          const parsed = log.logData?.parsedData;
-          if (parsed && typeof parsed === "object") {
+          const parsed = log.logData?.parsedData ?? log.logData;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             Object.keys(parsed).forEach(k => {
               const key = String(k || "").toLowerCase();
               const val = String(parsed[k] || "").trim();
