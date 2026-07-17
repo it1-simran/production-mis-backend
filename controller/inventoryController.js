@@ -31,6 +31,7 @@ module.exports = {
       processCount = await ProcessModel.countDocuments({});
       productCount = await ProductModel.countDocuments({});
       productWiseQuantity = await ProcessModel.aggregate([
+        { $limit: 500 },
         {
           $lookup: {
             from: "products",
@@ -107,7 +108,7 @@ module.exports = {
     try {
       const Inventory = await InventoryModel.find(getUnscopedAuthorizedReadListFilter()).sort({
         _id: -1,
-      }).lean();
+      }).limit(1000).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Inventory Fetched Sucessfully!!",
@@ -163,7 +164,8 @@ module.exports = {
             productDetails: 1,
           },
         },
-        { $sort: { _id: -1 } }
+        { $sort: { _id: -1 } },
+        { $limit: 500 },
       ]);
       const processInventory = data
         .filter(
@@ -430,7 +432,7 @@ module.exports = {
 
 const calculateOverallInventoryAccuracy = async (physicalCounts) => {
   try {
-    const inventories = await InventoryModel.find().lean();
+    const inventories = await InventoryModel.find().limit(500).lean();
     if (inventories.length === 0) {
 
       return 0;

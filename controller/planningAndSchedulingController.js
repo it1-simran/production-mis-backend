@@ -29,7 +29,7 @@ const DeviceTestRecordModel = require("../models/deviceTestModel");
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 // Newest-first scan cap for testing analytics; the old 5000 cap silently
 // dropped older stage records on large plans (2000 devices × 12 stages ≈ 24k).
-const ANALYTICS_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 50000;
+const ANALYTICS_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 10000;
 
 const toObjectId = (id) => {
   if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
@@ -1460,7 +1460,7 @@ module.exports = {
     try {
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find(
         getUnscopedAuthorizedReadListFilter(),
-      ).lean();
+      ).limit(500).lean();
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",

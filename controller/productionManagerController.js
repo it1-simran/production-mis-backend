@@ -198,44 +198,7 @@ module.exports = {
   },
 
   processStatics: async (req, res) => {
-    try {
-      let Process = await ProcessModel.aggregate([
-        {
-          $lookup: {
-            from: "planingandschedulings",
-            localField: "_id",
-            foreignField: "selectedProcess",
-            as: "planingData",
-          },
-        },
-        { $unwind: "$planingData" },
-        // {
-        //   $project: {
-        //     // _id: 1,
-        //     // name: 1,
-        //     // processID: 1,
-        //     // processQuantity: "$quantity",
-        //     // inventoryQuantity: "$inventoryProcess.quantity",
-        //     // cartonQuantity: "$inventoryProcess.cartonQuantity",
-        //     // status: "$inventoryProcess.status",
-        //     // productName: "$products.name",
-        //     // issuedKits: 1,
-        //     // issuedCartons: 1,
-        //     // createdAt: 1,
-        //     // updatedAt: 1,
-        //     // status: 1,
-        //     // productDetails: 1,
-        //   },
-        // },
-      ]);
-
-    } catch (error) {
-      res
-        .status(500)
-        .json({
-          message: "An error occured while updating the Production Status",
-        });
-    }
+    return res.status(501).json({ status: 501, message: "Not implemented" });
   },
   getProcessCompletionAnalytics: async (req, res) => {
     try {
@@ -325,7 +288,10 @@ module.exports = {
       const startMs = startDate.getTime();
       const endMs = endDate.getTime();
 
-      let plans = await PlaningAndSchedulingModel.find(filter).lean();
+      let plans = await PlaningAndSchedulingModel.find(filter)
+        .select("_id startDate estimatedEndDate status selectedProcess assignedStages downTime ProcessShiftMappings selectedShift")
+        .limit(300)
+        .lean();
 
       const planInRange = (p) => {
         const s = p?.startDate ? new Date(p.startDate).getTime() : null;
@@ -338,7 +304,10 @@ module.exports = {
         plans = plans.filter((p) => String(p?.selectedProcess || "") === String(processId));
       }
 
-      const processesAll = await ProcessModel.find({ ...filter, status: "active" }).lean();
+      const processesAll = await ProcessModel.find({ ...filter, status: "active" })
+        .select("_id name processID quantity stages")
+        .limit(200)
+        .lean();
       let processes = processesAll;
 
       const processIds = [
@@ -354,7 +323,7 @@ module.exports = {
       const deviceTests = await DeviceTestModel.find({
         processId: { $in: processIds },
         createdAt: { $gte: startDate, $lte: endDate },
-      }).lean();
+      }).limit(10000).lean();
 
       const latestMap = new Map();
       deviceTests.forEach((record) => {
