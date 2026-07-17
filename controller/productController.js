@@ -185,7 +185,7 @@ module.exports = {
   activate: async (req, res) => {
     try {
       const id = req.params.id;
-      const product = await Product.findById(id).lean();
+      const product = await Product.findById(id);
       if (!product) {
         return res.status(404).json({ message: "Product not found" });
       }

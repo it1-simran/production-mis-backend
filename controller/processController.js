@@ -665,6 +665,8 @@ module.exports = {
   getVacantOperator: async (req, res) => {
     try {
       const processId = req.query?.processId;
+      const hasProcessScope =
+        processId && mongoose.Types.ObjectId.isValid(processId);
       const occupiedQuery = {
         $or: [
           { status: { $regex: /^occupied$/i } },
@@ -673,14 +675,18 @@ module.exports = {
           { status: "" },
         ],
       };
-      if (processId && mongoose.Types.ObjectId.isValid(processId)) {
+      if (hasProcessScope) {
         occupiedQuery.processId = new mongoose.Types.ObjectId(processId);
       }
 
-      const occupiedUserIds = await AssignOperatorToPlanModel.distinct(
-        "userId",
-        occupiedQuery,
-      );
+      // Exclusion only applies to operators occupied in the CURRENT process.
+      // Without a process scope we exclude nobody — operators busy elsewhere
+      // are returned with an assignedProcess annotation so the UI can show an
+      // "Assigned" badge and offer the reassignment flow. (Previously an
+      // unscoped call hid every occupied operator, leaving the list empty.)
+      const occupiedUserIds = hasProcessScope
+        ? await AssignOperatorToPlanModel.distinct("userId", occupiedQuery)
+        : [];
 
       const forCommonStages =
         String(req.query?.forCommonStages || "").toLowerCase() === "true" ||
@@ -700,9 +706,10 @@ module.exports = {
 
       const users = await OperatorModel.find({
         ...userTypeFilter,
+        status: { $ne: 'Discarded' },
         ...(occupiedUserIds.length > 0 ? { _id: { $nin: occupiedUserIds } } : {}),
       })
-        .select("name email phoneNumber userType skills employeeCode profilePic")
+        .select("name email phoneNumber userType skills employeeCode profilePic status")
         .lean();
 
       return res.status(200).json({

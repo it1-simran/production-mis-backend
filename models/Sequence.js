@@ -1,0 +1,1 @@
+const mongoose = require('mongoose');\n\nconst sequenceSchema = new mongoose.Schema({\n  name: { type: String, required: true, unique: true },\n  value: { type: Number, default: 0 }\n});\n\nmodule.exports = mongoose.model('Sequence', sequenceSchema);
