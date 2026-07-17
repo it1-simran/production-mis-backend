@@ -92,8 +92,11 @@ router.delete('/room-plan/delete/:id', authController.authenticateToken, roomPla
 router.post('/room-plan/deleteRoomPlan', authController.authenticateToken, roomPlanController.deleteMultipleRoomPlan);
 router.get('/room-plan/getRoomPlanByID/:id', authController.authenticateToken, roomPlanController.getRoomPlanByID)
 router.put('/room-plan/getRoomPlanByID/update/:id', authController.authenticateToken, roomPlanController.update);
+router.get('/user/generate-code', authController.authenticateToken, userController.generateEmployeeCode);
 router.post('/user/create', authController.authenticateToken, authController.authorize("View User", "create"), userController.createUser);
 router.get('/user/view', authController.authenticateToken, authController.authorize("View User", "read"), userController.getUsers);
+router.get('/user/operator-dashboard-stats', authController.authenticateToken, authController.authorize("View User", "read"), userController.getOperatorDashboardStats);
+router.put('/user/deboard/:id', authController.authenticateToken, authController.authorize("View User", "update"), userController.deboardOperator);
 router.delete('/user/delete/:id', authController.authenticateToken, authController.authorize("View User", "delete"), userController.deleteUser);
 router.post('/user/delete/multiple', authController.authenticateToken, authController.authorize("View User", "delete"), userController.deleteUserMultiple);
 router.put('/user/update/:id', authController.authenticateToken, authController.authorize("View User", "update"), userController.updateUser);

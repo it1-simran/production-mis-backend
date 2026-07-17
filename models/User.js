@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  employeeCode: { type: String, required: true },
+  employeeCode: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
   mobileNo: { type: String, unique: true, sparse: true },
   gender: {type: String, required:true},
@@ -15,6 +15,10 @@ const userSchema = new mongoose.Schema({
   coverPic: { type: String, default: "" },
   skills: { type: [String], default: [] },
   department: { type: String, default: "" },
+  status: { type: String, enum: ['Active', 'Inactive', 'Discarded'], default: 'Active' },
+  deboardedAt: { type: Date, default: null },
+  deboardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  deboardReason: { type: String, default: "" }
 });
 
 const User = mongoose.model("User", userSchema);

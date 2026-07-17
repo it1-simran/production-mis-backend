@@ -4,7 +4,7 @@ const bcrypt = require("bcrypt");
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 class UserService {
   async authenticate(data) {
-    const { email, password, employeeCode, mobileNo, identifier } = data;
+    const { email, password, employeeCode, mobileNo, identifier, loginType } = data;
     const loginIdentifier = identifier || email || employeeCode || mobileNo;
 
     try {
@@ -12,32 +12,56 @@ class UserService {
         return { status: 400, success: false, message: "Please provide email, employee code, or phone number" };
       }
 
-      const user = await User.findOne({
+      // Case-insensitive, exact match on the identifier — operators shouldn't
+      // be locked out because they typed "OP001" instead of "op001".
+      const escaped = String(loginIdentifier)
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const ciExact = { $regex: `^${escaped}$`, $options: "i" };
+      let queryConditions = {
         $or: [
-          { email: loginIdentifier },
-          { employeeCode: loginIdentifier },
-          { mobileNo: loginIdentifier },
+          { email: ciExact },
+          { employeeCode: ciExact },
+          { mobileNo: ciExact },
         ],
-      });
-      if (!user) {
-        return { status: 401, success: false, message: "Invalid credentials" };
+      };
+
+      if (loginType === "operator") {
+        queryConditions.userType = { $regex: /^operator$/i };
+      } else if (loginType === "administrator") {
+        queryConditions.userType = { $not: /^operator$/i };
       }
-      const isPasswordMatch = await bcrypt.compare(password, user.password);
-      if (!isPasswordMatch) {
-        return {
-          status: 401,
-          success: false,
-          message: "Password does not match",
-        };
+
+      const user = await User.findOne(queryConditions);
+      if (!user) {
+        return { status: 401, success: false, message: "Invalid credentials or incorrect role" };
+      }
+
+      if (loginType !== "operator") {
+        if (!password) {
+          return {
+            status: 400,
+            success: false,
+            message: "Please provide password",
+          };
+        }
+        const isPasswordMatch = await bcrypt.compare(password, user.password);
+        if (!isPasswordMatch) {
+          return {
+            status: 401,
+            success: false,
+            message: "Password does not match",
+          };
+        }
       }
       const token = jwt.sign(
-        { 
-          id: user._id, 
-          email: user.email, 
-          userType: user.userType, 
-          department: user.department || "" 
-        }, 
-        JWT_SECRET, 
+        {
+          id: user._id,
+          email: user.email,
+          userType: user.userType,
+          department: user.department || ""
+        },
+        JWT_SECRET,
         { expiresIn: "24h" }
       );
 

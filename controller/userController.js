@@ -21,6 +21,26 @@ module.exports = {
       return res.status(500).json({ error: "USER_CONTROLLER_INTERNAL_ERROR", details: error.message });
     }
   },
+  generateEmployeeCode: async (req, res) => {
+    try {
+      const year = new Date().getFullYear().toString().slice(-2);
+      const prefix = `JSD-${year}-`;
+      const Sequence = require("../models/Sequence");
+      
+      let seq = await Sequence.findOneAndUpdate(
+        { name: `employeeCode_${year}` },
+        { $inc: { value: 1 } },
+        { new: true, upsert: true }
+      );
+      
+      const serial = String(seq.value).padStart(4, "0");
+      const newCode = `${prefix}${serial}`;
+      return res.status(200).json({ status: 200, code: newCode, prefix, serial });
+    } catch (error) {
+      console.error("Error generating employee code:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  },
   uploadProfilePicture: async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
@@ -60,13 +80,55 @@ module.exports = {
         mobileNo,
       } = req?.body;
 
+      const trimmedCode = String(employeeCode || "").trim();
+      if (!trimmedCode) {
+        return res
+          .status(400)
+          .json({ status: 400, message: "Employee Code is required" });
+      }
+
+      // Employee Code must be UNIQUE (case-insensitive).
+      const codeTaken = await User.findOne({
+        employeeCode: {
+          $regex: `^${trimmedCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+          $options: "i",
+        },
+      })
+        .select("_id")
+        .lean();
+      if (codeTaken) {
+        return res.status(409).json({
+          status: 409,
+          message: `Employee Code "${trimmedCode}" already exists`,
+        });
+      }
+
+      // Email is no longer collected in the UI; derive a unique placeholder
+      // from the Employee Code (login works by employee code). The schema
+      // still requires a unique email, and code-uniqueness guarantees it.
+      const derivedEmail =
+        String(email || "").trim() ||
+        `${trimmedCode.toLowerCase().replace(/[^a-z0-9]/g, "")}@mailinator.com`;
+
+      // Operators don't need an explicit password — default it to their
+      // Employee Code (they sign in with code + code). Other roles must
+      // provide one.
+      const isOperatorRole = /operator/i.test(String(userType || ""));
+      const rawPassword = String(req?.body?.password || "").trim();
+      if (!rawPassword && !isOperatorRole) {
+        return res
+          .status(400)
+          .json({ status: 400, message: "Password is required for this role" });
+      }
+      const effectivePassword = rawPassword || trimmedCode;
+
       const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(req?.body.password, salt);
+      const hashedPassword = await bcrypt.hash(effectivePassword, salt);
       const password = hashedPassword;
       const newUser = new User({
         name,
-        email,
-        employeeCode,
+        email: derivedEmail,
+        employeeCode: trimmedCode,
         gender,
         password,
         dateOfBirth,
@@ -76,6 +138,22 @@ module.exports = {
       });
 
       await newUser.save();
+
+      // Ensure sequence stays ahead if manually entered
+      const yearMatch = trimmedCode.match(/^JSD-(\d{2})-(\d+)$/i);
+      if (yearMatch) {
+        const year = yearMatch[1];
+        const num = parseInt(yearMatch[2], 10);
+        if (!isNaN(num)) {
+          const Sequence = require("../models/Sequence");
+          await Sequence.findOneAndUpdate(
+            { name: `employeeCode_${year}` },
+            { $max: { value: num } },
+            { upsert: true }
+          );
+        }
+      }
+
       newUser.password = undefined;
       return res.status(200).json({
         status: 200,
@@ -83,6 +161,13 @@ module.exports = {
         newUser,
       });
     } catch (error) {
+      if (error.code === 11000) {
+        const dupField = Object.keys(error.keyPattern || {})[0] || "field";
+        return res.status(409).json({
+          status: 409,
+          message: `A user with this ${dupField} already exists`,
+        });
+      }
       console.error("Error creating user:", error);
       res
         .status(500)
@@ -117,7 +202,51 @@ module.exports = {
   },
   getUsers: async (req, res) => {
     try {
-      const users = await User.find({ userType: { $ne: "admin" } }).select("-password").sort({ _id: -1 }).lean();
+      const { status } = req.query;
+      const OperatorWorkSession = require("../models/operatorWorkSession");
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Find operators who are active today
+      const activeSessions = await OperatorWorkSession.distinct("operatorId", {
+        status: "active",
+        startedAt: { $gte: startOfDay, $lte: endOfDay }
+      });
+      const activeSessionStrings = activeSessions.map(id => id.toString());
+
+      const query = { userType: { $ne: "admin" } };
+      
+      if (status === 'Discarded') {
+        query.status = 'Discarded';
+      } else if (status === 'Active') {
+        query._id = { $in: activeSessions };
+        query.status = { $ne: 'Discarded' };
+      } else if (status === 'Inactive') {
+        query._id = { $nin: activeSessions };
+        query.status = { $ne: 'Discarded' };
+      } else if (status && status !== 'All') {
+        query.status = status;
+      } else {
+        query.status = { $ne: 'Discarded' };
+      }
+
+      let users = await User.find(query).select("-password").sort({ _id: -1 }).lean();
+      
+      // Override the status field based on today's session activity
+      users = users.map(u => {
+        if (u.status === 'Discarded') {
+          return u;
+        }
+        if (activeSessionStrings.includes(u._id.toString())) {
+          u.status = 'Active';
+        } else {
+          u.status = 'Inactive';
+        }
+        return u;
+      });
+
       return res.status(200).json({
         status: 200,
         status_msg: "Users Fetched Sucessfully!!",
@@ -125,6 +254,69 @@ module.exports = {
       });
     } catch (error) {
       console.error("Error fetching User details:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  },
+  getOperatorDashboardStats: async (req, res) => {
+    try {
+      const OperatorWorkSession = require("../models/operatorWorkSession");
+      const ProcessModel = require("../models/process");
+      const assignOperatorToPlan = require("../models/assignOperatorToPlan");
+      
+      const validOperators = await User.find({
+        userType: { $regex: /^operator$/i },
+        status: { $ne: 'Discarded' }
+      }).distinct('_id');
+      const totalOperators = validOperators.length;
+
+      const deboardedOperators = await User.countDocuments({
+        userType: { $regex: /^operator$/i },
+        status: 'Discarded'
+      });
+
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const activeSessions = await OperatorWorkSession.distinct("operatorId", {
+        status: "active",
+        startedAt: { $gte: startOfDay, $lte: endOfDay },
+        operatorId: { $in: validOperators }
+      });
+      const activeOperators = activeSessions.length;
+
+      const inactiveOperators = Math.max(0, totalOperators - activeOperators);
+
+      const activeProcesses = await ProcessModel.find({ status: "active" }).lean();
+      let requiredManpower = 0;
+      for (const p of activeProcesses) {
+        requiredManpower += (p.stages ? p.stages.length : 0);
+      }
+
+      const occupiedUsers = await assignOperatorToPlan.distinct("userId", { 
+        status: "Occupied",
+        userId: { $in: validOperators }
+      });
+      const availableManpower = Math.max(0, totalOperators - occupiedUsers.length);
+
+      const manpowerGap = requiredManpower - availableManpower;
+
+      return res.status(200).json({
+        status: 200,
+        data: {
+          totalOperators,
+          activeOperators,
+          inactiveOperators,
+          requiredManpower,
+          availableManpower,
+          manpowerGap,
+          deboardedOperators
+        }
+      });
+    } catch (error) {
+      console.error("Error fetching operator dashboard stats:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
@@ -169,6 +361,40 @@ module.exports = {
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
+  deboardOperator: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { reason } = req.body;
+      const adminId = req.user ? req.user._id : null;
+
+      const user = await User.findById(id);
+      if (!user) {
+        return res.status(404).json({ message: "Operator not found." });
+      }
+
+      const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
+      const activeAssignments = await AssignOperatorToPlan.find({ userId: id, status: "Occupied" });
+      
+      if (activeAssignments.length > 0 && req.body.force !== true) {
+        return res.status(400).json({ 
+          error: "ACTIVE_TASKS",
+          message: "Cannot deboard operator with active unfinished production tasks. Please free their assignments first." 
+        });
+      }
+
+      user.status = "Discarded";
+      user.deboardedAt = new Date();
+      if (adminId) user.deboardedBy = adminId;
+      user.deboardReason = reason || "No reason provided";
+
+      await user.save();
+
+      return res.status(200).json({ message: "Operator successfully deboarded.", user });
+    } catch (error) {
+      console.error("Error deboarding operator:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  },
   updateUser: async (req, res) => {
     try {
       const id = req.params.id;
@@ -183,16 +409,39 @@ module.exports = {
         mobileNo,
       } = req.body;
 
-      const updatedData = {
-        name,
-        email,
-        employeeCode,
-        gender,
-        dateOfBirth,
-        userType,
-        skills,
-        mobileNo,
-      };
+      // Employee Code must stay UNIQUE (case-insensitive), excluding this user.
+      const trimmedCode = String(employeeCode || "").trim();
+      if (trimmedCode) {
+        const codeTaken = await User.findOne({
+          _id: { $ne: id },
+          employeeCode: {
+            $regex: `^${trimmedCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+            $options: "i",
+          },
+        })
+          .select("_id")
+          .lean();
+        if (codeTaken) {
+          return res.status(409).json({
+            status: 409,
+            message: `Employee Code "${trimmedCode}" already exists`,
+          });
+        }
+      }
+
+      // Only set fields that were actually provided — the UI no longer sends
+      // email/phone, and absent fields must not clobber stored values.
+      const updatedData = {};
+      if (name !== undefined) updatedData.name = name;
+      if (email !== undefined && String(email).trim()) updatedData.email = email;
+      if (trimmedCode) updatedData.employeeCode = trimmedCode;
+      if (gender !== undefined) updatedData.gender = gender;
+      if (dateOfBirth !== undefined) updatedData.dateOfBirth = dateOfBirth;
+      if (userType !== undefined) updatedData.userType = userType;
+      if (skills !== undefined) updatedData.skills = skills;
+      if (mobileNo !== undefined) updatedData.mobileNo = mobileNo;
+      updatedData.updatedAt = new Date();
+
       const updatedUser = await User.findByIdAndUpdate(id, updatedData, {
         new: true,
         runValidators: true,
@@ -209,7 +458,11 @@ module.exports = {
       });
     } catch (error) {
       if (error.code === 11000) {
-        return res.status(400).json({ error: "Email already exists" });
+        const dupField = Object.keys(error.keyPattern || {})[0] || "field";
+        return res.status(409).json({
+          status: 409,
+          message: `A user with this ${dupField} already exists`,
+        });
       }
       console.error("Error updating user:", error);
       return res.status(500).json({ error: "Internal Server Error" });

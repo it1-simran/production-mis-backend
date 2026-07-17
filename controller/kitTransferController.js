@@ -352,6 +352,9 @@ module.exports = {
 
   getRequestById: async (req, res) => {
     try {
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid request ID" });
+      }
       const request = await KitTransferRequest.findById(req.params.id).lean();
       if (!request) {
         return res.status(404).json({ status: 404, message: "Transfer request not found" });
@@ -374,6 +377,9 @@ module.exports = {
   approveRequest: async (req, res) => {
     const session = await mongoose.startSession();
     try {
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid request ID" });
+      }
       let updatedRequest;
       await session.withTransaction(async () => {
         const request = await KitTransferRequest.findById(req.params.id).session(session);
@@ -557,6 +563,9 @@ module.exports = {
 
   rejectRequest: async (req, res) => {
     try {
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        return res.status(400).json({ status: 400, message: "Invalid request ID" });
+      }
       const request = await KitTransferRequest.findById(req.params.id);
       if (!request) {
         return res.status(404).json({ status: 404, message: "Transfer request not found" });
