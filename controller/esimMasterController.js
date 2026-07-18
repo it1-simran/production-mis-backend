@@ -229,6 +229,57 @@ module.exports = {
     }
   },
 
+  // Delete records by CCID list (from Excel upload)
+  bulkDeleteByCcid: async (req, res) => {
+    try {
+      const { ccids } = req.body;
+      if (!Array.isArray(ccids) || ccids.length === 0) {
+        return res.status(400).json({ status: 400, message: "Invalid CCIDs provided" });
+      }
+      const result = await EsimMaster.deleteMany({ ccid: { $in: ccids } });
+      return res.status(200).json({
+        status: 200,
+        message: `${result.deletedCount} records deleted successfully`,
+        deletedCount: result.deletedCount,
+      });
+    } catch (error) {
+      console.error("Error in ESIM Master bulk delete by CCID:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Server error",
+        error: error.message,
+      });
+    }
+  },
+
+  // Check which CCIDs already exist — used for overwrite confirmation before bulk upload
+  checkDuplicates: async (req, res) => {
+    try {
+      const { ccids } = req.body;
+      if (!Array.isArray(ccids) || ccids.length === 0) {
+        return res.status(400).json({ status: 400, message: "Invalid CCIDs provided" });
+      }
+      const existing = await EsimMaster.find({ ccid: { $in: ccids } })
+        .select("ccid")
+        .lean();
+      const existingCcids = existing.map((r) => r.ccid);
+      return res.status(200).json({
+        status: 200,
+        total: ccids.length,
+        duplicateCount: existingCcids.length,
+        newCount: ccids.length - existingCcids.length,
+        duplicates: existingCcids,
+      });
+    } catch (error) {
+      console.error("Error in ESIM Master checkDuplicates:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Server error",
+        error: error.message,
+      });
+    }
+  },
+
   getByCcid: async (req, res) => {
     const startedAt = Date.now();
     let masterLookupMs = 0;

@@ -390,6 +390,8 @@ router.get('/esim-master/view', authController.authenticateToken, esimMasterCont
 router.put('/esim-master/update/:id', authController.authenticateToken, esimMasterController.update);
 router.delete('/esim-master/delete/:id', authController.authenticateToken, esimMasterController.delete);
 router.post('/esim-master/bulk-delete', authController.authenticateToken, esimMasterController.bulkDelete);
+router.post('/esim-master/bulk-delete-by-ccid', authController.authenticateToken, esimMasterController.bulkDeleteByCcid);
+router.post('/esim-master/check-duplicates', authController.authenticateToken, esimMasterController.checkDuplicates);
 router.get('/esim-master/ccid/:ccid', authController.authenticateToken, esimMasterController.getByCcid);
 
 router.post('/esim-make/create', authController.authenticateToken, esimMakeController.create);
