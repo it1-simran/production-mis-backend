@@ -754,6 +754,26 @@ module.exports = {
         Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
       );
 
+      // Cross-process duplicate check — reject if any generated serial already exists in another active process
+      const conflictingDevices = await deviceModel
+        .find({ serialNo: { $in: serials }, processID: { $ne: processID } })
+        .select("serialNo processID")
+        .populate({ path: "processID", select: "name processID", model: "process" })
+        .lean();
+
+      if (conflictingDevices.length > 0) {
+        const conflicts = conflictingDevices.map((d) => ({
+          serialNo: d.serialNo,
+          processName: d.processID?.name || "Unknown",
+          pid: d.processID?.processID || String(d.processID),
+        }));
+        return res.status(409).json({
+          status: 409,
+          message: `${conflictingDevices.length} serial(s) already exist in another process. Cannot create duplicates.`,
+          conflicts,
+        });
+      }
+
       // Fetch modelName from Order Confirmation for this process
       let modelNameFromOc = "";
       if (processDoc?.orderConfirmationNo) {
