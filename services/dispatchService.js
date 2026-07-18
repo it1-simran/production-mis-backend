@@ -821,7 +821,7 @@ class DispatchService {
   async getInvoices(filters = {}) {
     const query = {};
     if (filters.status) query.status = String(filters.status).trim().toUpperCase();
-    return DispatchInvoice.find(query).sort({ createdAt: -1 }).lean();
+    return DispatchInvoice.find(query).sort({ createdAt: -1 }).limit(500).lean();
   }
 
   async getInvoiceById(invoiceId, options = {}) {
@@ -836,8 +836,8 @@ class DispatchService {
     let devices = [];
     let gatePass = null;
     if (invoice.status === "CONFIRMED") {
-      cartons = await DispatchInvoiceCarton.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).lean();
-      devices = await DispatchInvoiceDevice.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).lean();
+      cartons = await DispatchInvoiceCarton.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).limit(5000).lean();
+      devices = await DispatchInvoiceDevice.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).limit(5000).lean();
       if (options.includeGatePass) {
         gatePass = await GatePass.findOne({ dispatchInvoiceId: invoice._id }).lean();
       }
@@ -871,8 +871,8 @@ class DispatchService {
       throw error;
     }
 
-    const cartons = await DispatchInvoiceCarton.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).lean();
-    const devices = await DispatchInvoiceDevice.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).lean();
+    const cartons = await DispatchInvoiceCarton.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).limit(5000).lean();
+    const devices = await DispatchInvoiceDevice.find({ dispatchInvoiceId: invoice._id }).sort({ createdAt: 1 }).limit(5000).lean();
     const payload = this.gatePassService.buildPayload(invoice, cartons, devices, options);
     const html = this.gatePassService.buildPrintableHtml(payload);
     return { payload, html };

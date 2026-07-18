@@ -6,19 +6,34 @@ const bcrypt = require("bcrypt");
 module.exports = {
   create: async (req, res) => {
     try {
-      const data = req?.body;
-      const newUserRoles = new UserRoles(data);
-      await newUserRoles.save();
+      const { name } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ message: "Role name is required" });
+      }
+      const roleName = name.trim();
+      const existingRole = await UserTypes.findOne({ name: new RegExp(`^${roleName}$`, "i") });
+      if (existingRole) {
+        return res.status(400).json({ message: "Role already exists" });
+      }
+
+      const newUserType = new UserTypes({
+        name: roleName,
+        permissions: new Map(),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      await newUserType.save();
+
       return res.status(200).json({
         status: 200,
         message: "User Role Created successfully!!",
-        newUserRoles,
+        newUserRoles: newUserType,
       });
     } catch (error) {
       console.error(error);
       res
         .status(500)
-        .json({ message: "An error occurred while updating the user" });
+        .json({ message: "An error occurred while creating the role", error: error.message });
     }
   },
   view: async (req, res) => {
@@ -38,7 +53,7 @@ module.exports = {
   },
   deleteUserRole: async (req, res) => {
     try {
-      const userRoles = await UserRoles.findByIdAndDelete(req.params.id);
+      const userRoles = await UserTypes.findByIdAndDelete(req.params.id);
       if (!userRoles) {
         return res.status(404).json({ message: "User Role not found" });
       }
@@ -65,7 +80,7 @@ module.exports = {
         }
       });
 
-      const result = await UserRoles.deleteMany({ _id: { $in: objectIds } });
+      const result = await UserTypes.deleteMany({ _id: { $in: objectIds } });
       if (result.deletedCount === 0) {
         return res.status(404).json({ message: "No Users found to delete" });
       }

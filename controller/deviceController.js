@@ -864,9 +864,19 @@ module.exports = {
   getDevicesByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
-      const devices = await deviceModel
-        .find({ processID: processId }, null, { sort: { createdAt: -1 } })
-        .lean();
+      const limitRaw = req.query.limit;
+      const pageRaw = req.query.page;
+      const deviceLimit = Math.min(Math.max(parseInt(limitRaw) || 500, 1), 2000);
+      const deviceSkip = Math.max((parseInt(pageRaw) || 1) - 1, 0) * deviceLimit;
+
+      const [devices, totalDevices] = await Promise.all([
+        deviceModel
+          .find({ processID: processId }, null, { sort: { createdAt: -1 } })
+          .skip(deviceSkip)
+          .limit(deviceLimit)
+          .lean(),
+        deviceModel.countDocuments({ processID: processId }),
+      ]);
 
       const deviceIds = devices.map((device) => device?._id).filter(Boolean);
       const historyByDevice = new Map();
@@ -875,6 +885,7 @@ module.exports = {
         const histories = await deviceTestRecords
           .find({ deviceId: { $in: deviceIds } })
           .sort({ createdAt: 1 })
+          .limit(deviceLimit * 20)
           .select("deviceId stageName status createdAt flowVersion flowBoundary flowType previousFlowVersion")
           .lean();
 
@@ -916,6 +927,7 @@ module.exports = {
         status: 200,
         message: "Devices fetched successfully",
         data: devicesWithHistory,
+        meta: { total: totalDevices, limit: deviceLimit, page: parseInt(pageRaw) || 1 },
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -1000,7 +1012,8 @@ module.exports = {
           },
         },
         { $sort: { _id: -1 } }
-      ]).lean();
+        // NOTE: aggregate() already returns plain objects — .lean() is not available here
+      ]);
       return res.status(200).json({
         status: 200,
         status_msg: "IMEI Fetched Sucessfully!!",
@@ -1085,7 +1098,9 @@ module.exports = {
             ]
           }
         }
-      ]).lean();
+        // NOTE: no .lean() here — aggregate() already returns plain objects
+        // and Aggregate has no lean() method (it threw a 500).
+      ]);
 
       const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
 
@@ -1093,7 +1108,7 @@ module.exports = {
         productType: new mongoose.Types.ObjectId(id),
         status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
         _id: { $nin: excludedIds }
-      }).sort({ _id: -1 }).lean().lean();
+      }).sort({ _id: -1 }).lean();
       
       if (devices.length === 0) {
         return res.status(404).json({

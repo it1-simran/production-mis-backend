@@ -19,6 +19,7 @@ const {
   normalizeAssignedStagesPayload,
   getPlanningDayRange,
 } = require("../services/planInsightsService");
+const { queryResultCache } = require("../config/cache");
 const {
   buildTestingAnalytics,
   SHIFT_PRODUCTIVITY_PADDING_MINUTES,
@@ -28,7 +29,7 @@ const DeviceTestRecordModel = require("../models/deviceTestModel");
 const TZ = process.env.TIMEZONE || "Asia/Kolkata";
 // Newest-first scan cap for testing analytics; the old 5000 cap silently
 // dropped older stage records on large plans (2000 devices × 12 stages ≈ 24k).
-const ANALYTICS_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 50000;
+const ANALYTICS_SCAN_LIMIT = Number(process.env.PLAN_INSIGHTS_SCAN_LIMIT) || 10000;
 
 const toObjectId = (id) => {
   if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
@@ -1232,6 +1233,10 @@ module.exports = {
           message: "Invalid plan id",
         });
       }
+
+      const cacheKey = `planInsights:${planId}:${req.query.from || ""}:${req.query.to || ""}:${req.query.seatKey || ""}:${req.query.stageName || ""}`;
+      const cached = queryResultCache.get(cacheKey);
+      if (cached) return res.status(200).json(cached);
       const plan = await PlaningAndSchedulingModel.findOne({
         _id: planId,
         ...getUnscopedAuthorizedReadListFilter(),
@@ -1305,11 +1310,13 @@ module.exports = {
         });
       }
 
-      return res.status(200).json({
+      const response = {
         status: 200,
         message: "Plan insights fetched successfully",
         data: insights,
-      });
+      };
+      queryResultCache.set(cacheKey, response, 10);
+      return res.status(200).json(response);
     } catch (error) {
       console.error("Error fetching plan insights:", error);
       return res.status(500).json({
@@ -1453,7 +1460,7 @@ module.exports = {
     try {
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find(
         getUnscopedAuthorizedReadListFilter(),
-      ).lean();
+      ).limit(500).lean();
       return res.status(200).json({
         status: 200,
         message: "Planing Model Fetched Successfully!!",
