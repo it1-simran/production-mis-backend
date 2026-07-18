@@ -34,20 +34,27 @@ module.exports = {
         });
       }
 
-      const result = await EsimMaster.insertMany(data, { ordered: false });
+      const ops = data.map((item) => ({
+        updateOne: {
+          filter: { ccid: item.ccid },
+          update: { $set: { ...item, updatedAt: new Date() } },
+          upsert: true,
+        },
+      }));
+
+      const result = await EsimMaster.bulkWrite(ops, { ordered: false });
 
       return res.status(201).json({
         status: 201,
-        message: "ESimmaster records created successfully",
-        count: result.length,
-        data: result,
+        message: "ESimmaster records created/updated successfully",
+        inserted: result.upsertedCount,
+        updated: result.modifiedCount,
       });
     } catch (error) {
-      if (error.name === "MongoBulkWriteError" || error.code === 11000) {
+      if (error.name === "MongoBulkWriteError") {
         return res.status(400).json({
           status: 400,
-          message: "Some records failed to insert due to duplicates (CCID must be unique).",
-          insertedCount: error.insertedDocs ? error.insertedDocs.length : 0,
+          message: "Bulk write partially failed.",
           error: error.message,
         });
       }
