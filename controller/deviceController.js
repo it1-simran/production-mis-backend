@@ -1189,6 +1189,7 @@ module.exports = {
             });
 
       let [planing, products, deviceSnapshot] = await Promise.all([planPromise, processPromise, devicePromise]);
+      if (res.headersSent) return;
 
       const resolvedProcessId = normalizeText(planing?.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
       if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
@@ -1326,6 +1327,7 @@ module.exports = {
         } finally {
           await writeSession.endSession();
         }
+        if (res.headersSent) return;
 
         timings.totalMs = Date.now() - requestStartedAt; // Total time
         logOperatorPassTimings(timings, {
@@ -1430,6 +1432,7 @@ module.exports = {
         seatConflictPromise,
         duplicatePromise,
       ]);
+      if (res.headersSent) return;
       markTiming("preTransactionReadsMs", preTransactionStart);
       markTiming("eligibilityMs", preTransactionStart);
       if (parallelSeats.length > 1) {
@@ -1725,6 +1728,7 @@ module.exports = {
       } finally {
         await writeSession.endSession();
       }
+      if (res.headersSent) return;
 
       if (actionMeta.actionStatus === "NG" && assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
         const attemptFilter = { deviceId: deviceSnapshot._id };
@@ -1766,6 +1770,7 @@ module.exports = {
         },
       });
     } catch (error) {
+      if (res.headersSent) return;
       return res.status(500).json({
         status: 500,
         error: error.message,
