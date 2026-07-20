@@ -38,7 +38,7 @@ module.exports = {
       return res.status(200).json({ status: 200, code: newCode, prefix, serial });
     } catch (error) {
       console.error("Error generating employee code:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ error: "Internal Server Error", details: error.message, stack: error.stack });
     }
   },
   uploadProfilePicture: async (req, res) => {
@@ -103,16 +103,9 @@ module.exports = {
         });
       }
 
-      // Email is no longer collected in the UI; derive a unique placeholder
-      // from the Employee Code (login works by employee code). The schema
-      // still requires a unique email, and code-uniqueness guarantees it.
-      const derivedEmail =
-        String(email || "").trim() ||
-        `${trimmedCode.toLowerCase().replace(/[^a-z0-9]/g, "")}@mailinator.com`;
+      // Email is entirely optional now.
+      const parsedEmail = String(email || "").trim() || undefined;
 
-      // Operators don't need an explicit password — default it to their
-      // Employee Code (they sign in with code + code). Other roles must
-      // provide one.
       const isOperatorRole = /operator/i.test(String(userType || ""));
       const rawPassword = String(req?.body?.password || "").trim();
       if (!rawPassword && !isOperatorRole) {
@@ -127,7 +120,7 @@ module.exports = {
       const password = hashedPassword;
       const newUser = new User({
         name,
-        email: derivedEmail,
+        email: parsedEmail,
         employeeCode: trimmedCode,
         gender,
         password,
@@ -440,6 +433,14 @@ module.exports = {
       if (userType !== undefined) updatedData.userType = userType;
       if (skills !== undefined) updatedData.skills = skills;
       if (mobileNo !== undefined) updatedData.mobileNo = mobileNo;
+      
+      const rawPassword = String(req?.body?.password || "").trim();
+      if (rawPassword) {
+        const bcrypt = require("bcryptjs");
+        const salt = await bcrypt.genSalt(10);
+        updatedData.password = await bcrypt.hash(rawPassword, salt);
+      }
+
       updatedData.updatedAt = new Date();
 
       const updatedUser = await User.findByIdAndUpdate(id, updatedData, {
