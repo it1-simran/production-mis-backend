@@ -168,6 +168,11 @@ module.exports = {
           route: "/production-manager/kit-transfer",
         },
         {
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 7h10M7 17h10M5 12h14" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M8 4l-4 4 4 4M16 12l4 4-4 4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+          label: "ESIM Removal",
+          route: "/production-manager/ccid-transfer",
+        },
+        {
           icon: `<svg class="fill-current" width="18" height="19" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h12v2H3v-2z" fill="#ffffff"/></svg>`,
           label: "Reports",
           route: "#",
@@ -184,6 +189,11 @@ module.exports = {
           icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
           label: "Transfer Requests",
           route: "/store-portal/transfer-requests",
+        },
+        {
+          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+          label: "ESIM Removal Requests",
+          route: "/store-portal/ccid-transfer-requests",
         },
       ];
       const menu = new Menu({ menus: data });
@@ -263,7 +273,9 @@ module.exports = {
         // Auto-migration: Ensure missing administrative modules exist
         const missingModules = [
           { label: "Find Device", route: "/device/search", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21L16.65 16.65" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
-          { label: "FG Store Management", route: "/fg-to-store/view", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` }
+          { label: "FG Store Management", route: "/fg-to-store/view", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "ESIM Removal", route: "/production-manager/ccid-transfer", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 7h10M7 17h10M5 12h14" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M8 4l-4 4 4 4M16 12l4 4-4 4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "ESIM Removal Requests", route: "/store-portal/ccid-transfer-requests", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` }
         ];
 
         let changed = doc.menus.length !== initialCount;

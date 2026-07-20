@@ -2046,6 +2046,20 @@ module.exports = {
       const modeRaw = String(req.query.mode || "").trim().toLowerCase();
       const shouldPaginate = pageRaw || limitRaw;
       const statusLower = String(statusRaw || "").toLowerCase();
+      // Single-device lookup (e.g. the NG device details page): scope the
+      // query to that device's own entries via the deviceId index instead of
+      // pulling the entire collection and filtering client-side.
+      const deviceRefRaw = req.query.deviceRef;
+      let deviceRefFilter = null;
+      if (deviceRefRaw && mongoose.Types.ObjectId.isValid(deviceRefRaw)) {
+        let resolvedDeviceId = deviceRefRaw;
+        const directCount = await deviceTestRecords.countDocuments({ deviceId: deviceRefRaw });
+        if (directCount === 0) {
+          const rec = await deviceTestRecords.findById(deviceRefRaw).select("deviceId").lean();
+          if (rec?.deviceId) resolvedDeviceId = String(rec.deviceId);
+        }
+        deviceRefFilter = { deviceId: resolvedDeviceId };
+      }
       let statusFilter = {};
       if (statusLower === "ng") {
         statusFilter = { status: { $regex: /^NG$/i } };
@@ -2075,9 +2089,18 @@ module.exports = {
         createdAt: 1,
         updatedAt: 1,
       };
+      const queryFilter = deviceRefFilter
+        ? { ...statusFilter, ...deviceRefFilter }
+        : statusFilter;
       let DeviceTestEntry;
       let meta;
-      if (shouldPaginate) {
+      if (deviceRefFilter) {
+        DeviceTestEntry = await deviceTestRecords
+          .find(queryFilter, projection, { sort: { createdAt: -1 } })
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
+          .populate({ path: "processId", select: "name processName" })
+          .lean();
+      } else if (shouldPaginate) {
         const page = Math.max(parseInt(pageRaw) || 1, 1);
         const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
         const skip = (page - 1) * limit;
