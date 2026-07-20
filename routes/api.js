@@ -26,6 +26,7 @@ const productionManagerController = require('../controller/productionManagerCont
 const skillManagementController = require('../controller/skillController');
 const kitsController = require('../controller/kitsController');
 const kitTransferController = require('../controller/kitTransferController');
+const ccidTransferController = require('../controller/ccidTransferController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
@@ -302,6 +303,13 @@ router.get("/kit-transfer/request", authController.authenticateToken, authContro
 router.get("/kit-transfer/request/:id", authController.authenticateToken, authController.authorize(["Kit Transfer", "Transfer Requests"], "read"), kitTransferController.getRequestById);
 router.put("/kit-transfer/request/:id/approve", authController.authenticateToken, authController.authorize(["Kit Transfer", "Transfer Requests"], "update"), kitTransferController.approveRequest);
 router.put("/kit-transfer/request/:id/reject", authController.authenticateToken, authController.authorize(["Kit Transfer", "Transfer Requests"], "update"), kitTransferController.rejectRequest);
+
+// CCID Transfer Routes
+router.post("/ccid-transfer/request", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "create"), ccidTransferController.createRequest);
+router.get("/ccid-transfer/request", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "read"), ccidTransferController.listRequests);
+router.get("/ccid-transfer/request/:id", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "read"), ccidTransferController.getRequestById);
+router.put("/ccid-transfer/request/:id/approve", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "update"), ccidTransferController.approveRequest);
+router.put("/ccid-transfer/request/:id/reject", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "update"), ccidTransferController.rejectRequest);
 
 router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);
