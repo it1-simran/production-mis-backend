@@ -268,14 +268,32 @@ module.exports = {
 
   listRequests: async (req, res) => {
     try {
-      const requests = await CcidTransferRequest.find(buildRequestQuery(req, req.query))
-        .sort({ createdAt: -1 })
-        .lean();
+      const filter = buildRequestQuery(req, req.query);
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let requests;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 50, 1), 500);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          CcidTransferRequest.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+          CcidTransferRequest.countDocuments(filter),
+        ]);
+        requests = rows;
+        meta = { page, limit, total };
+      } else {
+        requests = await CcidTransferRequest.find(filter).sort({ createdAt: -1 }).lean();
+      }
 
       return res.status(200).json({
         status: 200,
         message: "CCID transfer requests fetched successfully",
         requests: requests.map(shapeRequest),
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({

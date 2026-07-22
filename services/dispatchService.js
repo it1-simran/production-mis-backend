@@ -200,16 +200,20 @@ class DispatchService {
     const requestedProcessIds = this.normalizeObjectIdList(filters.processIds || []);
     const processIdObjectIds = requestedProcessIds.map((id) => new mongoose.Types.ObjectId(id));
 
+    const processIdMatch =
+      processIdObjectIds.length > 0
+        ? { $in: processIdObjectIds }
+        : { $ne: null };
+
     const matchStage = {
       normalizedStoreStatus: { $in: STORE_STATUSES },
-      processId: { $ne: null },
     };
 
-    if (processIdObjectIds.length > 0) {
-      matchStage.processId = { $in: processIdObjectIds };
-    }
-
     const summaries = await cartonModel.aggregate([
+      // Filter on the raw, indexed processId BEFORE computing normalizedStoreStatus —
+      // this field isn't derived, so it can use the {processId,status,cartonStatus}
+      // index instead of forcing a full-collection $addFields+scan first.
+      { $match: { processId: processIdMatch } },
       {
         $addFields: {
           normalizedStoreStatus: {

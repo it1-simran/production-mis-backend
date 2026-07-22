@@ -18,6 +18,7 @@ const {
   findDevicesByScanTokensBestEffort,
 } = require("../services/deviceScanMatcher");
 const { computePlanInsights, isResolvedStatus, toPlanningDateKey, PLANNING_TIMEZONE } = require("../services/planInsightsService");
+const { cachedCompute } = require("../utils/ttlCache");
 
 /** Sessions older than this limit are auto-expired on next device scan (mirrors operatorWorkController). */
 const SESSION_MAX_HOURS_TASK = Number(process.env.SESSION_MAX_HOURS || 10);
@@ -1206,7 +1207,12 @@ const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
     { $project: { normalizedStageName: 0, deviceKey: 0 } },
   ];
 
-  return deviceTestRecordModel.aggregate(pipeline);
+  // This is the same shape of query as processController.js's
+  // getLatestDeviceTestsByPlanId (already cached there) — called here on
+  // EVERY /operator-task/refresh poll (the busiest endpoint in the app), so
+  // it gets the same short-lived cache to collapse repeat/concurrent calls.
+  const cacheKey = `operatorTaskLatestTests:${planId}:${processId || "all"}:${normalizedStageNames.join(",")}`;
+  return cachedCompute(cacheKey, 10000, () => deviceTestRecordModel.aggregate(pipeline));
 };
 
 const getTodayRange = () => {

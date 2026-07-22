@@ -42,28 +42,39 @@ module.exports = {
   view: async (req, res) => {
     try {
       const filter = getUnscopedAuthorizedReadListFilter();
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+      const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 500, 1), 1000);
+      const skip = (page - 1) * limit;
 
       if (
         String(req.query?.lite || "").toLowerCase() === "true" ||
         req.query?.lite === "1"
       ) {
-        const Processes = await ProcessModel.find(filter)
-          .select(
-            "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status dispatchStatus stages commonStages createdAt updatedAt",
-          )
-          .sort({ updatedAt: -1 })
-          .limit(500)
-          .lean();
+        const [Processes, total] = await Promise.all([
+          ProcessModel.find(filter)
+            .select(
+              "_id name selectedProduct orderConfirmationNo processID quantity issuedKits issuedCartons kitStatus status dispatchStatus stages commonStages createdAt updatedAt",
+            )
+            .sort({ updatedAt: -1 })
+            .skip(shouldPaginate ? skip : 0)
+            .limit(limit)
+            .lean(),
+          shouldPaginate ? ProcessModel.countDocuments(filter) : Promise.resolve(0),
+        ]);
 
         return res.status(200).json({
           status: 200,
           message: "Process Fetched Successfully!!",
           Processes,
+          ...(shouldPaginate ? { meta: { page, limit, total } } : {}),
         });
       }
 
-      const Processes = await ProcessModel.aggregate([
-        { $match: filter },
+      const matchPipeline = [{ $match: filter }];
+      const enrichPipeline = [
         {
           $lookup: {
             from: "products",
@@ -117,13 +128,30 @@ module.exports = {
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
         },
-        { $sort: { _id: -1 } },
-        { $limit: 500 }
-      ]);
+      ];
+
+      let Processes;
+      let meta;
+      if (shouldPaginate) {
+        const [rows, totalRows] = await Promise.all([
+          ProcessModel.aggregate([...matchPipeline, { $sort: { _id: -1 } }, { $skip: skip }, { $limit: limit }, ...enrichPipeline]),
+          ProcessModel.aggregate([...matchPipeline, { $count: "total" }]),
+        ]);
+        Processes = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        Processes = await ProcessModel.aggregate([
+          ...matchPipeline,
+          { $sort: { _id: -1 } },
+          { $limit: 500 },
+          ...enrichPipeline,
+        ]);
+      }
       return res.status(200).json({
         status: 200,
         message: "Process Fetched Successfully!!",
         Processes,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({ staus: 500, error: error.message });
@@ -149,14 +177,35 @@ module.exports = {
           }
         : { selectedProduct: rawId };
 
-      const Processes = await ProcessModel.find({
+      const filter = {
         ...getUnscopedAuthorizedReadListFilter(),
         ...productMatch,
-      }).sort({ _id: -1 }).lean();
+      };
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let Processes;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          ProcessModel.find(filter).sort({ _id: -1 }).skip(skip).limit(limit).lean(),
+          ProcessModel.countDocuments(filter),
+        ]);
+        Processes = rows;
+        meta = { page, limit, total };
+      } else {
+        Processes = await ProcessModel.find(filter).sort({ _id: -1 }).lean();
+      }
+
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",
         Processes,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res
@@ -985,6 +1034,42 @@ module.exports = {
       const shouldPaginate = pageRaw || limitRaw;
       const brief = req.query.brief === "true";
       const projection = brief ? { logs: 0 } : null;
+
+      // Optional date scoping (e.g. the planning UPH report's selected range).
+      // Filtering by date BEFORE the record cap below matters: without this,
+      // "last 300 records for the whole process" can be entirely from today's
+      // recent activity, so a request for an older date (or an early part of
+      // a busy today) silently gets zero/partial records even though matching
+      // rows exist — they just fell outside the top-300-by-recency cut.
+      //
+      // fromDate/toDate are plain "YYYY-MM-DD" keys computed in the CALLER'S
+      // local timezone (see getPlanningTodayDateKey/getPlanningLocalDateKey on
+      // the frontend), but `new Date("YYYY-MM-DD")` parses as UTC midnight —
+      // so a naive $gte/$lte here silently drops records from the first ~14
+      // hours of "today" for any timezone ahead of UTC (e.g. IST, UTC+5:30).
+      // The frontend already does the precise, timezone-correct window check
+      // itself (isRecordInPlanningUpHWindow) after fetching, so this filter
+      // only needs to be a safe, generous PRE-filter — pad a full day on each
+      // side to absorb any realistic client/server timezone offset without
+      // risking excluding records the frontend actually wants.
+      const { fromDate, toDate } = req.query;
+      const filter = { processId };
+      if (fromDate || toDate) {
+        filter.createdAt = {};
+        if (fromDate) {
+          const start = new Date(fromDate);
+          start.setUTCDate(start.getUTCDate() - 1);
+          filter.createdAt.$gte = start;
+        }
+        if (toDate) {
+          const end = new Date(toDate);
+          end.setUTCDate(end.getUTCDate() + 1);
+          end.setUTCHours(23, 59, 59, 999);
+          filter.createdAt.$lte = end;
+        }
+      }
+      const hasDateFilter = Boolean(filter.createdAt);
+
       let deviceTestRecords;
       let meta;
       if (shouldPaginate) {
@@ -992,25 +1077,31 @@ module.exports = {
         const limit = Math.min(Math.max(parseInt(limitRaw) || 100, 1), 1000);
         const skip = (page - 1) * limit;
         const [entries, total] = await Promise.all([
-          DeviceTestRecordModel.find({ processId }, projection, {
+          DeviceTestRecordModel.find(filter, projection, {
             sort: { createdAt: -1 },
           })
             .populate("operatorId", "name employeeCode")
             .skip(skip)
             .limit(limit)
             .lean(),
-          DeviceTestRecordModel.countDocuments({ processId }),
+          DeviceTestRecordModel.countDocuments(filter),
         ]);
         deviceTestRecords = entries;
         meta = { page, limit, total };
       } else {
-        const defaultLimit = 300;
+        // An explicit date range already bounds the result to a reasonable
+        // size on its own, so it gets a much higher cap than the "just show
+        // recent activity" default used when no range is given. The no-range
+        // default was 300 — too easy for a single busy day on one process to
+        // exceed, which silently starved the UPH report's default "today"
+        // view of its earlier hours (see the same call site's callers).
+        const defaultLimit = hasDateFilter ? 5000 : 2000;
         const [entries, total] = await Promise.all([
-          DeviceTestRecordModel.find({ processId }, projection, { sort: { createdAt: -1 } })
+          DeviceTestRecordModel.find(filter, projection, { sort: { createdAt: -1 } })
             .populate("operatorId", "name employeeCode")
             .limit(defaultLimit)
             .lean(),
-          DeviceTestRecordModel.countDocuments({ processId }),
+          DeviceTestRecordModel.countDocuments(filter),
         ]);
         deviceTestRecords = entries;
         meta = { page: 1, limit: defaultLimit, total };
