@@ -75,6 +75,8 @@ module.exports = {
         employeeCode,
         gender,
         dateOfBirth,
+        dateOfJoining,
+        payroll,
         userType,
         skills,
         mobileNo,
@@ -125,6 +127,8 @@ module.exports = {
         gender,
         password,
         dateOfBirth,
+        dateOfJoining: dateOfJoining || null,
+        payroll: payroll || "",
         userType,
         skills,
         mobileNo,
@@ -397,6 +401,8 @@ module.exports = {
         employeeCode,
         gender,
         dateOfBirth,
+        dateOfJoining,
+        payroll,
         userType,
         skills,
         mobileNo,
@@ -430,6 +436,8 @@ module.exports = {
       if (trimmedCode) updatedData.employeeCode = trimmedCode;
       if (gender !== undefined) updatedData.gender = gender;
       if (dateOfBirth !== undefined) updatedData.dateOfBirth = dateOfBirth;
+      if (dateOfJoining !== undefined) updatedData.dateOfJoining = dateOfJoining;
+      if (payroll !== undefined) updatedData.payroll = payroll;
       if (userType !== undefined) updatedData.userType = userType;
       if (skills !== undefined) updatedData.skills = skills;
       if (mobileNo !== undefined) updatedData.mobileNo = mobileNo;
