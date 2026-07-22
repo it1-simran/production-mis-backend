@@ -394,7 +394,7 @@ module.exports = {
       try {
         const plans = await PlaningAndSchedulingModel.find({
           selectedProcess: id,
-        }).lean();
+        });
 
         for (const plan of plans) {
           let assignedStages = JSON.parse(plan.assignedStages || "{}");
