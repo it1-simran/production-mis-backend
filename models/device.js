@@ -112,6 +112,10 @@ deviceSchemas.pre('updateOne', function (next) {
 
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
+// getDevicesByProcessId sorts by createdAt within one process — without this,
+// Mongo can only use the processID-only index above for the match, then must
+// sort every matching document in memory before applying .limit().
+deviceSchemas.index({ processID: 1, createdAt: -1 });
 deviceSchemas.index({ serialNo: 1, processID: 1 });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });
