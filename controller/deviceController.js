@@ -22,6 +22,7 @@ const {
 } = require("../services/deviceScanMatcher");
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
+const { cachedCompute } = require("../utils/ttlCache");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -963,21 +964,47 @@ module.exports = {
         });
       }
 
-      const ngDevices = await deviceTestRecords
-        .find({
-          processId: new mongoose.Types.ObjectId(processId),
-          status: { $regex: /^NG$|RESOLVED/i },
-        })
-        .populate("deviceId")
-        .populate("processId")
-        .sort({ _id: -1 })
-        .lean()
-        .lean();
+      const filter = {
+        processId: new mongoose.Types.ObjectId(processId),
+        status: { $regex: /^NG$|RESOLVED/i },
+      };
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let ngDevices;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          deviceTestRecords
+            .find(filter)
+            .populate("deviceId")
+            .populate("processId")
+            .sort({ _id: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          deviceTestRecords.countDocuments(filter),
+        ]);
+        ngDevices = rows;
+        meta = { page, limit, total };
+      } else {
+        ngDevices = await deviceTestRecords
+          .find(filter)
+          .populate("deviceId")
+          .populate("processId")
+          .sort({ _id: -1 })
+          .lean();
+      }
 
       return res.status(200).json({
         status: 200,
         message: "NG devices fetched successfully",
         data: ngDevices,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -1011,7 +1038,11 @@ module.exports = {
   },
   viewIMEI: async (req, res) => {
     try {
-      const imei = await imeiModel.aggregate([
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      const pipeline = [
         {
           $lookup: {
             from: "products", // Collection name in MongoDB
@@ -1033,11 +1064,29 @@ module.exports = {
         },
         { $sort: { _id: -1 } }
         // NOTE: aggregate() already returns plain objects — .lean() is not available here
-      ]);
+      ];
+
+      let imei;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, totalRows] = await Promise.all([
+          imeiModel.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
+          imeiModel.aggregate([...pipeline, { $count: "total" }]),
+        ]);
+        imei = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        imei = await imeiModel.aggregate(pipeline);
+      }
+
       return res.status(200).json({
         status: 200,
         status_msg: "IMEI Fetched Sucessfully!!",
         imei,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error fetching IMEI details:", error);
@@ -1099,37 +1148,42 @@ module.exports = {
           error: "Invalid Product ID",
         });
       }
-      const terminalDevicesInProcess = await deviceTestRecords.aggregate([
-        { $match: { productId: new mongoose.Types.ObjectId(id) } },
-        { $sort: { createdAt: -1 } },
-        { $limit: 1000 },
-        {
-          $group: {
-            _id: "$deviceId",
-            latestStatus: { $first: "$status" },
-            latestAssignedTo: { $first: "$assignedDeviceTo" }
+      // Polled every ~30s (per open operator tab) via the fetchProcessByID/getDevices
+      // cascade, and identical for the same product within a short window — collapse
+      // concurrent/repeat calls the same way getLatestDeviceTestsByPlanId does.
+      const devices = await cachedCompute(`devicesByProduct:${id}`, 10000, async () => {
+        const terminalDevicesInProcess = await deviceTestRecords.aggregate([
+          { $match: { productId: new mongoose.Types.ObjectId(id) } },
+          { $sort: { createdAt: -1 } },
+          { $limit: 1000 },
+          {
+            $group: {
+              _id: "$deviceId",
+              latestStatus: { $first: "$status" },
+              latestAssignedTo: { $first: "$assignedDeviceTo" }
+            }
+          },
+          {
+            $match: {
+              $or: [
+                { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+                { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
+              ]
+            }
           }
-        },
-        {
-          $match: {
-            $or: [
-              { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
-              { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
-            ]
-          }
-        }
-        // NOTE: no .lean() here — aggregate() already returns plain objects
-        // and Aggregate has no lean() method (it threw a 500).
-      ]);
+          // NOTE: no .lean() here — aggregate() already returns plain objects
+          // and Aggregate has no lean() method (it threw a 500).
+        ]);
 
-      const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
+        const excludedIds = (terminalDevicesInProcess || []).map(r => r._id).filter(Boolean);
 
-      const devices = await deviceModel.find({
-        productType: new mongoose.Types.ObjectId(id),
-        status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
-        _id: { $nin: excludedIds }
-      }).sort({ _id: -1 }).lean();
-      
+        return deviceModel.find({
+          productType: new mongoose.Types.ObjectId(id),
+          status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
+          _id: { $nin: excludedIds }
+        }).sort({ _id: -1 }).lean();
+      });
+
       if (devices.length === 0) {
         return res.status(404).json({
           status: 404,
@@ -1778,6 +1832,11 @@ module.exports = {
 
       invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
 
+      // This route runs behind a 15s request-timeout middleware. If the DB work
+      // above outlasts that window, the timeout middleware already sent a 504 and
+      // headers are sent — sending again here would throw ERR_HTTP_HEADERS_SENT
+      // and crash the process (this is what caused the PM2 restarts on 2026-07-20).
+      if (res.headersSent) return;
       return res.status(200).json({
         status: 200,
         message: actionMeta.message,
@@ -2026,10 +2085,33 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Invalid processId" });
       }
 
-      const retryLogs = await DeviceRetryLog.find({ processId })
-        .populate("operatorId", "name employeeCode")
-        .sort({ startTime: -1 })
-        .lean();
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let retryLogs;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          DeviceRetryLog.find({ processId })
+            .populate("operatorId", "name employeeCode")
+            .sort({ startTime: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          DeviceRetryLog.countDocuments({ processId }),
+        ]);
+        retryLogs = rows;
+        meta = { page, limit, total };
+      } else {
+        retryLogs = await DeviceRetryLog.find({ processId })
+          .populate("operatorId", "name employeeCode")
+          .sort({ startTime: -1 })
+          .lean();
+      }
 
       // Reshaped to look like a minimal deviceTestRecords entry so the existing
       // attempt-trail/timeline builders can consume it with no further mapping.
@@ -2058,6 +2140,7 @@ module.exports = {
         status: 200,
         message: "Device retry logs fetched successfully",
         deviceTestRecords,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -2196,25 +2279,55 @@ module.exports = {
         };
       }
 
-      const deviceTestRecord = await deviceTestRecords
-        .find(query, null, { sort: { createdAt: -1 } })
-        .populate("deviceId")
-        .populate("operatorId", "name employeeCode")
-        .populate("productId", "name")
-        .populate("planId", "processName")
-        .lean()
-        .lean();
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let deviceTestRecord;
+      let meta;
+      const baseQuery = () =>
+        deviceTestRecords
+          .find(query, null, { sort: { createdAt: -1 } })
+          .populate("deviceId")
+          .populate("operatorId", "name employeeCode")
+          .populate("productId", "name")
+          .populate("planId", "processName")
+          .lean();
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          baseQuery().skip(skip).limit(limit),
+          deviceTestRecords.countDocuments(query),
+        ]);
+        deviceTestRecord = rows;
+        meta = { page, limit, total };
+      } else {
+        // No date filter and no explicit pagination — this can otherwise return
+        // an operator's entire lifetime test history in one unbounded response.
+        const hasDateFilter = Boolean(query.createdAt);
+        const defaultLimit = hasDateFilter ? 2000 : 300;
+        const [rows, total] = await Promise.all([
+          baseQuery().limit(defaultLimit),
+          deviceTestRecords.countDocuments(query),
+        ]);
+        deviceTestRecord = rows;
+        meta = { page: 1, limit: defaultLimit, total };
+      }
 
       if (deviceTestRecord.length === 0) {
         return res.status(200).json({
           status: 200,
           message: "No device records found",
           data: [],
+          ...(meta ? { meta } : {}),
         });
       }
       return res.status(200).json({
         status: 200,
         message: "Device records retrieved successfully",
+        ...(meta ? { meta } : {}),
         data: deviceTestRecord.map((record) => {
           const device = resolveDeviceIdentity(record.deviceId);
           return {
@@ -3204,6 +3317,10 @@ module.exports = {
             ]
           }
         },
+        // Defensive cap: a serial/IMEI/CCID/carton search should match at most a
+        // handful of devices; this also bounds the cost of the several $lookups
+        // below, which would otherwise run once per matched document.
+        { $limit: 50 },
         {
           $lookup: {
             from: "products",

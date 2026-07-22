@@ -24,7 +24,7 @@ const connectDB = async () => {
     try {
         ensureDnsResolvers();
         await mongoose.connect(process.env.MONGODB_URI, {
-            autoIndex: true,
+            autoIndex: false,  // We manage indexes manually (see fix-final.js)
             maxPoolSize: 50,
             minPoolSize: 5,
             maxIdleTimeMS: 30000,
