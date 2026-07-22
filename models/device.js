@@ -112,7 +112,9 @@ deviceSchemas.pre('updateOne', function (next) {
 
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
-deviceSchemas.index({ serialNo: 1, processID: 1 });
+// Unique per process — prevents same serial from being created twice in the same process.
+// Not globally unique to allow intentional reprocessing across different processes.
+deviceSchemas.index({ serialNo: 1, processID: 1 }, { unique: true });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });
 deviceSchemas.index({ ccid: 1 });
