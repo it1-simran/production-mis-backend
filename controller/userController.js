@@ -103,8 +103,14 @@ module.exports = {
         });
       }
 
-      // Email is entirely optional now.
-      const parsedEmail = String(email || "").trim() || undefined;
+      // Programmatic email uniqueness check (no DB index needed for email).
+      const parsedEmail = String(email || "").trim();
+      if (parsedEmail) {
+        const emailTaken = await User.findOne({ email: parsedEmail }).select("_id").lean();
+        if (emailTaken) {
+          return res.status(409).json({ status: 409, message: "A user with this email already exists" });
+        }
+      }
 
       const isOperatorRole = /operator/i.test(String(userType || ""));
       const rawPassword = String(req?.body?.password || "").trim();
@@ -118,19 +124,48 @@ module.exports = {
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(effectivePassword, salt);
       const password = hashedPassword;
-      const newUser = new User({
+
+      const userPayload = {
+        _id: new (require('mongoose').Types.ObjectId)(),
         name,
-        email: parsedEmail,
         employeeCode: trimmedCode,
         gender,
         password,
         dateOfBirth,
         userType,
-        skills,
-        mobileNo,
-      });
+        skills: skills || [],
+        profilePic: "",
+        coverPic: "",
+        department: "",
+        status: "Active",
+        deboardedAt: null,
+        deboardedBy: null,
+        deboardReason: "",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
 
-      await newUser.save();
+      // Only include email / mobileNo if they are real non-empty strings.
+      // Explicitly delete the keys if falsy — prevent null from sneaking in
+      // via JSON body coercion (JSON null → JS null → would be stored as BSON null
+      // and break the sparse unique index).
+      const parsedMobile = String(mobileNo || "").trim();
+      if (parsedEmail) {
+        userPayload.email = parsedEmail;
+      } else {
+        delete userPayload.email;
+      }
+      if (parsedMobile) {
+        userPayload.mobileNo = parsedMobile;
+      } else {
+        delete userPayload.mobileNo;
+      }
+
+      console.log('[createUser] inserting payload keys:', Object.keys(userPayload), '| email present:', 'email' in userPayload);
+
+      // Use raw MongoDB insertOne to bypass Mongoose's null coercion on
+      // schema-defined fields that are absent from the payload.
+      await User.collection.insertOne(userPayload);
 
       // Ensure sequence stays ahead if manually entered
       const yearMatch = trimmedCode.match(/^JSD-(\d{2})-(\d+)$/i);
@@ -147,15 +182,14 @@ module.exports = {
         }
       }
 
-      newUser.password = undefined;
       return res.status(200).json({
         status: 200,
         message: "User created successfully",
-        newUser,
       });
     } catch (error) {
       if (error.code === 11000) {
         const dupField = Object.keys(error.keyPattern || {})[0] || "field";
+        console.error("[DEBUG-409] Duplicate key:", JSON.stringify({ keyPattern: error.keyPattern, keyValue: error.keyValue }));
         return res.status(409).json({
           status: 409,
           message: `A user with this ${dupField} already exists`,
