@@ -10,6 +10,14 @@ const compression = require('compression');
 const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
 dotenv.config({ path: path.join(__dirname, envFile) });
 
+// Contain unrelated async bugs to a single failed request instead of taking
+// down the whole process. Paired with the res.headersSent guards added to
+// createDeviceTestEntry after the ERR_HTTP_HEADERS_SENT crash on 2026-07-20 —
+// this is the backstop for cases we haven't found yet.
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED_REJECTION]', reason);
+});
+
 const app = express();
 
 app.use(helmet({

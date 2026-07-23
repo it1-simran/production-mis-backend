@@ -1463,7 +1463,7 @@ module.exports = {
         return res.status(400).json({ message: "Invalid process id." });
       }
 
-      const cartons = await cartonModel.aggregate([
+      const matchPipeline = [
         {
           $match: {
             processId: processIdMatch,
@@ -1475,6 +1475,9 @@ module.exports = {
             ],
           },
         },
+        { $sort: { _id: -1 } },
+      ];
+      const enrichPipeline = [
         {
           $addFields: {
             // Dedupe before counting so a stray duplicate id written into the
@@ -1541,11 +1544,32 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
-        { $sort: { _id: -1 } }
-      ]);
+        // The $group above re-sorts by insertion, not _id — restore ordering.
+        { $sort: { _id: -1 } },
+      ];
+
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let cartons;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, totalRows] = await Promise.all([
+          cartonModel.aggregate([...matchPipeline, { $skip: skip }, { $limit: limit }, ...enrichPipeline]),
+          cartonModel.aggregate([...matchPipeline, { $count: "total" }]),
+        ]);
+        cartons = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+      }
 
       if (!cartons || cartons.length === 0) {
-        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [], ...(meta ? { meta } : {}) });
       }
 
       // 📦 Separate arrays
@@ -1559,6 +1583,7 @@ module.exports = {
       return res.json({
         cartonSerials,
         cartonDetails: enrichedCartons,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
@@ -1573,7 +1598,17 @@ module.exports = {
         return res.status(400).json({ message: "Invalid process id." });
       }
 
-      const cartons = await cartonModel.aggregate([
+      const matchPipeline = [
+        {
+          $match: {
+            processId: processIdMatch,
+            status: { $in: ["full", "partial", "empty", "FULL", "PARTIAL", "EMPTY"] },
+            cartonStatus: "FG_TO_STORE",
+          },
+        },
+        { $sort: { _id: -1 } },
+      ];
+      const enrichPipeline = [
         {
           $addFields: {
             // Dedupe before counting so a stray duplicate id written into the
@@ -1581,13 +1616,6 @@ module.exports = {
             // past what $lookup will actually resolve, which used to produce
             // a phantom "MISSING DEVICE" placeholder on the frontend.
             actualDeviceCount: { $size: { $setUnion: [{ $ifNull: ["$devices", []] }, []] } },
-          },
-        },
-        {
-          $match: {
-            processId: processIdMatch,
-            status: { $in: ["full", "partial", "empty", "FULL", "PARTIAL", "EMPTY"] },
-            cartonStatus: "FG_TO_STORE",
           },
         },
         {
@@ -1645,10 +1673,31 @@ module.exports = {
             devices: { $push: "$devices" },
           },
         },
-        { $sort: { _id: -1 } }
-      ]);
+        { $sort: { _id: -1 } },
+      ];
+
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let cartons;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, totalRows] = await Promise.all([
+          cartonModel.aggregate([...matchPipeline, { $skip: skip }, { $limit: limit }, ...enrichPipeline]),
+          cartonModel.aggregate([...matchPipeline, { $count: "total" }]),
+        ]);
+        cartons = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+      }
+
       if (!cartons || cartons.length === 0) {
-        return res.status(200).json({ cartonSerials: [], cartonDetails: [] });
+        return res.status(200).json({ cartonSerials: [], cartonDetails: [], ...(meta ? { meta } : {}) });
       }
       const fallbackModelName = await getProcessFallbackModelName(processId);
       const enrichedCartons = enrichCartonDevicesForResponse({
@@ -1660,6 +1709,7 @@ module.exports = {
       return res.json({
         cartonSerials,
         cartonDetails: enrichedCartons,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error fetching carton:", error);
@@ -1794,8 +1844,27 @@ module.exports = {
       });
       const cartonSerials = enrichedCartons.map((c) => c.cartonSerial);
 
-      // Get total count for pagination info
-      const totalCartons = await cartonModel.countDocuments({ processId: processIdMatch });
+      // Get total count for pagination info — must mirror the same normalized
+      // status/cartonStatus match the data pipeline above uses, otherwise this
+      // count (and the totalPages derived from it) includes cartons outside
+      // the PDI queue that will never actually appear on any page.
+      const totalCartonsAgg = await cartonModel.aggregate([
+        { $match: { processId: processIdMatch } },
+        {
+          $addFields: {
+            normalizedStatus: { $toUpper: { $trim: { input: { $ifNull: ["$status", ""] } } } },
+            normalizedCartonStatus: { $toUpper: { $trim: { input: { $ifNull: ["$cartonStatus", ""] } } } },
+          },
+        },
+        {
+          $match: {
+            normalizedStatus: { $in: ["FULL", "PARTIAL", "EMPTY"] },
+            normalizedCartonStatus: "PDI",
+          },
+        },
+        { $count: "total" },
+      ]);
+      const totalCartons = totalCartonsAgg[0]?.total || 0;
 
       return res.json({
         cartonSerials,
@@ -3121,21 +3190,46 @@ module.exports = {
 
   getFullCartons: async (req, res) => {
     try {
-      const cartons = await cartonModel.find({
+      const filter = {
         status: "full",
         $or: [
           { cartonStatus: { $in: ["", "LOOSE_CLOSED"] } },
           { cartonStatus: null },
           { cartonStatus: { $exists: false } },
         ],
-      }).sort({ _id: -1 }).populate({
-        path: 'processId',
-        select: 'name processID'
-      });
+      };
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let cartons;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          cartonModel
+            .find(filter)
+            .sort({ _id: -1 })
+            .skip(skip)
+            .limit(limit)
+            .populate({ path: "processId", select: "name processID" }),
+          cartonModel.countDocuments(filter),
+        ]);
+        cartons = rows;
+        meta = { page, limit, total };
+      } else {
+        cartons = await cartonModel
+          .find(filter)
+          .sort({ _id: -1 })
+          .populate({ path: "processId", select: "name processID" });
+      }
 
       return res.status(200).json({
         success: true,
-        data: cartons
+        data: cartons,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error fetching full cartons:", error);
@@ -3264,7 +3358,16 @@ module.exports = {
 
   getStorePortalCartons: async (req, res) => {
     try {
-      const cartons = await cartonModel.aggregate([
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+      const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+      const skip = (page - 1) * limit;
+
+      // Filtering/sorting first, kept separate from the expensive $lookups below
+      // so pagination can skip/limit BEFORE paying the lookup cost per row.
+      const matchPipeline = [
         {
           // Normalize "store status" across older/newer records:
           // - Prefer cartonStatus when present, otherwise fallback to status
@@ -3296,6 +3399,10 @@ module.exports = {
             storeStatus: { $in: ["FG_TO_STORE", "STOCKED", "KEPT_IN_STORE"] },
           },
         },
+        { $sort: { createdAt: -1 } },
+      ];
+
+      const enrichPipeline = [
         {
           $lookup: {
             from: "processes",
@@ -3334,8 +3441,25 @@ module.exports = {
             devices: "$deviceDetails",
           },
         },
-        { $sort: { createdAt: -1 } }
-      ]);
+      ];
+
+      let cartons;
+      let meta;
+      if (shouldPaginate) {
+        const [rows, totalRows] = await Promise.all([
+          cartonModel.aggregate([
+            ...matchPipeline,
+            { $skip: skip },
+            { $limit: limit },
+            ...enrichPipeline,
+          ]),
+          cartonModel.aggregate([...matchPipeline, { $count: "total" }]),
+        ]);
+        cartons = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+      }
 
       const enrichedCartons = await attachModelNamesToCartons(
         cartons,
@@ -3345,6 +3469,7 @@ module.exports = {
       return res.status(200).json({
         success: true,
         data: enrichedCartons,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error in getStorePortalCartons:", error);

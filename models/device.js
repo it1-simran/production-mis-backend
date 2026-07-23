@@ -46,10 +46,10 @@ deviceSchemas.pre('save', function (next) {
   // Auto-populate imeiNo from customFields if missing
   if (!this.imeiNo && this.customFields) {
     const cf = this.customFields;
-    const imei = (cf.Functional && cf.Functional.IMEI) || 
-                 (cf.functional && cf.functional.imei) ||
-                 (cf.Functional && cf.Functional.imei) ||
-                 (cf.functional && cf.functional.IMEI);
+    const imei = (cf.Functional && cf.Functional.IMEI) ||
+      (cf.functional && cf.functional.imei) ||
+      (cf.Functional && cf.Functional.imei) ||
+      (cf.functional && cf.functional.IMEI);
     if (imei) {
       this.imeiNo = String(imei).trim();
     }
@@ -70,12 +70,12 @@ deviceSchemas.pre('findOneAndUpdate', function (next) {
         // ignore
       }
     }
-    
+
     if (!update.$set.imeiNo && cf) {
-      const imei = (cf.Functional && cf.Functional.IMEI) || 
-                   (cf.functional && cf.functional.imei) ||
-                   (cf.Functional && cf.Functional.imei) ||
-                   (cf.functional && cf.functional.IMEI);
+      const imei = (cf.Functional && cf.Functional.IMEI) ||
+        (cf.functional && cf.functional.imei) ||
+        (cf.Functional && cf.Functional.imei) ||
+        (cf.functional && cf.functional.IMEI);
       if (imei) {
         update.$set.imeiNo = String(imei).trim();
       }
@@ -96,12 +96,12 @@ deviceSchemas.pre('updateOne', function (next) {
         // ignore
       }
     }
-    
+
     if (!update.$set.imeiNo && cf) {
-      const imei = (cf.Functional && cf.Functional.IMEI) || 
-                   (cf.functional && cf.functional.imei) ||
-                   (cf.Functional && cf.Functional.imei) ||
-                   (cf.functional && cf.functional.IMEI);
+      const imei = (cf.Functional && cf.Functional.IMEI) ||
+        (cf.functional && cf.functional.imei) ||
+        (cf.Functional && cf.Functional.imei) ||
+        (cf.functional && cf.functional.IMEI);
       if (imei) {
         update.$set.imeiNo = String(imei).trim();
       }
@@ -112,6 +112,10 @@ deviceSchemas.pre('updateOne', function (next) {
 
 deviceSchemas.index({ serialNo: 1 });
 deviceSchemas.index({ processID: 1 });
+// getDevicesByProcessId sorts by createdAt within one process — without this,
+// Mongo can only use the processID-only index above for the match, then must
+// sort every matching document in memory before applying .limit().
+deviceSchemas.index({ processID: 1, createdAt: -1 });
 deviceSchemas.index({ serialNo: 1, processID: 1 });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });

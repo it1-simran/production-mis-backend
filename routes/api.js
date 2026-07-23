@@ -378,9 +378,14 @@ router.delete("/devices/remove-duplicates", authController.authenticateToken, as
       { $match: { count: { $gt: 1 } } }
     ]);
 
-    for (const doc of duplicates) {
+    // Batch every group's extra ids into a single deleteMany instead of one
+    // round trip per duplicate group.
+    const idsToDelete = duplicates.flatMap((doc) => {
       doc.ids.shift(); // keep one
-      await device.deleteMany({ _id: { $in: doc.ids } });
+      return doc.ids;
+    });
+    if (idsToDelete.length > 0) {
+      await device.deleteMany({ _id: { $in: idsToDelete } });
     }
 
     res.status(200).json({ message: "Duplicate devices removed", count: duplicates.length });

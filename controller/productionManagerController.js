@@ -9,8 +9,12 @@ module.exports = {
   getProcesses: async (req, res) => {
     try {
       const filter = getDataAccessFilter(req);
-      let Processes = await ProcessModel.aggregate([
-        { $match: filter },
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      const matchPipeline = [{ $match: filter }, { $sort: { _id: -1 } }];
+      const enrichPipeline = [
         {
           $lookup: {
             from: "planingandschedulings",
@@ -85,13 +89,29 @@ module.exports = {
             assignedKitsToOperator: "$assignKitsToLine.issuedKits",
           },
         },
-        { $sort: { _id: -1 } }
-      ]);
+      ];
+
+      let Processes;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, totalRows] = await Promise.all([
+          ProcessModel.aggregate([...matchPipeline, { $skip: skip }, { $limit: limit }, ...enrichPipeline]),
+          ProcessModel.aggregate([...matchPipeline, { $count: "total" }]),
+        ]);
+        Processes = rows;
+        meta = { page, limit, total: totalRows[0]?.total || 0 };
+      } else {
+        Processes = await ProcessModel.aggregate([...matchPipeline, ...enrichPipeline]);
+      }
 
       return res.status(200).json({
         status: 200,
         message: "Processes Fetched Successfully!!",
         Processes,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       res

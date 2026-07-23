@@ -84,11 +84,31 @@ module.exports = {
   //   },
   view: async (req, res) => {
     try {
-      const getOrderConfirmationNo = await OrderConfirmationNumberModel.find().sort({ _id: -1 }).lean();
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let getOrderConfirmationNo;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 100, 1), 1000);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          OrderConfirmationNumberModel.find().sort({ _id: -1 }).skip(skip).limit(limit).lean(),
+          OrderConfirmationNumberModel.countDocuments(),
+        ]);
+        getOrderConfirmationNo = rows;
+        meta = { page, limit, total };
+      } else {
+        getOrderConfirmationNo = await OrderConfirmationNumberModel.find().sort({ _id: -1 }).lean();
+      }
+
       return res.status(200).json({
         status: 200,
         status_msg: "Order Confirmation Fetched Sucessfully!!",
         getOrderConfirmationNo,
+        ...(meta ? { meta } : {}),
       });
     } catch (error) {
       console.error("Error fetching Menu details:", error.message);

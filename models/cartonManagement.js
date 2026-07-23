@@ -75,6 +75,11 @@ const cartonManagementSchema = new mongoose.Schema(
 
 cartonManagementSchema.index({ cartonStatus: 1, dispatchStatus: 1, processId: 1 });
 cartonManagementSchema.index({ dispatchInvoiceId: 1 });
+// The busiest carton reads (getCartonByProcessId, getOpenCartonsByProcessId,
+// getPartialCarton, getCartonByProcessIdToPDI, getCartonsIntoStore) all filter
+// on processId first, then status/cartonStatus — this index lets that leading
+// processId scope use an index scan instead of a full collection scan.
+cartonManagementSchema.index({ processId: 1, status: 1, cartonStatus: 1 });
 
 const CartonManagement = mongoose.model(
   "CartonManagement",
