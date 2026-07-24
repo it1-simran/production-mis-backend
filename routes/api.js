@@ -223,6 +223,16 @@ router.get(
   authController.authenticateToken,
   operatorWorkController.getIdleLogs
 );
+router.get(
+  "/operator-work/idle-sync-status",
+  authController.authenticateToken,
+  operatorWorkController.getIdleSyncStatus
+);
+router.get(
+  "/operator-work/session-sync-status",
+  authController.authenticateToken,
+  operatorWorkController.getWorkSessionSyncStatus
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);

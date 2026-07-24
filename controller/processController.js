@@ -946,11 +946,50 @@ module.exports = {
         processId: data.processId,
       };
 
+      const incomingSeats = JSON.parse(data.seatDetails);
+
+      const process = await ProcessModel.findById(data.processId).lean();
+      if (!process) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found for the given processId.",
+        });
+      }
+      const processIssuedKits = parseInt(process.issuedKits) || 0;
+
+      // Merge into whatever's already persisted for this process instead of replacing it outright,
+      // so a session that only touches a subset of seats can't silently wipe out kits already
+      // recorded for seats not present in this submission.
+      const existingEntry = await AssignKitsToLineModel.findOne(condition).lean();
+      const existingSeats = existingEntry?.seatDetails || [];
+      const seatKey = (seat) => `${seat?.rowNumber}-${seat?.seatNumber}`;
+      const mergedSeatsByKey = new Map(existingSeats.map((seat) => [seatKey(seat), seat]));
+      incomingSeats.forEach((seat) => mergedSeatsByKey.set(seatKey(seat), seat));
+      const mergedSeats = Array.from(mergedSeatsByKey.values());
+
+      const seatAllocatedTotal = mergedSeats.reduce(
+        (sum, seat) => sum + (parseInt(seat?.issuedKits) || 0),
+        0,
+      );
+      // Redundant against the sum check for any normal (non-negative) input — the sum can't stay
+      // under the cap while one term is over it. Kept as defense against a crafted negative value
+      // on one seat masking another seat's real overage (e.g. {-50, 300} summing to 250 under a
+      // 240 cap while 300 alone is over it).
+      const seatOverAllocated = mergedSeats.some(
+        (seat) => (parseInt(seat?.issuedKits) || 0) > processIssuedKits,
+      );
+      if (seatOverAllocated || seatAllocatedTotal > processIssuedKits) {
+        return res.status(400).json({
+          status: 400,
+          message: `Kit allocation exceeds the process's issued kits (${processIssuedKits}). No single seat, and no combined total across seats, can exceed this amount.`,
+        });
+      }
+
       const updateData = {
         planId: data.planId,
         processId: data.processId,
-        issuedKits: parseInt(data.issuedKits),
-        seatDetails: JSON.parse(data.seatDetails),
+        issuedKits: seatAllocatedTotal,
+        seatDetails: mergedSeats,
         issuedKitsStatus: data.issuedKitsStatus,
         status: "ASSIGN_TO_OPERATOR",
       };
