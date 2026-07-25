@@ -46,6 +46,22 @@ const ccidTransferRequestSchema = new mongoose.Schema(
     approvedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     department: { type: String, default: "" },
+    removedDevices: {
+      type: [
+        {
+          deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "devices" },
+          serialNo: { type: String, default: "" },
+          imeiNo: { type: String, default: "" },
+          ccid: { type: String, default: "" },
+          customFieldsRemoved: {
+            type: [{ path: String, value: String, _id: false }],
+            default: [],
+          },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );
