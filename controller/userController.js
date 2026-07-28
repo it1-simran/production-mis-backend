@@ -586,4 +586,299 @@ module.exports = {
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },
+  bulkCreateUsers: async (req, res) => {
+    try {
+      const { users, userType: defaultUserType } = req.body;
+      if (!Array.isArray(users) || users.length === 0) {
+        return res.status(400).json({ status: 400, message: "No user records provided" });
+      }
+
+      let insertedCount = 0;
+      let skippedCount = 0;
+      const errors = [];
+      const bcrypt = require("bcrypt");
+
+      const formatEmployeeCode = (codeVal) => {
+        if (!codeVal && codeVal !== 0) return "";
+        let str = String(codeVal).trim();
+        if (!str) return "";
+
+        const currentYear = new Date().getFullYear().toString().slice(-2);
+        const defaultPrefix = `JSD-${currentYear}-`;
+
+        str = str.replace(/\s+/g, "");
+
+        if (/jsd/i.test(str)) {
+          const matchJsd = str.match(/^jsd-?(\d{2})?-?(.*)$/i);
+          if (matchJsd) {
+            const yearPart = matchJsd[1] || currentYear;
+            const restStr = matchJsd[2] || "";
+            const digitsOnly = restStr.replace(/\D/g, "");
+            if (digitsOnly) {
+              const num = parseInt(digitsOnly, 10);
+              const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+              return `JSD-${yearPart}-${serial}`;
+            }
+          }
+        }
+
+        const matchYearNum = str.match(/^(\d{2})-?(.*)$/);
+        if (matchYearNum && str.includes("-")) {
+          const yearPart = matchYearNum[1];
+          const restStr = matchYearNum[2];
+          const digitsOnly = restStr.replace(/\D/g, "");
+          if (digitsOnly) {
+            const num = parseInt(digitsOnly, 10);
+            const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+            return `JSD-${yearPart}-${serial}`;
+          }
+        }
+
+        const digitsOnly = str.replace(/\D/g, "");
+        if (digitsOnly) {
+          const num = parseInt(digitsOnly, 10);
+          const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+          return `${defaultPrefix}${serial}`;
+        }
+
+        return `${defaultPrefix}${str.toUpperCase()}`;
+      };
+
+      for (let i = 0; i < users.length; i++) {
+        const item = users[i];
+        const rowNum = i + 1;
+
+        const name = String(item.name || item["Full Name"] || item.fullName || "").trim();
+        const rawCode = String(item.employeeCode || item["Employee Code"] || item.empCode || "").trim();
+        const trimmedCode = formatEmployeeCode(rawCode);
+        let rawDoj = item.dateOfJoining || item["DOJ"] || item["Date of Joining"] || item.doj;
+        const userType = String(item.userType || defaultUserType || "Operator").trim();
+
+        if (!name) {
+          errors.push(`Row ${rowNum}: Full Name is missing.`);
+          skippedCount++;
+          continue;
+        }
+
+        if (!trimmedCode) {
+          errors.push(`Row ${rowNum}: Employee Code is missing for "${name}".`);
+          skippedCount++;
+          continue;
+        }
+
+        if (!rawDoj) {
+          errors.push(`Row ${rowNum}: DOJ is missing for Employee Code "${trimmedCode}".`);
+          skippedCount++;
+          continue;
+        }
+
+        let dateOfJoining = null;
+        if (rawDoj instanceof Date) {
+          dateOfJoining = isNaN(rawDoj.getTime()) ? null : rawDoj;
+        } else if (typeof rawDoj === 'number') {
+          const d = new Date(Math.round((rawDoj - 25569) * 86400 * 1000));
+          dateOfJoining = isNaN(d.getTime()) ? null : d;
+        } else {
+          const str = String(rawDoj).trim();
+          const ddmmyyyy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+          if (ddmmyyyy) {
+            dateOfJoining = new Date(parseInt(ddmmyyyy[3], 10), parseInt(ddmmyyyy[2], 10) - 1, parseInt(ddmmyyyy[1], 10));
+          } else {
+            const yyyymmdd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+            if (yyyymmdd) {
+              dateOfJoining = new Date(parseInt(yyyymmdd[1], 10), parseInt(yyyymmdd[2], 10) - 1, parseInt(yyyymmdd[3], 10));
+            } else {
+              const parsed = new Date(str);
+              if (!isNaN(parsed.getTime())) dateOfJoining = parsed;
+            }
+          }
+        }
+
+        if (!dateOfJoining || isNaN(dateOfJoining.getTime())) {
+          errors.push(`Row ${rowNum}: Invalid DOJ format for Employee Code "${trimmedCode}".`);
+          skippedCount++;
+          continue;
+        }
+
+        const codeTaken = await User.findOne({
+          employeeCode: {
+            $regex: `^${trimmedCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+            $options: "i",
+          },
+        }).select("_id").lean();
+
+        if (codeTaken) {
+          errors.push(`Row ${rowNum}: Employee Code "${trimmedCode}" already exists.`);
+          skippedCount++;
+          continue;
+        }
+
+        const isOperatorRole = /operator/i.test(userType);
+        const rawPassword = String(item.password || "").trim();
+        const effectivePassword = rawPassword || trimmedCode;
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(effectivePassword, salt);
+
+        const gender = item.gender ? String(item.gender).trim().toUpperCase() : "M";
+        let dateOfBirth = item.dateOfBirth ? new Date(item.dateOfBirth) : null;
+        if (!dateOfBirth || isNaN(dateOfBirth.getTime())) {
+          dateOfBirth = dateOfJoining;
+        }
+
+        const userPayload = {
+          _id: new mongoose.Types.ObjectId(),
+          name,
+          employeeCode: trimmedCode,
+          gender: gender === "FEMALE" || gender === "F" ? "F" : "M",
+          password: hashedPassword,
+          dateOfBirth,
+          dateOfJoining,
+          payroll: String(item.payroll || "").trim(),
+          userType,
+          skills: Array.isArray(item.skills) ? item.skills : [],
+          profilePic: "",
+          coverPic: "",
+          department: "",
+          status: "Active",
+          deboardedAt: null,
+          deboardedBy: null,
+          deboardReason: "",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        if (item.email && String(item.email).trim()) {
+          userPayload.email = String(item.email).trim();
+        }
+        if (item.mobileNo && String(item.mobileNo).trim()) {
+          userPayload.mobileNo = String(item.mobileNo).trim();
+        }
+
+        await User.collection.insertOne(userPayload);
+        insertedCount++;
+
+        const yearMatch = trimmedCode.match(/^JSD-(\d{2})-(\d+)$/i);
+        if (yearMatch) {
+          const year = yearMatch[1];
+          const num = parseInt(yearMatch[2], 10);
+          if (!isNaN(num)) {
+            const Sequence = require("../models/Sequence");
+            await Sequence.findOneAndUpdate(
+              { name: `employeeCode_${year}` },
+              { $max: { value: num } },
+              { upsert: true }
+            );
+          }
+        }
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: `Bulk processing finished. ${insertedCount} added successfully, ${skippedCount} skipped.`,
+        inserted: insertedCount,
+        skipped: skippedCount,
+        errors,
+      });
+    } catch (error) {
+      console.error("Error in bulkCreateUsers:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error during bulk creation", details: error.message });
+    }
+  },
+  checkUserDuplicates: async (req, res) => {
+    try {
+      const { employeeCodes } = req.body;
+      if (!Array.isArray(employeeCodes) || employeeCodes.length === 0) {
+        return res.status(200).json({
+          status: 200,
+          existingCodes: [],
+          existingUsers: [],
+          duplicateCount: 0,
+        });
+      }
+
+      const formatEmployeeCode = (codeVal) => {
+        if (!codeVal && codeVal !== 0) return "";
+        let str = String(codeVal).trim();
+        if (!str) return "";
+
+        const currentYear = new Date().getFullYear().toString().slice(-2);
+        const defaultPrefix = `JSD-${currentYear}-`;
+
+        str = str.replace(/\s+/g, "");
+
+        if (/jsd/i.test(str)) {
+          const matchJsd = str.match(/^jsd-?(\d{2})?-?(.*)$/i);
+          if (matchJsd) {
+            const yearPart = matchJsd[1] || currentYear;
+            const restStr = matchJsd[2] || "";
+            const digitsOnly = restStr.replace(/\D/g, "");
+            if (digitsOnly) {
+              const num = parseInt(digitsOnly, 10);
+              const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+              return `JSD-${yearPart}-${serial}`;
+            }
+          }
+        }
+
+        const matchYearNum = str.match(/^(\d{2})-?(.*)$/);
+        if (matchYearNum && str.includes("-")) {
+          const yearPart = matchYearNum[1];
+          const restStr = matchYearNum[2];
+          const digitsOnly = restStr.replace(/\D/g, "");
+          if (digitsOnly) {
+            const num = parseInt(digitsOnly, 10);
+            const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+            return `JSD-${yearPart}-${serial}`;
+          }
+        }
+
+        const digitsOnly = str.replace(/\D/g, "");
+        if (digitsOnly) {
+          const num = parseInt(digitsOnly, 10);
+          const serial = isNaN(num) ? digitsOnly.padStart(4, "0") : String(num).padStart(4, "0");
+          return `${defaultPrefix}${serial}`;
+        }
+
+        return `${defaultPrefix}${str.toUpperCase()}`;
+      };
+
+      const cleanCodes = employeeCodes
+        .map((c) => formatEmployeeCode(c))
+        .filter((c) => c.length > 0);
+
+      const regexes = cleanCodes.map((code) => {
+        const match = code.match(/^JSD-(\d{2})-(\d+)$/i);
+        if (match) {
+          const year = match[1];
+          const serialNum = parseInt(match[2], 10);
+          return new RegExp(`^JSD-${year}-0*-?${serialNum}$`, "i");
+        }
+        return new RegExp(`^${code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+      });
+
+      const existingUsers = await User.find({
+        employeeCode: { $in: regexes },
+      })
+        .select("employeeCode name userType status")
+        .lean();
+
+      const existingCodes = existingUsers.map((u) => formatEmployeeCode(u.employeeCode).toLowerCase());
+
+      return res.status(200).json({
+        status: 200,
+        existingCodes,
+        existingUsers,
+        duplicateCount: existingUsers.length,
+      });
+    } catch (error) {
+      console.error("Error in checkUserDuplicates:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Error checking duplicate employee codes",
+        details: error.message,
+      });
+    }
+  },
 };
+

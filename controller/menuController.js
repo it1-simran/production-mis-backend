@@ -112,6 +112,7 @@ module.exports = {
           children: [
             { label: "View Product", route: "/product/view" },
             { label: "Add Product", route: "/product/add" },
+            { label: "Product Category", route: "/product/category" },
           ],
         },
         {

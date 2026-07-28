@@ -5,11 +5,35 @@ const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 const DeviceModel = require("../models/device");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
+const ProductCategory = require("../models/productCategory");
 const User = require("../models/User");
 
 const normalizeSerial = (value) => String(value || "").trim();
 const normalizeStage = (value) => String(value || "").trim().toLowerCase();
 const normalizeDispatchStatus = (value) => String(value || "").trim().toUpperCase();
+
+const isSameProductOrCategory = async (fromProcess, toProcess, session = null) => {
+  const fromProdId = String(fromProcess?.selectedProduct || "");
+  const toProdId = String(toProcess?.selectedProduct || "");
+
+  if (!fromProdId || !toProdId) {
+    return fromProdId === toProdId;
+  }
+
+  if (fromProdId === toProdId) {
+    return true;
+  }
+
+  const query = ProductCategory.findOne({
+    status: { $nin: ["0", "inactive"] },
+    products: { $all: [fromProcess.selectedProduct, toProcess.selectedProduct] },
+  });
+  if (session) {
+    query.session(session);
+  }
+  const matchingCategory = await query.lean();
+  return Boolean(matchingCategory);
+};
 
 const assertEligibleSourceProcess = (processDoc) => {
   if (!processDoc) {
@@ -207,9 +231,10 @@ module.exports = {
         return res.status(400).json({ status: 400, message: sourceEligibilityError });
       }
 
-      if (String(fromProcess.selectedProduct) !== String(toProcess.selectedProduct)) {
-        console.log(">>> [DEBUG_TRACE] 10: Product mismatch");
-        return res.status(400).json({ status: 400, message: "Transfers are allowed only between same-product processes" });
+      const isProductOrCategoryMatch = await isSameProductOrCategory(fromProcess, toProcess);
+      if (!isProductOrCategoryMatch) {
+        console.log(">>> [DEBUG_TRACE] 10: Product/Category mismatch");
+        return res.status(400).json({ status: 400, message: "Transfers are allowed only between processes in the same product category" });
       }
 
       const availableIssuedKits = Number(fromProcess.issuedKits || 0);
@@ -418,6 +443,11 @@ module.exports = {
           throw new Error("Related process not found");
         }
 
+        const isProductOrCategoryMatch = await isSameProductOrCategory(fromProcess, toProcess, session);
+        if (!isProductOrCategoryMatch) {
+          throw new Error("Transfers are allowed only between processes in the same product category");
+        }
+
         const sourceEligibilityError = assertEligibleSourceProcess(fromProcess);
         if (sourceEligibilityError) {
           throw new Error(sourceEligibilityError);
@@ -538,6 +568,9 @@ module.exports = {
           for (const context of transferContext) {
             const { device, deviceFlowVersion } = context;
             device.processID = toProcess._id;
+            if (toProcess.selectedProduct) {
+              device.productType = toProcess.selectedProduct;
+            }
             device.currentStage = request.targetStage || device.currentStage || "";
             device.flowVersion = deviceFlowVersion + 1;
             device.flowStartedAt = now;

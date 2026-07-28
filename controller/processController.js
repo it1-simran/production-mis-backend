@@ -170,11 +170,11 @@ module.exports = {
       // Match both ObjectId and legacy string storage on `selectedProduct`.
       const productMatch = mongoose.Types.ObjectId.isValid(rawId)
         ? {
-            $or: [
-              { selectedProduct: new mongoose.Types.ObjectId(rawId) },
-              { selectedProduct: rawId },
-            ],
-          }
+          $or: [
+            { selectedProduct: new mongoose.Types.ObjectId(rawId) },
+            { selectedProduct: rawId },
+          ],
+        }
         : { selectedProduct: rawId };
 
       const filter = {
@@ -743,14 +743,14 @@ module.exports = {
 
       const userTypeFilter = forCommonStages
         ? {
-            $or: [
-              { userType: { $regex: /operator/i } },
-              { userType: { $regex: /^qc$/i } },
-              { userType: { $regex: /quality\s*control/i } },
-              { userType: { $regex: /store/i } },
-              { userType: { $regex: /production\s*manager/i } },
-            ],
-          }
+          $or: [
+            { userType: { $regex: /operator/i } },
+            { userType: { $regex: /^qc$/i } },
+            { userType: { $regex: /quality\s*control/i } },
+            { userType: { $regex: /store/i } },
+            { userType: { $regex: /production\s*manager/i } },
+          ],
+        }
         : { userType: { $regex: /operator/i } };
 
       const users = await OperatorModel.find({
@@ -767,19 +767,19 @@ module.exports = {
       const userIds = users.map((u) => u._id);
       const otherAssignments = userIds.length
         ? await AssignOperatorToPlanModel.find({
-            userId: { $in: userIds },
-            $or: [
-              { status: { $regex: /^occupied$/i } },
-              { status: { $exists: false } },
-              { status: null },
-              { status: "" },
-            ],
-            ...(processId && mongoose.Types.ObjectId.isValid(processId)
-              ? { processId: { $ne: new mongoose.Types.ObjectId(processId) } }
-              : {}),
-          })
-            .select("userId processId")
-            .lean()
+          userId: { $in: userIds },
+          $or: [
+            { status: { $regex: /^occupied$/i } },
+            { status: { $exists: false } },
+            { status: null },
+            { status: "" },
+          ],
+          ...(processId && mongoose.Types.ObjectId.isValid(processId)
+            ? { processId: { $ne: new mongoose.Types.ObjectId(processId) } }
+            : {}),
+        })
+          .select("userId processId")
+          .lean()
         : [];
 
       const assignedProcessIds = [
@@ -787,8 +787,8 @@ module.exports = {
       ].filter((id) => mongoose.Types.ObjectId.isValid(id));
       const processDocs = assignedProcessIds.length
         ? await ProcessModel.find({ _id: { $in: assignedProcessIds } })
-            .select("name processID status")
-            .lean()
+          .select("name processID status")
+          .lean()
         : [];
       const processById = new Map(processDocs.map((p) => [String(p._id), p]));
 

@@ -4,9 +4,10 @@ const Product = require("../models/Products");
 const InventoryModel = require("../models/inventoryManagement");
 
 
+const ProductCategory = require("../models/productCategory");
 const Carton = require('../models/cartonManagement');
 module.exports = {
-    create: async (req, res) => {
+  create: async (req, res) => {
     try {
       const name = req.body.name;
       const stages = JSON.parse(req.body.Products || "[]");
@@ -53,7 +54,24 @@ module.exports = {
           autoNgEnabled: !!req.body.autoNgEnabled,
         });
 
+      const productCategory = req.body.productCategory || req.body.category;
+      if (productCategory) {
+        const catDoc = await ProductCategory.findById(productCategory);
+        if (catDoc && (String(catDoc.status) === "0" || String(catDoc.status).toLowerCase() === "inactive")) {
+          return res.status(400).json({
+            status: 400,
+            message: "Cannot assign product to an inactive Product Category.",
+          });
+        }
+      }
+
       const savedProduct = await newProduct.save();
+      if (savedProduct && productCategory) {
+        await ProductCategory.updateOne(
+          { _id: productCategory },
+          { $addToSet: { products: savedProduct._id } }
+        );
+      }
       if (savedProduct && savedProduct.status !== "draft") {
         const InventoryData = {
           productName: name,
@@ -77,10 +95,40 @@ module.exports = {
     try {
       const filter = getUnscopedAuthorizedReadListFilter();
       const Products = await Product.find(filter).sort({ _id: -1 }).lean();
+
+      // Attach Product Category information (only active categories)
+      await ProductCategory.updateMany(
+        { status: { $in: ["0", "inactive"] } },
+        { $set: { products: [] } }
+      );
+      const categories = await ProductCategory.find({ status: { $nin: ["0", "inactive"] } }).lean();
+      const productCategoryMap = {};
+      categories.forEach((cat) => {
+        if (Array.isArray(cat.products)) {
+          cat.products.forEach((pId) => {
+            const pIdStr = String(pId._id || pId);
+            productCategoryMap[pIdStr] = {
+              _id: String(cat._id),
+              name: cat.name,
+              status: cat.status,
+            };
+          });
+        }
+      });
+
+      const ProductsWithCategory = Products.map((p) => {
+        const catInfo = productCategoryMap[String(p._id)];
+        return {
+          ...p,
+          category: catInfo || null,
+          categoryName: catInfo ? catInfo.name : "",
+        };
+      });
+
       return res.status(200).json({
         status: 200,
         status_msg: "Products Fetched Sucessfully!!",
-        Products,
+        Products: ProductsWithCategory,
       });
     } catch (error) {
       console.error("Error fetching Products details:", error);
@@ -145,6 +193,16 @@ module.exports = {
         return res.status(404).json({ error: "Product not found" });
       }
       if(product){
+        const categoryDoc = await ProductCategory.findOne({ products: id, status: { $nin: ["0", "inactive"] } }).lean();
+        if (categoryDoc) {
+          product.category = {
+            _id: String(categoryDoc._id),
+            name: categoryDoc.name,
+          };
+          product.productCategory = String(categoryDoc._id);
+          product.categoryName = categoryDoc.name;
+        }
+
         let inventory = await InventoryModel.findOne({ productType: product._id }).lean();
         return res.status(200).json({product,inventory});
       }
@@ -159,6 +217,17 @@ module.exports = {
       const stages = JSON.parse(req.body.stages);
       const commonStages = JSON.parse(req.body.commonStages);
       const autoNgEnabled = req.body.autoNgEnabled === "true" || req.body.autoNgEnabled === true;
+      const productCategory = req.body.productCategory || req.body.category || "";
+      if (productCategory) {
+        const catDoc = await ProductCategory.findById(productCategory);
+        if (catDoc && (String(catDoc.status) === "0" || String(catDoc.status).toLowerCase() === "inactive")) {
+          return res.status(400).json({
+            status: 400,
+            message: "Cannot assign product to an inactive Product Category.",
+          });
+        }
+      }
+
       const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
@@ -168,6 +237,15 @@ module.exports = {
 
       if (!updatedProduct) {
         return res.status(404).json({ message: "Product not found" });
+      }
+
+      // Sync category mapping
+      await ProductCategory.updateMany({ products: id }, { $pull: { products: id } });
+      if (productCategory) {
+        await ProductCategory.updateOne(
+          { _id: productCategory },
+          { $addToSet: { products: id } }
+        );
       }
 
       return res.status(200).json({
