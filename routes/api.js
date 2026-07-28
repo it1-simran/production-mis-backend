@@ -4,6 +4,7 @@ const authController = require('../controller/authController');
 const { upload } = require('../controller/uploadController');
 const userController = require('../controller/userController');
 const productController = require('../controller/productController');
+const productCategoryController = require('../controller/productCategoryController');
 const jigController = require("../controller/jigController");
 const roomPlanController = require("../controller/roomPlanController");
 const userRolesController = require('../controller/userRolesController');
@@ -74,6 +75,12 @@ router.post('/register', authController.register);
 router.post('/add/product', authController.authenticateToken, authController.authorize("View Product", "create"), productController.create);
 router.put('/product/update/:id', authController.authenticateToken, authController.authorize("View Product", "update"), productController.update);
 router.put('/product/activate/:id', authController.authenticateToken, productController.activate);
+
+// Product Category Routes
+router.post('/product-category/create', authController.authenticateToken, productCategoryController.create);
+router.get('/product-category/view', authController.authenticateToken, productCategoryController.view);
+router.delete('/product-category/delete/:id', authController.authenticateToken, productCategoryController.delete);
+router.post('/product-category/delete-multiple', authController.authenticateToken, productCategoryController.deleteMultiple);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
@@ -95,6 +102,8 @@ router.get('/room-plan/getRoomPlanByID/:id', authController.authenticateToken, r
 router.put('/room-plan/getRoomPlanByID/update/:id', authController.authenticateToken, roomPlanController.update);
 router.get('/user/generate-code', authController.authenticateToken, userController.generateEmployeeCode);
 router.post('/user/create', authController.authenticateToken, authController.authorize("View User", "create"), userController.createUser);
+router.post('/user/bulk-create', authController.authenticateToken, authController.authorize("View User", "create"), userController.bulkCreateUsers);
+router.post('/user/check-duplicates', authController.authenticateToken, authController.authorize("View User", "read"), userController.checkUserDuplicates);
 router.get('/user/view', authController.authenticateToken, authController.authorize("View User", "read"), userController.getUsers);
 router.get('/user/operator-dashboard-stats', authController.authenticateToken, authController.authorize("View User", "read"), userController.getOperatorDashboardStats);
 router.put('/user/deboard/:id', authController.authenticateToken, authController.authorize("View User", "update"), userController.deboardOperator);

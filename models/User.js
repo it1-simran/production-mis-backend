@@ -9,6 +9,8 @@ const userSchema = new mongoose.Schema({
   gender: { type: String, required: true },
   password: { type: String, required: true },
   dateOfBirth: { type: Date, required: true },
+  dateOfJoining: { type: Date, default: null },
+  payroll: { type: String, default: "" },
   userType: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
