@@ -10,7 +10,73 @@ const AssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
 const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
+const RoomPlanModel = require("../models/roomPlan");
 const { invalidateProcessCache } = require("../utils/cacheManager");
+
+// Shared by reassignOperator and assignOperatorToProcess: removes an operator from every
+// process assignment except (optionally) one, cleaning both the plan's seat map and the
+// AssignOperatorToPlanModel records so the operator becomes immediately available elsewhere.
+const freeOperatorFromOtherProcesses = async (userObjId, exceptProcessId) => {
+  const userIdStr = String(userObjId);
+  const assignmentFilter = { userId: userObjId };
+  if (exceptProcessId && mongoose.Types.ObjectId.isValid(exceptProcessId)) {
+    assignmentFilter.processId = { $ne: new mongoose.Types.ObjectId(exceptProcessId) };
+  }
+
+  const fromProcessIds = (
+    await AssignOperatorToPlanModel.distinct("processId", assignmentFilter)
+  ).filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+  const safeParse = (val, fallback) => {
+    if (val == null) return fallback;
+    if (typeof val === "object") return val;
+    try { return JSON.parse(val); } catch { return fallback; }
+  };
+  const withoutOperator = (list) =>
+    (Array.isArray(list) ? list : list ? [list] : []).filter(
+      (op) => String(op?._id || op?.userId || "") !== userIdStr,
+    );
+
+  const freedProcesses = [];
+  for (const procId of fromProcessIds) {
+    const plan = await PlaningAndSchedulingModel.findOne({ selectedProcess: procId });
+    if (plan) {
+      const seatMap = safeParse(plan.assignedOperators, {}) || {};
+      let changed = false;
+      for (const seatKey of Object.keys(seatMap)) {
+        const before = Array.isArray(seatMap[seatKey])
+          ? seatMap[seatKey].length
+          : seatMap[seatKey] ? 1 : 0;
+        const after = withoutOperator(seatMap[seatKey]);
+        if (after.length !== before) changed = true;
+        if (after.length > 0) seatMap[seatKey] = after;
+        else delete seatMap[seatKey];
+      }
+
+      const customOps = safeParse(plan.assignedCustomStagesOp, []) || [];
+      let customChanged = false;
+      const nextCustom = (Array.isArray(customOps) ? customOps : []).map((slot) => {
+        const after = withoutOperator(slot);
+        if (after.length !== (Array.isArray(slot) ? slot.length : slot ? 1 : 0)) {
+          customChanged = true;
+        }
+        return after;
+      });
+
+      if (changed) plan.assignedOperators = JSON.stringify(seatMap);
+      if (customChanged) plan.assignedCustomStagesOp = JSON.stringify(nextCustom);
+      if (changed || customChanged) {
+        plan.updatedAt = new Date();
+        await plan.save();
+      }
+    }
+    freedProcesses.push(String(procId));
+  }
+
+  await AssignOperatorToPlanModel.deleteMany(assignmentFilter);
+  return freedProcesses;
+};
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -778,7 +844,7 @@ module.exports = {
             ? { processId: { $ne: new mongoose.Types.ObjectId(processId) } }
             : {}),
         })
-          .select("userId processId")
+          .select("userId processId roomName createdAt")
           .lean()
         : [];
 
@@ -792,15 +858,26 @@ module.exports = {
         : [];
       const processById = new Map(processDocs.map((p) => [String(p._id), p]));
 
+      const roomIds = [
+        ...new Set(otherAssignments.map((a) => String(a.roomName)).filter(Boolean)),
+      ].filter((id) => mongoose.Types.ObjectId.isValid(id));
+      const roomDocs = roomIds.length
+        ? await RoomPlanModel.find({ _id: { $in: roomIds } }).select("floorName").lean()
+        : [];
+      const roomById = new Map(roomDocs.map((r) => [String(r._id), r]));
+
       // One assignment per operator is enough for the badge/confirm.
       const assignmentByUser = new Map();
       for (const a of otherAssignments) {
         const uid = String(a.userId);
         if (assignmentByUser.has(uid)) continue;
         const proc = processById.get(String(a.processId));
+        const room = roomById.get(String(a.roomName));
         const statusText = String(proc?.status || "");
         assignmentByUser.set(uid, {
           processId: String(a.processId),
+          floorName: room?.floorName || null,
+          assignedAt: a.createdAt || null,
           processName: proc?.name || proc?.processID || "another process",
           inProduction: /production|progress|running|active|ongoing/i.test(statusText),
         });
@@ -831,74 +908,96 @@ module.exports = {
       if (!mongoose.Types.ObjectId.isValid(userId)) {
         return res.status(400).json({ status: 400, message: "Invalid operator id" });
       }
-      const userObjId = new mongoose.Types.ObjectId(userId);
-      const userIdStr = String(userId);
-
-      const assignmentFilter = { userId: userObjId };
-      if (toProcessId && mongoose.Types.ObjectId.isValid(toProcessId)) {
-        assignmentFilter.processId = { $ne: new mongoose.Types.ObjectId(toProcessId) };
-      }
-
-      const fromProcessIds = (
-        await AssignOperatorToPlanModel.distinct("processId", assignmentFilter)
-      ).filter((id) => mongoose.Types.ObjectId.isValid(id));
-
-      const safeParse = (val, fallback) => {
-        if (val == null) return fallback;
-        if (typeof val === "object") return val;
-        try { return JSON.parse(val); } catch { return fallback; }
-      };
-      const withoutOperator = (list) =>
-        (Array.isArray(list) ? list : list ? [list] : []).filter(
-          (op) => String(op?._id || op?.userId || "") !== userIdStr,
-        );
-
-      const freedProcesses = [];
-      for (const procId of fromProcessIds) {
-        // Remove the operator from that process's plan seat map(s).
-        const plan = await PlaningAndSchedulingModel.findOne({
-          selectedProcess: procId,
-        });
-        if (plan) {
-          const seatMap = safeParse(plan.assignedOperators, {}) || {};
-          let changed = false;
-          for (const seatKey of Object.keys(seatMap)) {
-            const before = Array.isArray(seatMap[seatKey])
-              ? seatMap[seatKey].length
-              : seatMap[seatKey] ? 1 : 0;
-            const after = withoutOperator(seatMap[seatKey]);
-            if (after.length !== before) changed = true;
-            if (after.length > 0) seatMap[seatKey] = after;
-            else delete seatMap[seatKey];
-          }
-
-          const customOps = safeParse(plan.assignedCustomStagesOp, []) || [];
-          let customChanged = false;
-          const nextCustom = (Array.isArray(customOps) ? customOps : []).map((slot) => {
-            const after = withoutOperator(slot);
-            if (after.length !== (Array.isArray(slot) ? slot.length : slot ? 1 : 0)) {
-              customChanged = true;
-            }
-            return after;
-          });
-
-          if (changed) plan.assignedOperators = JSON.stringify(seatMap);
-          if (customChanged) plan.assignedCustomStagesOp = JSON.stringify(nextCustom);
-          if (changed || customChanged) {
-            plan.updatedAt = new Date();
-            await plan.save();
-          }
-        }
-        freedProcesses.push(String(procId));
-      }
-
-      // Delete the operator's assignment records for those processes.
-      await AssignOperatorToPlanModel.deleteMany(assignmentFilter);
+      const freedProcesses = await freeOperatorFromOtherProcesses(
+        new mongoose.Types.ObjectId(userId),
+        toProcessId,
+      );
 
       return res.status(200).json({
         status: 200,
         message: "Operator freed from other process(es)",
         freedProcesses,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  /**
+   * POST /operators/assign — Operator Assignment page (Process submenu).
+   * Coarse assignment: process + room only, no seat/stage picking. Atomically frees the
+   * operator from any other process before creating/updating the new assignment, so an
+   * operator is never left assigned to two processes at once.
+   * Body: { userId, processId, roomName }
+   */
+  assignOperatorToProcess: async (req, res) => {
+    try {
+      const { userId, processId, roomName } = req.body || {};
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid operator id" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process id" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(roomName)) {
+        return res.status(400).json({ status: 400, message: "A room must be selected" });
+      }
+
+      const operator = await OperatorModel.findById(userId).lean();
+      if (!operator) {
+        return res.status(404).json({ status: 404, message: "Operator not found" });
+      }
+      if (!/operator/i.test(operator.userType || "")) {
+        return res.status(400).json({ status: 400, message: "This user is not an Operator" });
+      }
+
+      const process = await ProcessModel.findById(processId).lean();
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      const userObjId = new mongoose.Types.ObjectId(userId);
+      const previousAssignments = await AssignOperatorToPlanModel.find({
+        userId: userObjId,
+        processId: { $ne: new mongoose.Types.ObjectId(processId) },
+      })
+        .populate("processId", "name processID")
+        .lean();
+
+      await freeOperatorFromOtherProcesses(userObjId, processId);
+
+      const assignment = await AssignOperatorToPlanModel.findOneAndUpdate(
+        { userId: userObjId, processId: new mongoose.Types.ObjectId(processId) },
+        {
+          $set: {
+            roomName: new mongoose.Types.ObjectId(roomName),
+            status: "Occupied",
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { startDate: new Date() },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+
+      const previousProcessName = previousAssignments[0]?.processId?.name
+        || previousAssignments[0]?.processId?.processID
+        || null;
+
+      await ProcessLogModel.create({
+        action: "ASSIGN",
+        processId,
+        userId: req.user?.id || userId,
+        description: previousProcessName
+          ? `${operator.name || "Operator"} reassigned from ${previousProcessName} to ${process.name || process.processID} by ${req.user?.name || "admin"}.`
+          : `${operator.name || "Operator"} assigned to ${process.name || process.processID} by ${req.user?.name || "admin"}.`,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: previousProcessName
+          ? `Operator reassigned from ${previousProcessName} to ${process.name || process.processID}`
+          : `Operator assigned to ${process.name || process.processID}`,
+        assignment,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -946,11 +1045,50 @@ module.exports = {
         processId: data.processId,
       };
 
+      const incomingSeats = JSON.parse(data.seatDetails);
+
+      const process = await ProcessModel.findById(data.processId).lean();
+      if (!process) {
+        return res.status(404).json({
+          status: 404,
+          message: "Process not found for the given processId.",
+        });
+      }
+      const processIssuedKits = parseInt(process.issuedKits) || 0;
+
+      // Merge into whatever's already persisted for this process instead of replacing it outright,
+      // so a session that only touches a subset of seats can't silently wipe out kits already
+      // recorded for seats not present in this submission.
+      const existingEntry = await AssignKitsToLineModel.findOne(condition).lean();
+      const existingSeats = existingEntry?.seatDetails || [];
+      const seatKey = (seat) => `${seat?.rowNumber}-${seat?.seatNumber}`;
+      const mergedSeatsByKey = new Map(existingSeats.map((seat) => [seatKey(seat), seat]));
+      incomingSeats.forEach((seat) => mergedSeatsByKey.set(seatKey(seat), seat));
+      const mergedSeats = Array.from(mergedSeatsByKey.values());
+
+      const seatAllocatedTotal = mergedSeats.reduce(
+        (sum, seat) => sum + (parseInt(seat?.issuedKits) || 0),
+        0,
+      );
+      // Redundant against the sum check for any normal (non-negative) input — the sum can't stay
+      // under the cap while one term is over it. Kept as defense against a crafted negative value
+      // on one seat masking another seat's real overage (e.g. {-50, 300} summing to 250 under a
+      // 240 cap while 300 alone is over it).
+      const seatOverAllocated = mergedSeats.some(
+        (seat) => (parseInt(seat?.issuedKits) || 0) > processIssuedKits,
+      );
+      if (seatOverAllocated || seatAllocatedTotal > processIssuedKits) {
+        return res.status(400).json({
+          status: 400,
+          message: `Kit allocation exceeds the process's issued kits (${processIssuedKits}). No single seat, and no combined total across seats, can exceed this amount.`,
+        });
+      }
+
       const updateData = {
         planId: data.planId,
         processId: data.processId,
-        issuedKits: parseInt(data.issuedKits),
-        seatDetails: JSON.parse(data.seatDetails),
+        issuedKits: seatAllocatedTotal,
+        seatDetails: mergedSeats,
         issuedKitsStatus: data.issuedKitsStatus,
         status: "ASSIGN_TO_OPERATOR",
       };

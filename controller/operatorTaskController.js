@@ -893,14 +893,10 @@ const resolveMatchFromCandidates = (candidateDevices = [], scanTokens = []) => {
   return { ambiguous: false, match: null };
 };
 
-const ensureOperatorWorkSessionForBootstrap = async ({ operatorId, processId, planId }) => {
+const ensureOperatorWorkSessionForBootstrap = async ({ operatorId, processId }) => {
   try {
     const operatorObjId = new mongoose.Types.ObjectId(String(operatorId));
     const processObjId = new mongoose.Types.ObjectId(String(processId));
-    const planObjId =
-      planId && mongoose.Types.ObjectId.isValid(String(planId))
-        ? new mongoose.Types.ObjectId(String(planId))
-        : null;
 
     const existing = await OperatorWorkSession.findOne({
       operatorId: operatorObjId,
@@ -908,33 +904,24 @@ const ensureOperatorWorkSessionForBootstrap = async ({ operatorId, processId, pl
       status: "active",
     });
     if (existing) {
-      // Auto-expire sessions that started more than SESSION_MAX_HOURS_TASK ago.
-      // When an operator scans their first device of a new day the stale overnight
-      // session is closed here and a fresh one is created below, so the device
-      // test record will be stamped with today's login time.
+      // Auto-expire (and close out) sessions that started more than
+      // SESSION_MAX_HOURS_TASK ago, so an overnight session doesn't keep
+      // reporting as "active" into the next day.
       const expired = await autoExpireStaleSessionTask(existing);
       if (!expired) return existing.toObject ? existing.toObject() : existing;
-      // Expired — fall through to create a new session.
+      // Expired and closed above — nothing active now, fall through.
     }
 
-    const assignment = await AssignOperatorToPlan.findOne({
-      userId: operatorObjId,
-      processId: processObjId,
-    }).lean();
-
-    const session = new OperatorWorkSession({
-      operatorId: operatorObjId,
-      processId: processObjId,
-      planId: planObjId,
-      taskUrl: "",
-      scheduledShift: assignment?.ProcessShiftMappings || {},
-      startedAt: new Date(),
-      status: "active",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    await session.save();
-    return session;
+    // Cross-device sync: only the explicit "Start Task" button (startSession's
+    // own atomic upsert) is allowed to create a session. This bootstrap path —
+    // called on every ~30s poll — used to blindly create a fresh "active"
+    // session the instant none existed, producing a session the operator
+    // never asked for (explicitlyStarted stays false, no TASK_START event
+    // ever logged for it). That ghost session still populated the frontend's
+    // operatorSessionId and confused reconciliation, making a genuine
+    // Stop-then-Start sequence unreliable. Nothing active just means nothing
+    // to report here — a real Start click creates its own session on demand.
+    return null;
   } catch (error) {
     console.error("Failed to ensure operator work session on bootstrap:", error?.message || error);
     return null;
@@ -1306,22 +1293,44 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
 };
 
 const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = false }) => {
-  const plan = await planningAndSchedulingModel.findById(planId).lean();
+  // plan/process/product/shift are identical for every operator working the
+  // same plan — every open operator tab polls this every ~30s, so collapse
+  // concurrent/repeat lookups the same way getLatestDeviceTests already does
+  // below, instead of each operator re-fetching the same four documents.
+  const plan = await cachedCompute(`operatorTaskPlan:${planId}`, 10000, () =>
+    planningAndSchedulingModel.findById(planId).lean());
   if (!plan) {
     const error = new Error("Planning not found");
     error.status = 404;
     throw error;
   }
 
+  // Cross-device sync: the same operator can be logged in on two devices at
+  // once, each with its own local start/pause/stop UI state and no way to
+  // tell it's drifted from the truth. Surfacing the live session snapshot in
+  // every refresh (already polled every ~30s) lets each device reconcile its
+  // local state to whichever device's Start/Break/Stop action actually won,
+  // instead of silently going stale or spinning up a duplicate session.
+  let workSessionSnapshot = null;
   if (
     mongoose.Types.ObjectId.isValid(String(operatorId || "")) &&
     mongoose.Types.ObjectId.isValid(String(plan?.selectedProcess || ""))
   ) {
-    await ensureOperatorWorkSessionForBootstrap({
+    const workSession = await ensureOperatorWorkSessionForBootstrap({
       operatorId,
       processId: plan.selectedProcess,
       planId,
     });
+    if (workSession) {
+      const breaks = Array.isArray(workSession.breaks) ? workSession.breaks : [];
+      const lastBreak = breaks[breaks.length - 1];
+      workSessionSnapshot = {
+        sessionId: String(workSession._id),
+        status: workSession.status,
+        hasOpenBreak: Boolean(lastBreak && !lastBreak.endedAt),
+        explicitlyStarted: Boolean(workSession.explicitlyStarted),
+      };
+    }
   }
 
   const assignedTaskDetails =
@@ -1335,11 +1344,18 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       .lean());
 
   const process = plan?.selectedProcess
-    ? await processModel.findById(plan.selectedProcess).lean()
+    ? await cachedCompute(`operatorTaskProcess:${plan.selectedProcess}`, 10000, () =>
+        processModel.findById(plan.selectedProcess).lean())
     : null;
   const [product, shift] = await Promise.all([
-    process?.selectedProduct ? productModel.findById(process.selectedProduct).lean() : Promise.resolve(null),
-    plan?.selectedShift ? shiftModel.findById(plan.selectedShift).lean() : Promise.resolve(null),
+    process?.selectedProduct
+      ? cachedCompute(`operatorTaskProduct:${process.selectedProduct}`, 10000, () =>
+          productModel.findById(process.selectedProduct).lean())
+      : Promise.resolve(null),
+    plan?.selectedShift
+      ? cachedCompute(`operatorTaskShift:${plan.selectedShift}`, 10000, () =>
+          shiftModel.findById(plan.selectedShift).lean())
+      : Promise.resolve(null),
   ]);
 
   const isCommon = assignedTaskDetails?.stageType === "common";
@@ -1681,6 +1697,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     overtimeSummary: plan?.overtimeSummary || {},
     latestRecords: includeHistory ? latestRecords : undefined,
     operatorHistory: includeHistory ? operatorHistory : undefined,
+    workSession: workSessionSnapshot,
   };
 };
 

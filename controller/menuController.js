@@ -48,6 +48,7 @@ module.exports = {
           children: [
             { label: "View Process", route: "/process/view" },
             { label: "Add Process", route: "/process/add" },
+            { label: "Operator Assignment", route: "/process/operator-assignment" },
           ],
         },
         {
@@ -241,6 +242,26 @@ module.exports = {
           await doc.save();
           console.log("Auto-migrated: Added Repackaging menu.");
           getMenu = [doc];
+        }
+
+        // Auto-migration: Ensure Operator Assignment exists under the Process parent menu
+        const operatorAssignmentRoute = "/process/operator-assignment";
+        const processMenuIndex = menus.findIndex(
+          (m) => String(m?.label || "").toLowerCase() === "process",
+        );
+        if (processMenuIndex !== -1) {
+          const processMenu = menus[processMenuIndex];
+          const children = Array.isArray(processMenu.children) ? processMenu.children : [];
+          const hasOperatorAssignment = children.some((c) => c.route === operatorAssignmentRoute);
+          if (!hasOperatorAssignment) {
+            children.push({ label: "Operator Assignment", route: operatorAssignmentRoute });
+            processMenu.children = children;
+            doc.menus = menus;
+            doc.markModified("menus");
+            await doc.save();
+            console.log("Auto-migrated: Added Operator Assignment menu under Process.");
+            getMenu = [doc];
+          }
         }
 
         // Auto-migration: Deduplicate and cleanup legacy menus

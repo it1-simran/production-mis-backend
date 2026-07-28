@@ -49,6 +49,15 @@ const operatorWorkSessionSchema = new mongoose.Schema({
   // cannot escape logging the idle episode. Cleared when a reason is submitted.
   pendingIdleStartAt: { type: Date, required: false, default: null },
 
+  // True once the operator has actually clicked "Start Task" (see the
+  // TASK_START event handler in logEvent). A session can otherwise already
+  // exist just from the task page being open/polling
+  // (ensureOperatorWorkSessionForBootstrap creates one regardless of whether
+  // Start was ever clicked) — this flag is what lets cross-device sync tell
+  // "someone genuinely started the task" apart from "the page merely loaded
+  // on some device", so an un-started device isn't auto-started by mistake.
+  explicitlyStarted: { type: Boolean, required: false, default: false },
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -22,6 +22,32 @@ const parsePositiveInt = (value, fallback, max = 250) => {
   return Math.min(parsed, max);
 };
 
+// esim-master stores its own denormalized apnProfile1/2 strings, which can drift out of sync
+// (e.g. wrong casing from a bulk upload) with the canonical name in EsimApn. Re-resolve them
+// live from EsimApn on every read so the master list always reflects the source of truth.
+const attachCanonicalApnNames = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const pairKey = (make, profile) => `${make || ""}|${profile || ""}`;
+
+  const makes = [...new Set(list.map((row) => row?.esimMake).filter(Boolean))];
+  if (makes.length === 0) return rows;
+
+  const apnDocs = await EsimApn.find({ esimMake: { $in: makes } })
+    .select("esimMake esimProfile1 apnName")
+    .lean();
+  const apnMap = new Map(apnDocs.map((doc) => [pairKey(doc.esimMake, doc.esimProfile1), doc.apnName]));
+
+  list.forEach((row) => {
+    if (!row) return;
+    const apn1 = apnMap.get(pairKey(row.esimMake, row.profile1));
+    const apn2 = apnMap.get(pairKey(row.esimMake, row.profile2));
+    if (apn1) row.apnProfile1 = apn1;
+    if (apn2) row.apnProfile2 = apn2;
+  });
+
+  return rows;
+};
+
 module.exports = {
   bulkCreate: async (req, res) => {
     try {
@@ -89,6 +115,7 @@ module.exports = {
           .select(ESIM_MASTER_SELECT)
           .sort({ createdAt: -1 })
           .lean();
+        await attachCanonicalApnNames(esimMasters);
 
         return res.status(200).json({
           status: 200,
@@ -114,6 +141,7 @@ module.exports = {
           .lean(),
         EsimMaster.countDocuments(filter),
       ]);
+      await attachCanonicalApnNames(esimMasters);
 
       const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
 
@@ -298,6 +326,8 @@ module.exports = {
         );
         return res.status(404).json({ status: 404, message: "ESIM Master not found for this CCID" });
       }
+
+      await attachCanonicalApnNames([result]);
 
       const refLookupStartedAt = Date.now();
       const [makeData, p1Data, p2Data] = await Promise.all([

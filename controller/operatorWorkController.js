@@ -5,6 +5,7 @@ const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
 const OperatorWorkSession = require("../models/operatorWorkSession");
 const OperatorWorkEvent = require("../models/operatorWorkEvent");
 const OperatorIdleLog = require("../models/operatorIdleLog");
+const OperatorIdleEpisode = require("../models/operatorIdleEpisode");
 const DeviceTestRecord = require("../models/deviceTestModel");
 const PlaningAndScheduling = require("../models/planingAndSchedulingModel");
 const ShiftManagement = require("../models/shiftManagement");
@@ -182,19 +183,29 @@ module.exports = {
         assignment?.startDate
       );
 
-      const session = new OperatorWorkSession({
-        operatorId: operatorObjId,
-        processId: processObjId,
-        planId: planId ? new mongoose.Types.ObjectId(planId) : null,
-        taskUrl,
-        scheduledShift,
-        startedAt: new Date(),
-        status: "active",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      await session.save();
+      // Atomic upsert instead of a plain find-then-create: the same operator's
+      // two devices (or the bootstrap poll racing an explicit Start click) can
+      // call this within the same instant. An upsert closes that window so at
+      // most one active session ever gets created for (operatorId, processId)
+      // — a plain create() here could otherwise leave two "active" sessions
+      // for the same operator+process with no way to tell them apart later.
+      const session = await OperatorWorkSession.findOneAndUpdate(
+        { operatorId: operatorObjId, processId: processObjId, status: "active" },
+        {
+          $setOnInsert: {
+            operatorId: operatorObjId,
+            processId: processObjId,
+            planId: planId ? new mongoose.Types.ObjectId(planId) : null,
+            taskUrl,
+            scheduledShift,
+            startedAt: new Date(),
+            status: "active",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
 
       return res.status(201).json({
         status: 201,
@@ -221,6 +232,29 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Invalid idleStartTime" });
       }
 
+      // Cross-device sync: one pending episode per OPERATOR ACCOUNT (not per
+      // process/device), so another device logged in as this same operator
+      // can detect it (via getIdleSyncStatus) and auto-dismiss its own popup
+      // once any device resolves it. Keeps the earliest start time, same
+      // "never shorten the episode" rule as the per-session flag below.
+      //
+      // Atomic upsert instead of find-then-create: two devices going idle
+      // within milliseconds of each other (the common case, since both run
+      // off roughly the same activity baseline) could otherwise both see
+      // "no pending episode" and both create one — getIdleSyncStatus only
+      // ever looks at the newest, so the older duplicate would be silently
+      // orphaned and never resolve on that device.
+      const opObjId = new mongoose.Types.ObjectId(operatorId);
+      const existingEpisode = await OperatorIdleEpisode.findOneAndUpdate(
+        { operatorId: opObjId, status: "pending" },
+        { $setOnInsert: { operatorId: opObjId, idleStartTime: start, status: "pending" } },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+      if (start.getTime() < new Date(existingEpisode.idleStartTime).getTime()) {
+        existingEpisode.idleStartTime = start;
+        await existingEpisode.save();
+      }
+
       const session = await OperatorWorkSession.findOne({
         operatorId: new mongoose.Types.ObjectId(operatorId),
         processId: new mongoose.Types.ObjectId(processId),
@@ -240,6 +274,88 @@ module.exports = {
       return res.status(200).json({
         status: 200,
         pendingIdleStartAt: session.pendingIdleStartAt,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  // Polled by every device's idle popup (while it's open) so that resolving
+  // the idle episode on ANY device is visible to the others within a few
+  // seconds, letting them auto-dismiss instead of asking the operator to
+  // explain the same idle episode twice.
+  getIdleSyncStatus: async (req, res) => {
+    try {
+      const operatorId = req?.user?.id;
+      if (!operatorId || !isValidObjectId(operatorId)) {
+        return res.status(401).json({ status: 401, message: "Invalid operator" });
+      }
+
+      const episode = await OperatorIdleEpisode.findOne({
+        operatorId: new mongoose.Types.ObjectId(operatorId),
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      if (!episode) {
+        return res.status(200).json({ status: 200, episode: null });
+      }
+
+      return res.status(200).json({
+        status: 200,
+        episode: {
+          status: episode.status,
+          idleStartTime: episode.idleStartTime,
+          resolvedAt: episode.resolvedAt,
+          resolvedReasonCode: episode.resolvedReasonCode,
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  // Polled frequently (unlike the 30s full bootstrap refresh) so a Start/
+  // Stop/Break flip on one device shows up on another within a few seconds
+  // instead of up to 30s. Deliberately a single lean, indexed findOne with no
+  // joins/aggregation — the earlier fast-poll attempt for this feature was
+  // removed because it rode the full buildOperatorTaskSummary computation for
+  // an entire shift; this one is cheap enough to run just as long.
+  getWorkSessionSyncStatus: async (req, res) => {
+    try {
+      const operatorId = req?.user?.id;
+      const { processId } = req.query || {};
+
+      if (!operatorId || !isValidObjectId(operatorId)) {
+        return res.status(401).json({ status: 401, message: "Invalid operator" });
+      }
+      if (!processId || !isValidObjectId(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid processId" });
+      }
+
+      const session = await OperatorWorkSession.findOne({
+        operatorId: new mongoose.Types.ObjectId(operatorId),
+        processId: new mongoose.Types.ObjectId(processId),
+      })
+        .sort({ startedAt: -1 })
+        .lean();
+
+      if (!session || session.status !== "active") {
+        return res.status(200).json({ status: 200, workSession: null });
+      }
+
+      const hasOpenBreak =
+        Array.isArray(session.breaks) &&
+        session.breaks.some((b) => b && b.startedAt && !b.endedAt);
+
+      return res.status(200).json({
+        status: 200,
+        workSession: {
+          sessionId: String(session._id),
+          status: session.status,
+          hasOpenBreak,
+          explicitlyStarted: Boolean(session.explicitlyStarted),
+        },
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -484,6 +600,18 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Session not found" });
       }
 
+      // Cross-device sync: TASK_START is only ever logged from the actual
+      // "Start Task" button click (see handleStart on the frontend) — mark
+      // the session as explicitly started so other devices logged in as this
+      // operator can tell "genuinely started" apart from "session merely
+      // exists because the page is open" and auto-start themselves too.
+      if (actionType === "SESSION" && actionName === "TASK_START") {
+        await OperatorWorkSession.updateOne(
+          { _id: session._id },
+          { $set: { explicitlyStarted: true } },
+        );
+      }
+
       let parsedClientTime = null;
       if (clientOccurredAt) {
         const m = moment(clientOccurredAt);
@@ -593,6 +721,41 @@ module.exports = {
         } catch (limitError) {
           // Fail-open: never block idle logging on a break-limit lookup error.
           console.error("Break-limit check failed:", limitError.message);
+        }
+      }
+
+      // Cross-device sync: atomically resolve the operator's pending idle
+      // episode (see setPendingIdle/getIdleSyncStatus). If another device's
+      // submission already resolved it a moment earlier, reject instead of
+      // creating a second OperatorIdleLog row for the same idle episode.
+      // No episode at all (e.g. an idle popup recovered via the older
+      // per-session pendingIdleStartAt path, predating this feature) is not
+      // an error — just proceed as before.
+      const latestEpisode = await OperatorIdleEpisode.findOne({
+        operatorId: new mongoose.Types.ObjectId(operatorId),
+      }).sort({ createdAt: -1 });
+
+      if (latestEpisode && latestEpisode.status === "resolved") {
+        return res.status(409).json({
+          status: 409,
+          message: "This idle episode was already acknowledged on another device.",
+          alreadyResolved: true,
+        });
+      }
+
+      if (latestEpisode && latestEpisode.status === "pending") {
+        // Atomic: only succeeds if it is STILL pending at the moment of this
+        // write, closing the race window between the check above and here.
+        const claimed = await OperatorIdleEpisode.findOneAndUpdate(
+          { _id: latestEpisode._id, status: "pending" },
+          { $set: { status: "resolved", resolvedAt: end, resolvedReasonCode: reasonCode } },
+        );
+        if (!claimed) {
+          return res.status(409).json({
+            status: 409,
+            message: "This idle episode was already acknowledged on another device.",
+            alreadyResolved: true,
+          });
         }
       }
 

@@ -232,6 +232,16 @@ router.get(
   authController.authenticateToken,
   operatorWorkController.getIdleLogs
 );
+router.get(
+  "/operator-work/idle-sync-status",
+  authController.authenticateToken,
+  operatorWorkController.getIdleSyncStatus
+);
+router.get(
+  "/operator-work/session-sync-status",
+  authController.authenticateToken,
+  operatorWorkController.getWorkSessionSyncStatus
+);
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
@@ -300,6 +310,7 @@ router.get('/process/viewReturnToStore', authController.authenticateToken, kitsC
 router.get('/operators/getVacantOperator', authController.authenticateToken, processController.getVacantOperator);
 router.post('/operators/reassign', authController.authenticateToken, processController.reassignOperator);
 router.put('/operator/updateStatus/:id', authController.authenticateToken, processController.updateStatusAssignedOperator);
+router.post('/operators/assign', authController.authenticateToken, processController.assignOperatorToProcess);
 router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, jigController.updateJigStatus);
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, processController.updateIssuedKitsToLine);

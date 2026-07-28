@@ -2,13 +2,11 @@ const mongoose = require("mongoose");
 const { getDataAccessFilter } = require("../utils/accessControl");
 const CcidTransferRequest = require("../models/ccidTransferRequest");
 const ProcessModel = require("../models/process");
-const ProductModel = require("../models/Products");
 const DeviceModel = require("../models/device");
-const DeviceTestRecordModel = require("../models/deviceTestModel");
 const User = require("../models/User");
+const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/customFieldsCcid");
 
 const normalizeCcid = (value) => String(value || "").trim();
-const normalizeStage = (value) => String(value || "").trim().toLowerCase();
 const normalizeDispatchStatus = (value) => String(value || "").trim().toUpperCase();
 
 const assertEligibleSourceProcess = (processDoc) => {
@@ -24,88 +22,11 @@ const assertEligibleSourceProcess = (processDoc) => {
   return "";
 };
 
-const getDestinationRemainingKitCapacity = (processDoc) => {
-  const requiredKits = Number(processDoc?.quantity || 0);
-  const issuedKits = Number(processDoc?.issuedKits || 0);
-  if (!Number.isFinite(requiredKits) || requiredKits <= 0) {
-    return { requiredKits: 0, issuedKits, remaining: 0 };
-  }
-  return {
-    requiredKits,
-    issuedKits,
-    remaining: Math.max(0, requiredKits - issuedKits),
-  };
-};
-
-const assertDestinationKitCapacity = (processDoc, transferQuantity) => {
-  const { requiredKits, issuedKits, remaining } = getDestinationRemainingKitCapacity(processDoc);
-  if (requiredKits <= 0) {
-    return "Destination process does not have a valid required quantity";
-  }
-  if (remaining <= 0) {
-    return `Destination process is fully allocated (${issuedKits}/${requiredKits} required kits)`;
-  }
-  if (Number(transferQuantity) > remaining) {
-    return `Quantity cannot exceed destination remaining capacity (${remaining} of ${requiredKits} required kits)`;
-  }
-  return "";
-};
-
 const findDispatchedDeviceCcid = (devices = []) => {
   const dispatched = devices.find(
     (device) => normalizeDispatchStatus(device?.dispatchStatus) === "DISPATCHED",
   );
   return dispatched ? normalizeCcid(dispatched.ccid) : "";
-};
-
-const getStageLabel = (stage) => {
-  if (typeof stage === "string") {
-    return normalizeCcid(stage); // Using same function as it just trims string
-  }
-  return normalizeCcid(stage?.stageName || stage?.name || "");
-};
-
-const buildStageSequence = (processDoc) => {
-  const stages = [];
-  const pushStage = (stage) => {
-    const name = getStageLabel(stage);
-    if (name) stages.push(name);
-  };
-
-  (Array.isArray(processDoc?.stages) ? processDoc.stages : []).forEach(pushStage);
-  (Array.isArray(processDoc?.commonStages) ? processDoc.commonStages : []).forEach(pushStage);
-  return stages;
-};
-
-const resolveTransferStageSequence = async (toProcess, fromProcess) => {
-  const destinationStages = buildStageSequence(toProcess);
-  if (destinationStages.length > 0) {
-    return destinationStages;
-  }
-
-  const sourceStages = buildStageSequence(fromProcess);
-  if (sourceStages.length > 0) {
-    return sourceStages;
-  }
-
-  const productId = toProcess?.selectedProduct || fromProcess?.selectedProduct;
-  if (!productId) {
-    return [];
-  }
-
-  const product = await ProductModel.findById(productId).select("stages commonStages").lean();
-  return buildStageSequence(product || {});
-};
-
-const getStageIndex = (stageSequence, stageName) =>
-  stageSequence.findIndex((stage) => normalizeStage(stage) === normalizeStage(stageName));
-
-const getFunctionalStageIndex = (stageSequence) =>
-  stageSequence.findIndex((stage) => normalizeStage(stage).includes("functional"));
-
-const getDeviceFlowVersion = (device) => {
-  const parsed = Number(device?.flowVersion);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 };
 
 const buildRequestQuery = (req, query = {}) => {
@@ -232,7 +153,7 @@ module.exports = {
         if (dispatchedCcid) {
           return res.status(400).json({
             status: 400,
-            message: `Device with CCID ${dispatchedCcid} is dispatched and cannot be transferred`,
+            message: `Device with CCID ${dispatchedCcid} is dispatched and cannot be removed`,
           });
         }
 
@@ -344,13 +265,12 @@ module.exports = {
           throw new Error(`Only pending requests can be approved. Current status: ${request.status}`);
         }
 
-        const [fromProcess, toProcess, approver] = await Promise.all([
+        const [fromProcess, approver] = await Promise.all([
           ProcessModel.findById(request.fromProcessId).session(session),
-          ProcessModel.findById(request.toProcessId).session(session),
           User.findById(getActorId(req.user)).session(session),
         ]);
 
-        if (!fromProcess || !toProcess) {
+        if (!fromProcess) {
           throw new Error("Related process not found");
         }
 
@@ -359,144 +279,65 @@ module.exports = {
           throw new Error(sourceEligibilityError);
         }
 
-        if (Number(fromProcess.issuedKits || 0) < Number(request.quantity || 0)) {
-          throw new Error("Source process no longer has enough allocated kits");
-        }
-
-        const destinationCapacityError = assertDestinationKitCapacity(toProcess, request.quantity);
-        if (destinationCapacityError) {
-          throw new Error(destinationCapacityError);
-        }
-
-        const sourceDevices = Array.isArray(request.ccids) && request.ccids.length > 0
+        const hasCcids = Array.isArray(request.ccids) && request.ccids.length > 0;
+        const sourceDevices = hasCcids
           ? await DeviceModel.find({
             ccid: { $in: request.ccids },
             processID: fromProcess._id,
           }).session(session)
           : [];
 
-        const transferContext = [];
-        if (Array.isArray(request.ccids) && request.ccids.length > 0) {
-          if (sourceDevices.length !== request.ccids.length) {
-            throw new Error("Some devices are no longer available in the source process");
-          }
-
-          const dispatchedCcid = findDispatchedDeviceCcid(sourceDevices);
-          if (dispatchedCcid) {
-            throw new Error(`Device with CCID ${dispatchedCcid} is dispatched and cannot be transferred`);
-          }
-
-          const destinationStageSequence = await resolveTransferStageSequence(toProcess, fromProcess);
-          const targetStageIndex = getStageIndex(destinationStageSequence, request.targetStage);
-          if (targetStageIndex === -1) {
-            throw new Error("Selected target stage is not available for this transfer");
-          }
-
-          const functionalStageIndex = getFunctionalStageIndex(destinationStageSequence);
-          if (functionalStageIndex !== -1 && targetStageIndex > functionalStageIndex) {
-            throw new Error("Destination stage must be Functional or earlier for CCID transfer");
-          }
-
-          for (const device of sourceDevices) {
-            const deviceFlowVersion = getDeviceFlowVersion(device);
-            const targetStageName = destinationStageSequence[targetStageIndex];
-
-            transferContext.push({
-              device,
-              deviceFlowVersion,
-              targetStageName,
-            });
-          }
+        if (hasCcids && sourceDevices.length !== request.ccids.length) {
+          throw new Error("Some devices are no longer available in the source process");
         }
 
-        fromProcess.issuedKits = Number(fromProcess.issuedKits || 0) - Number(request.quantity || 0);
-        toProcess.issuedKits = Number(toProcess.issuedKits || 0) + Number(request.quantity || 0);
-        if (String(toProcess.status || "").toLowerCase() !== "active") {
-          toProcess.status = "waiting_for_line_feeding";
+        const dispatchedCcid = findDispatchedDeviceCcid(sourceDevices);
+        if (dispatchedCcid) {
+          throw new Error(`Device with CCID ${dispatchedCcid} is dispatched and cannot be removed`);
         }
-        const requiredKits = Number(toProcess.quantity || 0);
-        toProcess.kitStatus =
-          Number(toProcess.issuedKits || 0) >= requiredKits
-            ? "issued"
-            : "partially_issued";
 
-        await Promise.all([
-          fromProcess.save({ session }),
-          toProcess.save({ session }),
-        ]);
+        // The device stays exactly where it is (same process, same stage, same
+        // serialNo) - only its CCID identity is cleared, from the root field and
+        // from every matching leaf inside customFields.
+        const now = new Date();
+        const removedDevices = [];
+        for (const device of sourceDevices) {
+          const removedCcid = device.ccid;
+          // customFields is a Mixed-type path - Mongoose only detects the change
+          // and persists it on save() if the path is reassigned a NEW top-level
+          // reference, so this shallow copy (not a full deep clone) is required,
+          // not just a nicety. Nested mutation below is fine to do in place.
+          const customFields = { ...(device.customFields || {}) };
+          const customFieldsRemoved = stripCcidValuesFromObject(
+            customFields,
+            new Set([normalizeForCompare(removedCcid)]),
+          );
 
-        if (transferContext.length > 0) {
-          const now = new Date();
-          const transferEntries = transferContext.map(({ device, deviceFlowVersion }) => ({
+          device.ccid = "";
+          device.customFields = customFields;
+          device.updatedAt = now;
+          await device.save({ session });
+
+          removedDevices.push({
             deviceId: device._id,
-            processId: toProcess._id,
-            operatorId: getActorId(req.user) || null,
-            serialNo: device.serialNo, // Preserve serialNo for test record
-            ccid: device.ccid, // Add CCID explicitly if needed, but not part of schema maybe? Serial is used for device lookup usually.
-            stageName: request.targetStage || device.currentStage || "",
-            status: "Reset",
-            productId: toProcess.selectedProduct, // UPDATE PRODUCT ID to destination
-            assignedDeviceTo: "",
-            ngDescription: `CCID Transferred from ${request.fromProcessName} to ${request.toProcessName}`,
-            searchType: "CCID Transfer",
-            flowVersion: deviceFlowVersion + 1,
-            flowBoundary: true,
-            flowType: "reset",
-            previousFlowVersion: deviceFlowVersion,
-            flowStartedAt: now,
-            logs: [
-              {
-                stepName: "CCID Transfer Approval",
-                stepType: "manual",
-                status: "Reset",
-                logData: {
-                  reason: "",
-                  description: `Reset from ${request.fromProcessName} to ${request.toProcessName} at stage ${request.targetStage || "N/A"}`,
-                  transferMeta: {
-                    requestId: String(request._id),
-                    fromProcessId: String(request.fromProcessId),
-                    toProcessId: String(request.toProcessId),
-                    targetStage: request.targetStage || "",
-                    direction: "RESET",
-                    approvedBy: approver?.name || approver?.employeeCode || "",
-                  },
-                },
-                createdAt: now,
-              },
-            ],
-            startTime: now,
-            endTime: now,
-            createdAt: now,
-            updatedAt: now,
-          }));
-
-          await DeviceTestRecordModel.insertMany(transferEntries, { session });
-
-          for (const context of transferContext) {
-            const { device, deviceFlowVersion } = context;
-            device.processID = toProcess._id;
-            device.serialNo = "";
-            device.currentStage = request.targetStage || device.currentStage || "";
-            device.flowVersion = deviceFlowVersion + 1;
-            device.flowStartedAt = now;
-            device.status = "";
-            device.assignedDeviceTo = "";
-            device.productType = toProcess.selectedProduct; // UPDATE PRODUCT TYPE
-            device.updatedAt = now;
-            await device.save({ session });
-          }
+            serialNo: device.serialNo,
+            imeiNo: device.imeiNo,
+            ccid: removedCcid,
+            customFieldsRemoved,
+          });
         }
 
         request.status = "APPROVED";
         request.approverId = getActorId(req.user) || null;
         request.approverName = getActorLabel(approver) || getActorLabel(req.user);
-        request.approvedAt = new Date();
+        request.approvedAt = now;
+        request.removedDevices = removedDevices;
         updatedRequest = await request.save({ session });
       });
 
       return res.status(200).json({
         status: 200,
-        message: "CCID transfer request approved successfully",
+        message: "ESIM Removal request approved successfully",
         request: shapeRequest(updatedRequest),
       });
     } catch (error) {

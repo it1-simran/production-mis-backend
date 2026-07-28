@@ -1,0 +1,2479 @@
+{
+  "scanned": 20814,
+  "matchedDocs": 223,
+  "matches": [
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b0",
+      "serialNo": "AMAZ262784145",
+      "rootCcidRemoved": "8991102606584969607F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969607F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b1",
+      "serialNo": "AMAZ262784146",
+      "rootCcidRemoved": "8991102606584969656F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969656F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b5",
+      "serialNo": "AMAZ262784150",
+      "rootCcidRemoved": "8991102606584969789F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969789F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c5",
+      "serialNo": "AMAZ262784166",
+      "rootCcidRemoved": "8991102606584970472F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970472F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c6",
+      "serialNo": "AMAZ262784167",
+      "rootCcidRemoved": "8991102606584969896F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969896F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6cc",
+      "serialNo": "AMAZ262784173",
+      "rootCcidRemoved": "8991102606584969979F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969979F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ce",
+      "serialNo": "AMAZ262784175",
+      "rootCcidRemoved": "8991102606584970076F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970076F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6d2",
+      "serialNo": "AMAZ262784179",
+      "rootCcidRemoved": "8991102606584970605F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970605F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ea",
+      "serialNo": "AMAZ262784203",
+      "rootCcidRemoved": "8991102606584969367F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969367F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ec",
+      "serialNo": "AMAZ262784205",
+      "rootCcidRemoved": "8991102606584969128F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969128F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f2",
+      "serialNo": "AMAZ262784211",
+      "rootCcidRemoved": "8991102606584969532F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969532F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f3",
+      "serialNo": "AMAZ262784212",
+      "rootCcidRemoved": "8991102606584969318F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969318F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f8",
+      "serialNo": "AMAZ262784217",
+      "rootCcidRemoved": "8991102606584969151F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969151F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce700",
+      "serialNo": "AMAZ262784225",
+      "rootCcidRemoved": "8991102606584969391F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969391F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce701",
+      "serialNo": "AMAZ262784226",
+      "rootCcidRemoved": "8991102606584969490F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969490F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce712",
+      "serialNo": "AMAZ262784243",
+      "rootCcidRemoved": "8991102606584968971F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968971F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce71c",
+      "serialNo": "AMAZ262784253",
+      "rootCcidRemoved": "8991102606584969177F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969177F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce72b",
+      "serialNo": "AMAZ262784268",
+      "rootCcidRemoved": "8991102606584968690F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968690F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce72f",
+      "serialNo": "AMAZ262784272",
+      "rootCcidRemoved": "8991102606584968583F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968583F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce734",
+      "serialNo": "AMAZ262784277",
+      "rootCcidRemoved": "8991102606584968765F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968765F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce744",
+      "serialNo": "AMAZ262784293",
+      "rootCcidRemoved": "8991102606584968724F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968724F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce74e",
+      "serialNo": "AMAZ262784303",
+      "rootCcidRemoved": "8991102606584969052F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969052F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce751",
+      "serialNo": "AMAZ262784306",
+      "rootCcidRemoved": "8991102606584968633F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968633F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce762",
+      "serialNo": "AMAZ262784323",
+      "rootCcidRemoved": "8991102606584968369F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968369F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce768",
+      "serialNo": "AMAZ262784329",
+      "rootCcidRemoved": "8991102606584970308F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970308F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce76c",
+      "serialNo": "AMAZ262784333",
+      "rootCcidRemoved": "8991102606584970415F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970415F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce772",
+      "serialNo": "AMAZ262784339",
+      "rootCcidRemoved": "8991102606584970282F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970282F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce778",
+      "serialNo": "AMAZ262784345",
+      "rootCcidRemoved": "8991102606584970654F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970654F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce781",
+      "serialNo": "AMAZ262784354",
+      "rootCcidRemoved": "8991102606584970290F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970290F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce793",
+      "serialNo": "AMAZ262784372",
+      "rootCcidRemoved": "8991102606584969375F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969375F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce795",
+      "serialNo": "AMAZ262784374",
+      "rootCcidRemoved": "8991102606584970365F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970365F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce796",
+      "serialNo": "AMAZ262784375",
+      "rootCcidRemoved": "8991102606584968567F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968567F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79e",
+      "serialNo": "AMAZ262784383",
+      "rootCcidRemoved": "8991102606584968534F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968534F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b7",
+      "serialNo": "AMAZ262784152",
+      "rootCcidRemoved": "8991102606584970084F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970084F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b8",
+      "serialNo": "AMAZ262784153",
+      "rootCcidRemoved": "8991102606584969805F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969805F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6be",
+      "serialNo": "AMAZ262784159",
+      "rootCcidRemoved": "8991102606584970043F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970043F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6cb",
+      "serialNo": "AMAZ262784172",
+      "rootCcidRemoved": "8991102606584969821F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969821F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6da",
+      "serialNo": "AMAZ262784187",
+      "rootCcidRemoved": "8991102606584969904F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969904F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e0",
+      "serialNo": "AMAZ262784193",
+      "rootCcidRemoved": "8991102606584969565F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969565F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e3",
+      "serialNo": "AMAZ262784196",
+      "rootCcidRemoved": "8991102606584969144F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969144F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e8",
+      "serialNo": "AMAZ262784201",
+      "rootCcidRemoved": "8991102606584969086F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969086F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6fa",
+      "serialNo": "AMAZ262784219",
+      "rootCcidRemoved": "8991102606584969334F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969334F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce709",
+      "serialNo": "AMAZ262784234",
+      "rootCcidRemoved": "8991102606584969698F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969698F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce70b",
+      "serialNo": "AMAZ262784236",
+      "rootCcidRemoved": "8991102606584969631F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969631F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce710",
+      "serialNo": "AMAZ262784241",
+      "rootCcidRemoved": "8991102606584968617F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968617F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce713",
+      "serialNo": "AMAZ262784244",
+      "rootCcidRemoved": "8991102606584969284F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969284F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce71a",
+      "serialNo": "AMAZ262784251",
+      "rootCcidRemoved": "8991102606584968781F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968781F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce71b",
+      "serialNo": "AMAZ262784252",
+      "rootCcidRemoved": "8991102606584968575F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968575F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce71e",
+      "serialNo": "AMAZ262784255",
+      "rootCcidRemoved": "8991102606584968674F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968674F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce727",
+      "serialNo": "AMAZ262784264",
+      "rootCcidRemoved": "8991102606584969003F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969003F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce735",
+      "serialNo": "AMAZ262784278",
+      "rootCcidRemoved": "8991102606584968997F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968997F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce738",
+      "serialNo": "AMAZ262784281",
+      "rootCcidRemoved": "8991102606584969078F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969078F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce73b",
+      "serialNo": "AMAZ262784284",
+      "rootCcidRemoved": "8991102606584969011F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969011F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce73d",
+      "serialNo": "AMAZ262784286",
+      "rootCcidRemoved": "8991102606584968880F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968880F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce73e",
+      "serialNo": "AMAZ262784287",
+      "rootCcidRemoved": "8991102606584968955F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968955F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce742",
+      "serialNo": "AMAZ262784291",
+      "rootCcidRemoved": "8991102606584969193F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969193F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce755",
+      "serialNo": "AMAZ262784310",
+      "rootCcidRemoved": "8991102606584968831F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968831F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce75a",
+      "serialNo": "AMAZ262784315",
+      "rootCcidRemoved": "8991102606584968484F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968484F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce75b",
+      "serialNo": "AMAZ262784316",
+      "rootCcidRemoved": "8991102606584968500F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968500F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce75c",
+      "serialNo": "AMAZ262784317",
+      "rootCcidRemoved": "8991102606584968252F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968252F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce764",
+      "serialNo": "AMAZ262784325",
+      "rootCcidRemoved": "8991102606584970357F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970357F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce77a",
+      "serialNo": "AMAZ262784347",
+      "rootCcidRemoved": "8991102606584969813F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969813F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce77c",
+      "serialNo": "AMAZ262784349",
+      "rootCcidRemoved": "8991102606584970266F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970266F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce787",
+      "serialNo": "AMAZ262784360",
+      "rootCcidRemoved": "8991102606584970456F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970456F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce78b",
+      "serialNo": "AMAZ262784364",
+      "rootCcidRemoved": "8991102606584970134F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970134F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce7a3",
+      "serialNo": "AMAZ262784388",
+      "rootCcidRemoved": "8991102606584968385F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968385F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ad",
+      "serialNo": "AMAZ262784142",
+      "rootCcidRemoved": "8991102606584969748F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969748F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6af",
+      "serialNo": "AMAZ262784144",
+      "rootCcidRemoved": "8991102606584970175F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970175F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ba",
+      "serialNo": "AMAZ262784155",
+      "rootCcidRemoved": "8991102606584969870F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969870F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6bd",
+      "serialNo": "AMAZ262784158",
+      "rootCcidRemoved": "8991102606584969961F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969961F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6bf",
+      "serialNo": "AMAZ262784160",
+      "rootCcidRemoved": "8991102606584970159F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970159F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c2",
+      "serialNo": "AMAZ262784163",
+      "rootCcidRemoved": "8991102606584970688F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970688F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c9",
+      "serialNo": "AMAZ262784170",
+      "rootCcidRemoved": "8991102606584970092F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970092F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6cf",
+      "serialNo": "AMAZ262784176",
+      "rootCcidRemoved": "8991102606584969953F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969953F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6d0",
+      "serialNo": "AMAZ262784177",
+      "rootCcidRemoved": "8991102606584970373F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970373F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6d6",
+      "serialNo": "AMAZ262784183",
+      "rootCcidRemoved": "8991102606584970480F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970480F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6d7",
+      "serialNo": "AMAZ262784184",
+      "rootCcidRemoved": "8991102606584970548F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970548F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6d9",
+      "serialNo": "AMAZ262784186",
+      "rootCcidRemoved": "8991102606584970316F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970316F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6df",
+      "serialNo": "AMAZ262784192",
+      "rootCcidRemoved": "8991102606584970464F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970464F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e2",
+      "serialNo": "AMAZ262784195",
+      "rootCcidRemoved": "8991102606584969425F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969425F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e6",
+      "serialNo": "AMAZ262784199",
+      "rootCcidRemoved": "8991102606584969219F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969219F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ee",
+      "serialNo": "AMAZ262784207",
+      "rootCcidRemoved": "8991102606584969573F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969573F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ef",
+      "serialNo": "AMAZ262784208",
+      "rootCcidRemoved": "8991102606584969516F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969516F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f7",
+      "serialNo": "AMAZ262784216",
+      "rootCcidRemoved": "8991102606584969292F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969292F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6fc",
+      "serialNo": "AMAZ262784221",
+      "rootCcidRemoved": "8991102606584969383F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969383F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6fe",
+      "serialNo": "AMAZ262784223",
+      "rootCcidRemoved": "8991102606584969250F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969250F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ff",
+      "serialNo": "AMAZ262784224",
+      "rootCcidRemoved": "8991102606584969326F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969326F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce705",
+      "serialNo": "AMAZ262784230",
+      "rootCcidRemoved": "8991102606584969680F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969680F"
+        },
+        {
+          "path": "FQC.CCID",
+          "value": "8991102606584969680F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce70f",
+      "serialNo": "AMAZ262784240",
+      "rootCcidRemoved": "8991102606584969649F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969649F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce716",
+      "serialNo": "AMAZ262784247",
+      "rootCcidRemoved": "8991102606584968898F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968898F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce71d",
+      "serialNo": "AMAZ262784254",
+      "rootCcidRemoved": "8991102606584968708F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968708F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce720",
+      "serialNo": "AMAZ262784257",
+      "rootCcidRemoved": "8991102606584968732F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968732F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce728",
+      "serialNo": "AMAZ262784265",
+      "rootCcidRemoved": "8991102606584968740F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968740F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce72c",
+      "serialNo": "AMAZ262784269",
+      "rootCcidRemoved": "8991102606584969342F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969342F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce733",
+      "serialNo": "AMAZ262784276",
+      "rootCcidRemoved": "8991102606584969276F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969276F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce737",
+      "serialNo": "AMAZ262784280",
+      "rootCcidRemoved": "8991102606584969300F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969300F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce74b",
+      "serialNo": "AMAZ262784300",
+      "rootCcidRemoved": "8991102606584968195F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968195F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce74d",
+      "serialNo": "AMAZ262784302",
+      "rootCcidRemoved": "8991102606584968179F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968179F"
+        },
+        {
+          "path": "FQC.CCID",
+          "value": "8991102606584968179F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce761",
+      "serialNo": "AMAZ262784322",
+      "rootCcidRemoved": "8991102606584968203F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968203F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce765",
+      "serialNo": "AMAZ262784326",
+      "rootCcidRemoved": "8991102606584970274F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970274F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce766",
+      "serialNo": "AMAZ262784327",
+      "rootCcidRemoved": "8991102606584970431F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970431F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce774",
+      "serialNo": "AMAZ262784341",
+      "rootCcidRemoved": "8991102606584970019F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970019F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce777",
+      "serialNo": "AMAZ262784344",
+      "rootCcidRemoved": "8991102606584970571F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970571F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce784",
+      "serialNo": "AMAZ262784357",
+      "rootCcidRemoved": "8991102606584970209F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970209F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce78a",
+      "serialNo": "AMAZ262784363",
+      "rootCcidRemoved": "8991102606584970233F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970233F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce790",
+      "serialNo": "AMAZ262784369",
+      "rootCcidRemoved": "8991102606584969722F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969722F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce791",
+      "serialNo": "AMAZ262784370",
+      "rootCcidRemoved": "8991102606584970100F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970100F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce798",
+      "serialNo": "AMAZ262784377",
+      "rootCcidRemoved": "8991102606584968237F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968237F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79d",
+      "serialNo": "AMAZ262784382",
+      "rootCcidRemoved": "8991102606584967932F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967932F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79f",
+      "serialNo": "AMAZ262784384",
+      "rootCcidRemoved": "8991102606584968815F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968815F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6ae",
+      "serialNo": "AMAZ262784143",
+      "rootCcidRemoved": "8991102606584969763F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969763F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b2",
+      "serialNo": "AMAZ262784147",
+      "rootCcidRemoved": "8991102606584970241F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970241F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6b4",
+      "serialNo": "AMAZ262784149",
+      "rootCcidRemoved": "8991102606584970035F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970035F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c0",
+      "serialNo": "AMAZ262784161",
+      "rootCcidRemoved": "8991102606584969839F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969839F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c3",
+      "serialNo": "AMAZ262784164",
+      "rootCcidRemoved": "8991102606584970126F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970126F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6c7",
+      "serialNo": "AMAZ262784168",
+      "rootCcidRemoved": "8991102606584970423F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970423F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e4",
+      "serialNo": "AMAZ262784197",
+      "rootCcidRemoved": "8991102606584969433F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969433F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6e9",
+      "serialNo": "AMAZ262784202",
+      "rootCcidRemoved": "8991102606584969094F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969094F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f1",
+      "serialNo": "AMAZ262784210",
+      "rootCcidRemoved": "8991102606584969169F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969169F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6f9",
+      "serialNo": "AMAZ262784218",
+      "rootCcidRemoved": "8991102606584969110F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969110F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce6fb",
+      "serialNo": "AMAZ262784220",
+      "rootCcidRemoved": "8991102606584969482F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969482F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce704",
+      "serialNo": "AMAZ262784229",
+      "rootCcidRemoved": "8991102606584969417F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969417F"
+        },
+        {
+          "path": "FQC.CCID",
+          "value": "8991102606584969417F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce70d",
+      "serialNo": "AMAZ262784238",
+      "rootCcidRemoved": "8991102606584969581F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969581F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce711",
+      "serialNo": "AMAZ262784242",
+      "rootCcidRemoved": "8991102606584968963F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968963F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce717",
+      "serialNo": "AMAZ262784248",
+      "rootCcidRemoved": "8991102606584968799F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968799F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce718",
+      "serialNo": "AMAZ262784249",
+      "rootCcidRemoved": "8991102606584968948F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968948F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce721",
+      "serialNo": "AMAZ262784258",
+      "rootCcidRemoved": "8991102606584968922F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968922F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce724",
+      "serialNo": "AMAZ262784261",
+      "rootCcidRemoved": "8991102606584968807F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968807F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce729",
+      "serialNo": "AMAZ262784266",
+      "rootCcidRemoved": "8991102606584968849F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968849F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce72e",
+      "serialNo": "AMAZ262784271",
+      "rootCcidRemoved": "8991102606584969359F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969359F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce732",
+      "serialNo": "AMAZ262784275",
+      "rootCcidRemoved": "8991102606584969623F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969623F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce736",
+      "serialNo": "AMAZ262784279",
+      "rootCcidRemoved": "8991102606584969524F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969524F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce73a",
+      "serialNo": "AMAZ262784283",
+      "rootCcidRemoved": "8991102606584969466F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584969466F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce745",
+      "serialNo": "AMAZ262784294",
+      "rootCcidRemoved": "8991102606584968245F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968245F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce747",
+      "serialNo": "AMAZ262784296",
+      "rootCcidRemoved": "8991102606584968542F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968542F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce756",
+      "serialNo": "AMAZ262784311",
+      "rootCcidRemoved": "8991102606584968468F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968468F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce75e",
+      "serialNo": "AMAZ262784319",
+      "rootCcidRemoved": "8991102606584968336F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968336F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce760",
+      "serialNo": "AMAZ262784321",
+      "rootCcidRemoved": "8991102606584968443F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968443F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce769",
+      "serialNo": "AMAZ262784330",
+      "rootCcidRemoved": "8991102606584970563F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970563F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce76d",
+      "serialNo": "AMAZ262784334",
+      "rootCcidRemoved": "8991102606584970340F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970340F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce76e",
+      "serialNo": "AMAZ262784335",
+      "rootCcidRemoved": "8991102606584970381F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970381F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce771",
+      "serialNo": "AMAZ262784338",
+      "rootCcidRemoved": "8991102606584970407F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970407F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce77d",
+      "serialNo": "AMAZ262784350",
+      "rootCcidRemoved": "8991102606584970621F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970621F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce77f",
+      "serialNo": "AMAZ262784352",
+      "rootCcidRemoved": "8991102606584970522F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970522F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce782",
+      "serialNo": "AMAZ262784355",
+      "rootCcidRemoved": "8991102606584970647F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970647F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce783",
+      "serialNo": "AMAZ262784356",
+      "rootCcidRemoved": "8991102606584970183F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970183F"
+        },
+        {
+          "path": "FQC.CCID",
+          "value": "8991102606584970183F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce788",
+      "serialNo": "AMAZ262784361",
+      "rootCcidRemoved": "8991102606584970167F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584970167F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce797",
+      "serialNo": "AMAZ262784376",
+      "rootCcidRemoved": "8991102606584968146F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968146F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce799",
+      "serialNo": "AMAZ262784378",
+      "rootCcidRemoved": "8991102606584968351F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968351F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce7a0",
+      "serialNo": "AMAZ262784385",
+      "rootCcidRemoved": "8991102606584967882F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967882F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce7a2",
+      "serialNo": "AMAZ262784387",
+      "rootCcidRemoved": "8991102606584967999F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967999F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79a",
+      "serialNo": "AMAZ262784379",
+      "rootCcidRemoved": "8991102606584968559F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968559F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79b",
+      "serialNo": "AMAZ262784380",
+      "rootCcidRemoved": "8991102606584968153F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968153F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce79c",
+      "serialNo": "AMAZ262784381",
+      "rootCcidRemoved": "8991102606584968328F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968328F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb3132a7ea02ebce7a1",
+      "serialNo": "AMAZ262784386",
+      "rootCcidRemoved": "8991102606584968013F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968013F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c1",
+      "serialNo": "AMAZ262784395",
+      "rootCcidRemoved": "8991102606584967940F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967940F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7cb",
+      "serialNo": "AMAZ262784405",
+      "rootCcidRemoved": "8991102606584968526F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968526F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7cf",
+      "serialNo": "AMAZ262784409",
+      "rootCcidRemoved": "8991102606584967643F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967643F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7dd",
+      "serialNo": "AMAZ262784423",
+      "rootCcidRemoved": "8991102606584968112F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968112F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7df",
+      "serialNo": "AMAZ262784425",
+      "rootCcidRemoved": "8991102606584968096F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968096F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7f3",
+      "serialNo": "AMAZ262784445",
+      "rootCcidRemoved": "8991102606584967825F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967825F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7f7",
+      "serialNo": "AMAZ262784449",
+      "rootCcidRemoved": "8991102606584967635F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967635F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7fb",
+      "serialNo": "AMAZ262784453",
+      "rootCcidRemoved": "8991102606584967775F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967775F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7ff",
+      "serialNo": "AMAZ262784457",
+      "rootCcidRemoved": "8991102606584967841F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967841F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce807",
+      "serialNo": "AMAZ262784465",
+      "rootCcidRemoved": "8991102606584967296F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967296F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce80d",
+      "serialNo": "AMAZ262784471",
+      "rootCcidRemoved": "8991102606584967262F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967262F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce826",
+      "serialNo": "AMAZ262784496",
+      "rootCcidRemoved": "8991102606584966868F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966868F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce82c",
+      "serialNo": "AMAZ262784502",
+      "rootCcidRemoved": "8991102606584967023F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967023F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce836",
+      "serialNo": "AMAZ262784512",
+      "rootCcidRemoved": "8991102606584967056F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967056F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce842",
+      "serialNo": "AMAZ262784524",
+      "rootCcidRemoved": "8991102606584967163F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967163F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7bd",
+      "serialNo": "AMAZ262784391",
+      "rootCcidRemoved": "8991102606584968401F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968401F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c4",
+      "serialNo": "AMAZ262784398",
+      "rootCcidRemoved": "8991102606584967890F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967890F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7ce",
+      "serialNo": "AMAZ262784408",
+      "rootCcidRemoved": "8991102606584967650F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967650F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7d1",
+      "serialNo": "AMAZ262784411",
+      "rootCcidRemoved": "8991102606584968419F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968419F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7dc",
+      "serialNo": "AMAZ262784422",
+      "rootCcidRemoved": "8991102606584967965F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967965F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e2",
+      "serialNo": "AMAZ262784428",
+      "rootCcidRemoved": "8991102606584967577F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967577F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e3",
+      "serialNo": "AMAZ262784429",
+      "rootCcidRemoved": "8991102606584967502F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967502F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e4",
+      "serialNo": "AMAZ262784430",
+      "rootCcidRemoved": "8991102606584967452F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967452F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7f6",
+      "serialNo": "AMAZ262784448",
+      "rootCcidRemoved": "8991102606584967478F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967478F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce801",
+      "serialNo": "AMAZ262784459",
+      "rootCcidRemoved": "8991102606584967866F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967866F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce802",
+      "serialNo": "AMAZ262784460",
+      "rootCcidRemoved": "8991102606584967668F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967668F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce80f",
+      "serialNo": "AMAZ262784473",
+      "rootCcidRemoved": "8991102606584967833F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967833F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce810",
+      "serialNo": "AMAZ262784474",
+      "rootCcidRemoved": "8991102606584967510F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967510F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce823",
+      "serialNo": "AMAZ262784493",
+      "rootCcidRemoved": "8991102606584966744F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966744F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce82b",
+      "serialNo": "AMAZ262784501",
+      "rootCcidRemoved": "8991102606584966900F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966900F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7be",
+      "serialNo": "AMAZ262784392",
+      "rootCcidRemoved": "8991102606584968260F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968260F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7bf",
+      "serialNo": "AMAZ262784393",
+      "rootCcidRemoved": "8991102606584968518F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968518F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c3",
+      "serialNo": "AMAZ262784397",
+      "rootCcidRemoved": "8991102606584968450F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968450F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c5",
+      "serialNo": "AMAZ262784399",
+      "rootCcidRemoved": "8991102606584968294F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968294F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c6",
+      "serialNo": "AMAZ262784400",
+      "rootCcidRemoved": "8991102606584968161F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968161F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c9",
+      "serialNo": "AMAZ262784403",
+      "rootCcidRemoved": "8991102606584967957F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967957F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7d4",
+      "serialNo": "AMAZ262784414",
+      "rootCcidRemoved": "8991102606584968088F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968088F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7d6",
+      "serialNo": "AMAZ262784416",
+      "rootCcidRemoved": "8991102606584967544F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967544F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7de",
+      "serialNo": "AMAZ262784424",
+      "rootCcidRemoved": "8991102606584968120F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968120F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e6",
+      "serialNo": "AMAZ262784432",
+      "rootCcidRemoved": "8991102606584967551F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967551F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7ed",
+      "serialNo": "AMAZ262784439",
+      "rootCcidRemoved": "8991102606584967445F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967445F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7f0",
+      "serialNo": "AMAZ262784442",
+      "rootCcidRemoved": "8991102606584967718F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967718F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7f1",
+      "serialNo": "AMAZ262784443",
+      "rootCcidRemoved": "8991102606584967494F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967494F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7fa",
+      "serialNo": "AMAZ262784452",
+      "rootCcidRemoved": "8991102606584967817F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967817F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7fd",
+      "serialNo": "AMAZ262784455",
+      "rootCcidRemoved": "8991102606584967700F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967700F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce804",
+      "serialNo": "AMAZ262784462",
+      "rootCcidRemoved": "8991102606584967619F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967619F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce80b",
+      "serialNo": "AMAZ262784469",
+      "rootCcidRemoved": "8991102606584967320F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967320F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce80c",
+      "serialNo": "AMAZ262784470",
+      "rootCcidRemoved": "8991102606584967593F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967593F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce82d",
+      "serialNo": "AMAZ262784503",
+      "rootCcidRemoved": "8991102606584966835F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966835F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce82f",
+      "serialNo": "AMAZ262784505",
+      "rootCcidRemoved": "8991102606584967254F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967254F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce830",
+      "serialNo": "AMAZ262784506",
+      "rootCcidRemoved": "8991102606584966967F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966967F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce834",
+      "serialNo": "AMAZ262784510",
+      "rootCcidRemoved": "8991102606584966884F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966884F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c0",
+      "serialNo": "AMAZ262784394",
+      "rootCcidRemoved": "8991102606584967981F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967981F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7c7",
+      "serialNo": "AMAZ262784401",
+      "rootCcidRemoved": "8991102606584967908F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967908F"
+        },
+        {
+          "path": "FQC.CCID",
+          "value": "8991102606584967908F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7cc",
+      "serialNo": "AMAZ262784406",
+      "rootCcidRemoved": "8991102606584968625F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968625F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7d2",
+      "serialNo": "AMAZ262784412",
+      "rootCcidRemoved": "8991102606584968021F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968021F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7da",
+      "serialNo": "AMAZ262784420",
+      "rootCcidRemoved": "8991102606584967973F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967973F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7db",
+      "serialNo": "AMAZ262784421",
+      "rootCcidRemoved": "8991102606584968104F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968104F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e0",
+      "serialNo": "AMAZ262784426",
+      "rootCcidRemoved": "8991102606584968138F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584968138F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7e8",
+      "serialNo": "AMAZ262784434",
+      "rootCcidRemoved": "8991102606584967858F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967858F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7ea",
+      "serialNo": "AMAZ262784436",
+      "rootCcidRemoved": "8991102606584967809F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967809F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7eb",
+      "serialNo": "AMAZ262784437",
+      "rootCcidRemoved": "8991102606584967676F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967676F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce7ef",
+      "serialNo": "AMAZ262784441",
+      "rootCcidRemoved": "8991102606584967684F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967684F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce800",
+      "serialNo": "AMAZ262784458",
+      "rootCcidRemoved": "8991102606584967874F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967874F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce808",
+      "serialNo": "AMAZ262784466",
+      "rootCcidRemoved": "8991102606584967171F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967171F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce80a",
+      "serialNo": "AMAZ262784468",
+      "rootCcidRemoved": "8991102606584967726F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967726F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce814",
+      "serialNo": "AMAZ262784478",
+      "rootCcidRemoved": "8991102606584967221F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584967221F"
+        }
+      ]
+    },
+    {
+      "_id": "6a44ebb4132a7ea02ebce831",
+      "serialNo": "AMAZ262784507",
+      "rootCcidRemoved": "8991102606584966843F",
+      "customFieldsRemoved": [
+        {
+          "path": "Functional.CCID",
+          "value": "8991102606584966843F"
+        }
+      ]
+    }
+  ]
+}
