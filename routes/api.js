@@ -281,6 +281,8 @@ router.post('/devices/createIMEI', authController.authenticateToken, deviceContr
 router.get('/devices/viewIMEI', authController.authenticateToken, deviceController.viewIMEI);
 router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, deviceController.deleteIMEI);
 router.post('/devices/deleteIMEI/multiple', authController.authenticateToken, deviceController.deleteMultipleIMEI);
+router.post('/devices/bulk-delete-by-imei', authController.authenticateToken, authController.authorize("Bulk Delete Devices", "delete"), deviceController.bulkDeleteByImei);
+router.get('/devices/deleted-devices', authController.authenticateToken, authController.authorize("Bulk Delete Devices", "read"), deviceController.viewDeletedDevices);
 router.get('/analytics/device-test/trends', authController.authenticateToken, deviceController.getDeviceTestTrends);
 router.get('/analytics/device-test/ng-reasons', authController.authenticateToken, deviceController.getNGReasonDistribution);
 router.get('/inventory/view', authController.authenticateToken, authController.authorize("Inventory", "read"), inventoryController.view);

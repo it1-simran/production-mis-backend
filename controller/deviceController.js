@@ -6,6 +6,7 @@ const planingAndScheduling = require("../models/planingAndSchedulingModel");
 const productModel = require("../models/Products");
 const inventoryModel = require("../models/inventoryManagement");
 const imeiModel = require("../models/imeiModel");
+const DeletedDevice = require("../models/deletedDevice");
 const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
@@ -1137,6 +1138,144 @@ module.exports = {
       return res
         .status(500)
         .json({ message: "Server error", error: error.message });
+    }
+  },
+  // POST /devices/bulk-delete-by-imei — CSV/Excel-driven bulk delete from the `devices`
+  // collection. Every deleted document is archived to DeletedDevice first, in the same
+  // transaction as the delete, so a device is never removed without its audit record.
+  bulkDeleteByImei: async (req, res) => {
+    try {
+      const { imeis, reason } = req.body;
+      if (!Array.isArray(imeis) || imeis.length === 0) {
+        return res.status(400).json({ status: 400, message: "No IMEIs provided" });
+      }
+
+      const normalizedImeis = [
+        ...new Set(imeis.map((v) => String(v || "").trim()).filter(Boolean)),
+      ];
+      if (normalizedImeis.length === 0) {
+        return res.status(400).json({ status: 400, message: "No valid IMEIs provided" });
+      }
+
+      const batchId = new mongoose.Types.ObjectId();
+      const deletedBy = req.user._id;
+      const deletedByName = req.user.name || req.user.username || req.user.email || "";
+      const trimmedReason = String(reason || "").trim();
+
+      const notFound = [];
+      const skippedDispatched = [];
+      const failed = [];
+      let deletedCount = 0;
+
+      const deleteOne = async (imeiNo) => {
+        try {
+          const deviceDoc = await deviceModel.findOne({ imeiNo });
+          if (!deviceDoc) {
+            notFound.push(imeiNo);
+            return;
+          }
+          if (deviceDoc.dispatchStatus === "DISPATCHED") {
+            skippedDispatched.push(imeiNo);
+            return;
+          }
+
+          const session = await mongoose.startSession();
+          try {
+            await session.withTransaction(async () => {
+              await DeletedDevice.create(
+                [
+                  {
+                    originalDevice: deviceDoc.toObject(),
+                    imeiNo: deviceDoc.imeiNo,
+                    serialNo: deviceDoc.serialNo,
+                    ccid: deviceDoc.ccid,
+                    productType: deviceDoc.productType,
+                    deletedBy,
+                    deletedByName,
+                    reason: trimmedReason,
+                    batchId,
+                  },
+                ],
+                { session }
+              );
+              await deviceModel.deleteOne({ _id: deviceDoc._id }, { session });
+            });
+          } finally {
+            await session.endSession();
+          }
+          deletedCount++;
+        } catch (err) {
+          console.error(`Error deleting device for IMEI ${imeiNo}:`, err);
+          failed.push({ imei: imeiNo, error: err.message });
+        }
+      };
+
+      // Bounded concurrency so a large file doesn't run thousands of transactions serially,
+      // while keeping the per-device archive+delete atomic.
+      const CONCURRENCY = 10;
+      for (let i = 0; i < normalizedImeis.length; i += CONCURRENCY) {
+        const chunk = normalizedImeis.slice(i, i + CONCURRENCY);
+        await Promise.all(chunk.map(deleteOne));
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: `Bulk delete finished. ${deletedCount} deleted, ${notFound.length} not found, ${skippedDispatched.length} skipped (dispatched), ${failed.length} failed.`,
+        batchId,
+        total: normalizedImeis.length,
+        deleted: deletedCount,
+        notFound,
+        skippedDispatched,
+        failed,
+      });
+    } catch (error) {
+      console.error("Error in bulkDeleteByImei:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Internal server error during bulk delete",
+        details: error.message,
+      });
+    }
+  },
+  // GET /devices/deleted-devices — audit trail of everything bulkDeleteByImei has archived.
+  viewDeletedDevices: async (req, res) => {
+    try {
+      const { page = 1, limit = 10, imei = "", serialNo = "", batchId = "" } = req.query;
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+      const skip = (pageNum - 1) * limitNum;
+
+      const match = {};
+      const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (imei) match.imeiNo = { $regex: escapeRegex(String(imei).trim()), $options: "i" };
+      if (serialNo) match.serialNo = { $regex: escapeRegex(String(serialNo).trim()), $options: "i" };
+      if (batchId && mongoose.Types.ObjectId.isValid(batchId)) {
+        match.batchId = new mongoose.Types.ObjectId(batchId);
+      }
+
+      const [records, total] = await Promise.all([
+        DeletedDevice.find(match)
+          .sort({ deletedAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .populate("productType", "name")
+          .lean(),
+        DeletedDevice.countDocuments(match),
+      ]);
+
+      return res.status(200).json({
+        status: 200,
+        status_msg: "Deleted devices fetched successfully",
+        deletedDevices: records,
+        meta: { page: pageNum, limit: limitNum, total },
+      });
+    } catch (error) {
+      console.error("Error fetching deleted devices:", error);
+      return res.status(500).json({
+        status: 500,
+        message: "Internal server error fetching deleted devices",
+        details: error.message,
+      });
     }
   },
   getDeviceByProductId: async (req, res) => {
