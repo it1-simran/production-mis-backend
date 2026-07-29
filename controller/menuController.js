@@ -68,6 +68,8 @@ module.exports = {
             { label: "View IMEI", route: "/device/viewIMEI" },
             { label: "Add Multiple IMEI", route: "/device/addIMEI" },
             { label: "Add Multiple Devices", route: "/device/addDevices" },
+            { label: "Bulk Delete Devices", route: "/device/bulk-delete" },
+            { label: "Deletion History", route: "/device/deleted-devices" },
           ],
         },
         {
@@ -260,6 +262,35 @@ module.exports = {
             doc.markModified("menus");
             await doc.save();
             console.log("Auto-migrated: Added Operator Assignment menu under Process.");
+            getMenu = [doc];
+          }
+        }
+
+        // Auto-migration: Ensure Bulk Delete Devices + Deletion History exist under Device Management
+        const deviceManagementChildrenToAdd = [
+          { label: "Bulk Delete Devices", route: "/device/bulk-delete" },
+          { label: "Deletion History", route: "/device/deleted-devices" },
+        ];
+        const deviceMenuIndex = menus.findIndex(
+          (m) => String(m?.label || "").toLowerCase() === "device management",
+        );
+        if (deviceMenuIndex !== -1) {
+          const deviceMenu = menus[deviceMenuIndex];
+          const deviceChildren = Array.isArray(deviceMenu.children) ? deviceMenu.children : [];
+          let deviceMenuChanged = false;
+          for (const child of deviceManagementChildrenToAdd) {
+            const hasChild = deviceChildren.some((c) => c.route === child.route);
+            if (!hasChild) {
+              deviceChildren.push(child);
+              deviceMenuChanged = true;
+            }
+          }
+          if (deviceMenuChanged) {
+            deviceMenu.children = deviceChildren;
+            doc.menus = menus;
+            doc.markModified("menus");
+            await doc.save();
+            console.log("Auto-migrated: Added Bulk Delete Devices / Deletion History menu under Device Management.");
             getMenu = [doc];
           }
         }
