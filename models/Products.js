@@ -33,6 +33,7 @@ const productSchema = new mongoose.Schema({
           description: { type: String, default: "" },
           stepType: { type: String, required: false, enum: ["manual", "jig"] },
           isPrinterEnable: { type: Boolean, required: false, default: false },
+          stickerFormatId: { type: mongoose.Schema.Types.ObjectId, ref: "StickerFormatMaster", default: null },
           ngTimeout: { type: Number, required: false, default: 0 },
           retryCount: { type: Number, required: false, default: 0, min: 0 },
           awaitNgTimeout: { type: Boolean, required: false, default: true },
