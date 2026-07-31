@@ -756,6 +756,20 @@ module.exports = {
         Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
       );
 
+      // Within-process duplicate check — reject if any serial already exists in this process
+      const withinProcessConflicts = await deviceModel
+        .find({ serialNo: { $in: serials }, processID: processID })
+        .select("serialNo")
+        .lean();
+
+      if (withinProcessConflicts.length > 0) {
+        return res.status(409).json({
+          status: 409,
+          message: `${withinProcessConflicts.length} serial(s) already exist in this process. Cannot create duplicates.`,
+          conflicts: withinProcessConflicts.map((d) => ({ serialNo: d.serialNo })),
+        });
+      }
+
       // Cross-process duplicate check — reject if any generated serial already exists in another active process
       const conflictingDevices = await deviceModel
         .find({ serialNo: { $in: serials }, processID: { $ne: processID } })
