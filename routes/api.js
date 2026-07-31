@@ -280,11 +280,11 @@ router.delete('/sticker/fields/delete/:id', authController.authenticateToken, st
 router.post('/sticker/fields/delete/multiple', authController.authenticateToken, stickerController.deleteStickerFieldMultiple);
 
 // Sticker Format Master
-router.post('/sticker/format/create', authController.authenticateToken, stickerFormatMasterController.create);
-router.get('/sticker/format/list', authController.authenticateToken, stickerFormatMasterController.getAll);
-router.get('/sticker/format/:id', authController.authenticateToken, stickerFormatMasterController.getById);
-router.put('/sticker/format/:id', authController.authenticateToken, stickerFormatMasterController.update);
-router.delete('/sticker/format/:id', authController.authenticateToken, stickerFormatMasterController.delete);
+router.post('/sticker/format/create', authController.authenticateToken, authController.authorize("Sticker Management", "create"), stickerFormatMasterController.create);
+router.get('/sticker/format/list', authController.authenticateToken, authController.authorize("Sticker Management", "read"), stickerFormatMasterController.getAll);
+router.get('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "read"), stickerFormatMasterController.getById);
+router.put('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "update"), stickerFormatMasterController.update);
+router.delete('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "delete"), stickerFormatMasterController.delete);
 router.post('/devices/createIMEI', authController.authenticateToken, deviceController.createIMEI);
 router.get('/devices/viewIMEI', authController.authenticateToken, deviceController.viewIMEI);
 router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, deviceController.deleteIMEI);
