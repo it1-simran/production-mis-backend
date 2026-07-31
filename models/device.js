@@ -116,7 +116,12 @@ deviceSchemas.index({ processID: 1 });
 // Mongo can only use the processID-only index above for the match, then must
 // sort every matching document in memory before applying .limit().
 deviceSchemas.index({ processID: 1, createdAt: -1 });
-deviceSchemas.index({ serialNo: 1, processID: 1 });
+// DEPLOY NOTE — Atlas manual step required before deploying fix/within-process-duplicate-serial:
+// The old index below is non-unique in Atlas (Mongoose skips re-creation if it already exists).
+// Run this on Atlas shell BEFORE PM2 restart:
+//   db.devices.dropIndex("serialNo_1_processID_1")
+// Mongoose will recreate it as unique on next server start.
+deviceSchemas.index({ serialNo: 1, processID: 1 }, { unique: true });
 deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });
 deviceSchemas.index({ ccid: 1 });
