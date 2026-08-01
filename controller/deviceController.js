@@ -7,6 +7,7 @@ const productModel = require("../models/Products");
 const inventoryModel = require("../models/inventoryManagement");
 const imeiModel = require("../models/imeiModel");
 const DeletedDevice = require("../models/deletedDevice");
+const CcidReassignmentLog = require("../models/ccidReassignmentLog");
 const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
@@ -756,20 +757,6 @@ module.exports = {
         Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
       );
 
-      // Within-process duplicate check — reject if any serial already exists in this process
-      const withinProcessConflicts = await deviceModel
-        .find({ serialNo: { $in: serials }, processID: processID })
-        .select("serialNo")
-        .lean();
-
-      if (withinProcessConflicts.length > 0) {
-        return res.status(409).json({
-          status: 409,
-          message: `${withinProcessConflicts.length} serial(s) already exist in this process. Cannot create duplicates.`,
-          conflicts: withinProcessConflicts.map((d) => ({ serialNo: d.serialNo })),
-        });
-      }
-
       // Cross-process duplicate check — reject if any generated serial already exists in another active process
       const conflictingDevices = await deviceModel
         .find({ serialNo: { $in: serials }, processID: { $ne: processID } })
@@ -827,34 +814,31 @@ module.exports = {
           }
 
           const writeErrors = Array.isArray(error?.writeErrors) ? error.writeErrors : [];
-          const chunkDuplicateErrors = writeErrors.filter((item) => item?.code === 11000).length;
-          const chunkInsertedCount = Number(
-            error?.result?.result?.nInserted ??
-            error?.result?.insertedCount ??
-            Math.max(chunk.length - writeErrors.length, 0)
-          );
-
-          insertedCount += chunkInsertedCount;
-          duplicateErrors += chunkDuplicateErrors;
-
+          const duplicateKeyErrors = writeErrors.filter((item) => item?.code === 11000);
           const nonDuplicateWriteError = writeErrors.find((item) => item?.code !== 11000);
+
           if (nonDuplicateWriteError) {
             throw error;
+          }
+
+          // DB-level unique index caught a within-process duplicate — surface as hard error.
+          // The pre-check above should prevent this in normal flow; this fires if the index
+          // catches a race condition or a direct API call bypasses the pre-check.
+          if (duplicateKeyErrors.length > 0) {
+            return res.status(409).json({
+              status: 409,
+              message: `${duplicateKeyErrors.length} serial(s) already exist in this process. No devices were created.`,
+              duplicateCount: duplicateKeyErrors.length,
+            });
           }
         }
       }
 
-      const requestedCount = documents.length;
-      const message = duplicateErrors > 0
-        ? `${insertedCount} devices created, ${duplicateErrors} duplicate serials skipped.`
-        : "Devices added successfully";
-
       return res.status(200).json({
         status: 200,
-        message,
-        requestedCount,
+        message: "Devices added successfully",
+        requestedCount: documents.length,
         insertedCount,
-        duplicateErrors,
       });
     } catch (error) {
       console.error("error ==>", error);
@@ -1462,26 +1446,32 @@ module.exports = {
 
       // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
       if (Array.isArray(data.logs) && data.logs.length > 0) {
+        const extractFields = (obj) => {
+          if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+          Object.keys(obj).forEach(k => {
+            const key = String(k || "").toLowerCase();
+            const val = String(obj[k] || "").trim();
+            if (!val || typeof obj[k] === "object") return;
+            // last non-blank wins — higher-priority sources are called last and overwrite
+            if (key === "imei" || key === "imeino") {
+              deviceUpdatePayload.imeiNo = val;
+              shouldUpdateDevice = true;
+            } else if (key === "ccid" || key === "iccid") {
+              deviceUpdatePayload.ccid = val;
+              shouldUpdateDevice = true;
+            } else if (key === "modelname" || key === "model_name") {
+              deviceUpdatePayload.modelName = val;
+              shouldUpdateDevice = true;
+            }
+          });
+        };
         data.logs.forEach(log => {
           const parsed = log.logData?.parsedData ?? log.logData;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            Object.keys(parsed).forEach(k => {
-              const key = String(k || "").toLowerCase();
-              const val = String(parsed[k] || "").trim();
-              if (!val) return;
-
-              if (key === "imei" || key === "imeino") {
-                deviceUpdatePayload.imeiNo = val;
-                shouldUpdateDevice = true;
-              } else if (key === "ccid" || key === "iccid") {
-                deviceUpdatePayload.ccid = val;
-                shouldUpdateDevice = true;
-              } else if (key === "modelname" || key === "model_name") {
-                deviceUpdatePayload.modelName = val;
-                shouldUpdateDevice = true;
-              }
-            });
-          }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+          // priority order: top-level first (old firmware, lowest), then PARAMETERS, then STORED_FIELDS last (highest)
+          extractFields(parsed);
+          extractFields(parsed.PARAMETERS);
+          extractFields(parsed.STORED_FIELDS);
         });
       }
 
@@ -1685,17 +1675,47 @@ module.exports = {
       }
 
       if (duplicate) {
-        let conflictMsg = "Data Integrity Error: ";
-        if (duplicate.imeiNo === deviceUpdatePayload.imeiNo) {
-          conflictMsg += `IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}. `;
+        const imeiConflict = deviceUpdatePayload.imeiNo && duplicate.imeiNo === deviceUpdatePayload.imeiNo;
+        const ccidConflict = deviceUpdatePayload.ccid && duplicate.ccid === deviceUpdatePayload.ccid;
+
+        if (imeiConflict) {
+          // IMEI is flashed to hardware — a conflict here is a real data integrity error
+          return res.status(409).json({
+            status: 409,
+            message: `Data Integrity Error: IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}.`,
+          });
         }
-        if (duplicate.ccid === deviceUpdatePayload.ccid) {
-          conflictMsg += `CCID ${deviceUpdatePayload.ccid} is already linked to device ${duplicate.serialNo}. `;
+
+        if (ccidConflict) {
+          // Jig physically read this SIM from the current device — the old entry is wrong.
+          // Auto-clear CCID from old device and continue without blocking.
+          const ccidMsg = `CCID ${deviceUpdatePayload.ccid} was previously linked to ${duplicate.serialNo}. Auto-cleared from old device — jig confirmed physical presence on ${data.serialNo}.`;
+          if (!Array.isArray(data.logs)) data.logs = [];
+          data.logs.push({
+            stepName: "CCID Reassignment",
+            stepType: "system",
+            status: "WARNING",
+            logData: { message: ccidMsg, previousDevice: duplicate.serialNo, ccid: deviceUpdatePayload.ccid },
+            createdAt: new Date(),
+          });
+          // Clear only the CCID field on the old device — all other fields remain unchanged
+          deviceModel
+            .updateOne({ _id: duplicate._id }, { $set: { ccid: "" } })
+            .catch((err) => console.error(`[CCID-REASSIGN] Failed to clear CCID from ${duplicate.serialNo}:`, err));
+          // Persist audit record
+          new CcidReassignmentLog({
+            ccid: deviceUpdatePayload.ccid,
+            fromDeviceId: duplicate._id,
+            fromSerialNo: duplicate.serialNo,
+            fromProcessId: deviceSnapshot.processID || null,
+            toDeviceId: deviceSnapshot._id,
+            toSerialNo: data.serialNo || deviceSnapshot.serialNo,
+            toProcessId: deviceSnapshot.processID || null,
+            stageName: currentStageName || "",
+            planId: data.planId || null,
+            operatorId: data.operatorId || data.userId || null,
+          }).save().catch((err) => console.error(`[CCID-REASSIGN] Failed to save reassignment log:`, err));
         }
-        return res.status(409).json({
-          status: 409,
-          message: conflictMsg.trim(),
-        });
       }
 
       let nextSeatRouting = {
