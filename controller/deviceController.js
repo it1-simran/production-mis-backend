@@ -1199,6 +1199,26 @@ module.exports = {
                 { session }
               );
               await deviceModel.deleteOne({ _id: deviceDoc._id }, { session });
+
+              // Pull device from carton + recalc status + reset verification flags
+              const cartonDoc = await cartonModel.findOne({ devices: deviceDoc._id }).session(session);
+              if (cartonDoc) {
+                cartonDoc.devices = cartonDoc.devices.filter(id => !id.equals(deviceDoc._id));
+                const remaining = cartonDoc.devices.length;
+                const cap = Number(cartonDoc.packagingData?.maxCapacity || cartonDoc.maxCapacity || 0);
+                cartonDoc.status = remaining === 0 ? "empty" : (cap > 0 && remaining >= cap) ? "full" : "partial";
+                cartonDoc.isStickerPrinted = false;
+                cartonDoc.isStickerVerified = false;
+                cartonDoc.isWeightVerified = false;
+                await cartonDoc.save({ session });
+
+                // Revert latest packaging pass test record
+                await deviceTestModel.findOneAndUpdate(
+                  { deviceId: deviceDoc._id, stageName: /packaging/i, status: "Pass" },
+                  { $set: { status: "Reverted", ngDescription: "Device deleted from MES" } },
+                  { sort: { createdAt: -1 }, session }
+                );
+              }
             });
           } finally {
             await session.endSession();
@@ -3643,8 +3663,47 @@ module.exports = {
         }
       }
 
+      // Fallback: check deletedDevices if no live device found
       if (devices.length === 0) {
-        return res.status(404).json({ status: 404, message: "No device found matching the query." });
+        const deletedDoc = await DeletedDevice.findOne({
+          $or: [
+            { serialNo: searchStr },
+            { imeiNo: searchStr },
+            { ccid: searchStr },
+          ],
+        }).lean();
+
+        if (!deletedDoc) {
+          return res.status(404).json({ status: 404, message: "No device found matching the query." });
+        }
+
+        const dev = deletedDoc.originalDevice || {};
+        const testRecords = await deviceTestModel
+          .find({ $or: [{ deviceId: deletedDoc.originalDevice?._id }, { serialNo: deletedDoc.serialNo }] })
+          .sort({ createdAt: 1 })
+          .lean();
+        const ngRecords = await NGDevice.find({ serialNo: deletedDoc.serialNo }).lean();
+        const assignNgRecords = await AssignNgDevice.find({ serialNo: deletedDoc.serialNo }).lean();
+
+        return res.status(200).json({
+          status: 200,
+          isDeleted: true,
+          deletion: {
+            deletedAt: deletedDoc.deletedAt,
+            deletedBy: deletedDoc.deletedByName || "Unknown",
+            reason: deletedDoc.reason || "",
+            batchId: deletedDoc.batchId,
+          },
+          devices: [{
+            ...dev,
+            serialNo: deletedDoc.serialNo,
+            imeiNo: deletedDoc.imeiNo,
+            ccid: deletedDoc.ccid,
+          }],
+          testRecords,
+          ngRecords,
+          assignNgRecords,
+        });
       }
 
       // Enrichment helper to find IMEI/CCID in customFields if outer ones are missing
