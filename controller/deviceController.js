@@ -24,6 +24,9 @@ const {
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
 const { cachedCompute } = require("../utils/ttlCache");
+const CcidReassignmentLog = require("../models/ccidReassignmentLog");
+const CcidTransferRequest = require("../models/ccidTransferRequest");
+const EsimMaster = require("../models/EsimMaster");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -1463,11 +1466,17 @@ module.exports = {
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
 
+      // Detect Release Device action type from any log entry
+      const isReleaseDevice = Array.isArray(data.logs) && data.logs.some(
+        log => String(log?.logData?.actionType || "").trim().toLowerCase() === "release device"
+      );
+
       const deviceUpdatePayload = { updatedAt: new Date() };
       let shouldUpdateDevice = false;
 
       // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
-      if (Array.isArray(data.logs) && data.logs.length > 0) {
+      // Skip for Release Device — device records will be deleted, not updated
+      if (!isReleaseDevice && Array.isArray(data.logs) && data.logs.length > 0) {
         data.logs.forEach(log => {
           const parsed = log.logData?.parsedData ?? log.logData;
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -1898,14 +1907,207 @@ module.exports = {
         }
 
         // Root-level identification persistence on rework/NG assignment
-        if (data.imeiNo) deviceUpdatePayload.imeiNo = String(data.imeiNo).trim();
-        if (data.ccid) deviceUpdatePayload.ccid = String(data.ccid).trim();
+        // Skip for Release Device — device records are deleted, not updated
+        if (!isReleaseDevice) {
+          if (data.imeiNo) deviceUpdatePayload.imeiNo = String(data.imeiNo).trim();
+          if (data.ccid) deviceUpdatePayload.ccid = String(data.ccid).trim();
+        }
         if (data.modelName) deviceUpdatePayload.modelName = String(data.modelName).trim();
 
         shouldUpdateDevice = true;
       }
 
       // 4. Strict Uniqueness Validation for IMEI and CCID (handled in parallel pre-check above)
+
+      // ── Release Device ────────────────────────────────────────────────────────
+      if (isReleaseDevice) {
+        // Extract IMEI and CCID from validated jig log fields
+        let releaseImei = "";
+        let releaseCcid = "";
+        if (Array.isArray(data.logs)) {
+          data.logs.forEach(log => {
+            const parsed = log.logData?.parsedData ?? log.logData;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              Object.keys(parsed).forEach(k => {
+                const key = String(k || "").toLowerCase();
+                const val = String(parsed[k] || "").trim();
+                if (!val) return;
+                if ((key === "imei" || key === "imeino") && !releaseImei) releaseImei = val;
+                if ((key === "ccid" || key === "iccid") && !releaseCcid) releaseCcid = val;
+              });
+              // Also check STORED_FIELDS
+              const stored = parsed.STORED_FIELDS || parsed.storedFields || {};
+              if (typeof stored === "object") {
+                Object.keys(stored).forEach(k => {
+                  const key = String(k || "").toLowerCase();
+                  const val = String(stored[k] || "").trim();
+                  if (!val) return;
+                  if ((key === "imei" || key === "imeino") && !releaseImei) releaseImei = val;
+                  if ((key === "ccid" || key === "iccid") && !releaseCcid) releaseCcid = val;
+                });
+              }
+            }
+          });
+        }
+
+        const batchId = new mongoose.Types.ObjectId();
+        const operatorId = data.operatorId || data.userId || null;
+        const operatorName = data.operatorName || "Operator";
+
+        const releaseSession = await mongoose.startSession();
+        let releaseError = null;
+        try {
+          await releaseSession.withTransaction(async () => {
+            // a. IMEI wipe — find and delete all devices with this IMEI
+            if (releaseImei) {
+              const imeiDevices = await deviceModel.find({ imeiNo: releaseImei }).lean();
+              for (const dev of imeiDevices) {
+                await new DeletedDevice({
+                  originalDevice: dev,
+                  serialNo: dev.serialNo,
+                  imeiNo: dev.imeiNo,
+                  ccid: dev.ccid,
+                  deletedBy: operatorId,
+                  deletedByName: operatorName,
+                  reason: "Release Device — IMEI wipe",
+                  batchId,
+                  deletedAt: new Date(),
+                }).save({ session: releaseSession });
+
+                await deviceModel.deleteOne({ _id: dev._id }, { session: releaseSession });
+
+                // Carton cleanup — same pattern as bulkDeleteByImei (#244)
+                const cartonDoc = await cartonModel.findOne({ devices: dev._id }).session(releaseSession);
+                if (cartonDoc) {
+                  cartonDoc.devices = cartonDoc.devices.filter(id => !id.equals(dev._id));
+                  const remaining = cartonDoc.devices.length;
+                  const cap = Number(cartonDoc.packagingData?.maxCapacity || cartonDoc.maxCapacity || 0);
+                  cartonDoc.status = remaining === 0 ? "empty" : (cap > 0 && remaining >= cap) ? "full" : "partial";
+                  cartonDoc.isStickerPrinted = false;
+                  cartonDoc.isStickerVerified = false;
+                  cartonDoc.isWeightVerified = false;
+                  await cartonDoc.save({ session: releaseSession });
+                  await deviceTestModel.findOneAndUpdate(
+                    { deviceId: dev._id, stageName: /packaging/i, status: "Pass" },
+                    { $set: { status: "Reverted", ngDescription: "Device released from MES" } },
+                    { sort: { createdAt: -1 }, session: releaseSession }
+                  );
+                }
+              }
+            }
+
+            // b. Cancel pending CCID transfer requests for this CCID
+            if (releaseCcid) {
+              await CcidTransferRequest.updateMany(
+                { ccids: releaseCcid, status: "PENDING" },
+                { $set: { status: "CANCELLED", cancelReason: "Release Device operation" } },
+                { session: releaseSession }
+              );
+            }
+
+            // c. CCID clear with retry (up to 3 attempts)
+            if (releaseCcid) {
+              let ccidCleared = false;
+              let lastCcidError = null;
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  const cleared = await deviceModel.find(
+                    { ccid: releaseCcid },
+                    { _id: 1, serialNo: 1, processID: 1 },
+                    { session: releaseSession }
+                  ).lean();
+
+                  await deviceModel.updateMany(
+                    { ccid: releaseCcid },
+                    { $set: { ccid: "" } },
+                    { session: releaseSession }
+                  );
+
+                  // Audit log per cleared device
+                  if (cleared.length > 0) {
+                    await CcidReassignmentLog.insertMany(
+                      cleared.map(d => ({
+                        ccid: releaseCcid,
+                        fromDeviceId: d._id,
+                        fromSerialNo: d.serialNo,
+                        fromProcessId: d.processID || null,
+                        toDeviceId: null,
+                        toSerialNo: null,
+                        toProcessId: null,
+                        stageName: currentStageName || "",
+                        planId: data.planId || null,
+                        operatorId,
+                        reason: "Release Device — CCID clear",
+                      })),
+                      { session: releaseSession }
+                    );
+                  }
+                  ccidCleared = true;
+                  break;
+                } catch (err) {
+                  lastCcidError = err;
+                }
+              }
+              if (!ccidCleared) {
+                throw new Error(`CCID clear failed after 3 attempts: ${lastCcidError?.message || "unknown error"}`);
+              }
+            }
+
+            // Save the test record (marks this step in history)
+            await new deviceTestRecords(data).save({ session: releaseSession });
+          });
+        } catch (err) {
+          releaseError = err;
+        } finally {
+          await releaseSession.endSession();
+        }
+
+        if (releaseError) {
+          if (res.headersSent) return;
+          return res.status(200).json({
+            status: 200,
+            message: releaseError.message,
+            actionStatus: "NG",
+            resultType: "ng",
+            data: { actionStatus: "NG", resultType: "ng" },
+          });
+        }
+
+        // d. eSIM master lookup
+        let esimInfo = null;
+        if (releaseCcid) {
+          esimInfo = await EsimMaster.findOne({ ccid: releaseCcid }).lean();
+        }
+
+        if (!esimInfo) {
+          if (res.headersSent) return;
+          return res.status(200).json({
+            status: 200,
+            message: "CCID not found in eSIM master",
+            actionStatus: "NG",
+            resultType: "ng",
+            data: { actionStatus: "NG", resultType: "ng" },
+          });
+        }
+
+        invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
+        if (res.headersSent) return;
+        return res.status(200).json({
+          status: 200,
+          message: "Device released successfully",
+          actionStatus: "Pass",
+          resultType: "pass",
+          esimInfo: {
+            esimMake: esimInfo.esimMake || "",
+            profile1: esimInfo.profile1 || "",
+            profile2: esimInfo.profile2 || "",
+            apnProfile1: esimInfo.apnProfile1 || "",
+            apnProfile2: esimInfo.apnProfile2 || "",
+          },
+          data: { actionStatus: "Pass", resultType: "pass" },
+        });
+      }
+      // ── End Release Device ────────────────────────────────────────────────────
 
       let savedDeviceTestRecord = null;
       const writeSession = await mongoose.startSession();

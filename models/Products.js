@@ -131,6 +131,7 @@ const productSchema = new mongoose.Schema({
               value: { type: String, default: "", required: false },
               lengthFrom: { type: Number, default: 0, required: false },
               lengthTo: { type: Number, default: 0, required: false },
+              autoAdded: { type: Boolean, default: false },
             },
           ],
           stepFields: {
