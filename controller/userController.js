@@ -478,7 +478,7 @@ module.exports = {
       
       const rawPassword = String(req?.body?.password || "").trim();
       if (rawPassword) {
-        const bcrypt = require("bcryptjs");
+        const bcrypt = require("bcrypt");
         const salt = await bcrypt.genSalt(10);
         updatedData.password = await bcrypt.hash(rawPassword, salt);
       }
