@@ -744,6 +744,20 @@ module.exports = {
         }
       }
 
+      const escapeRegex = (string) => String(string || "").replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
+      const escapedPrefix = escapeRegex(prefix || "");
+      const escapedSuffix = escapeRegex(suffix || "");
+
+      const existingDevices = await deviceModel
+        .find({
+          serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` }
+        })
+        .select("serialNo")
+        .limit(10000)
+        .lean();
+
+      const existingSerialsSet = new Set(existingDevices.map((d) => String(d.serialNo || "").trim()));
+
       const parsedStartFrom = Number.parseInt(startFrom, 10);
       const serials = generateSerials(
         lastSerialNo,
@@ -754,12 +768,13 @@ module.exports = {
         noOfZeroRequired,
         1,
         1,
-        Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
+        Number.isNaN(parsedStartFrom) ? null : parsedStartFrom,
+        existingSerialsSet
       );
 
-      // Cross-process duplicate check — reject if any generated serial already exists in another active process
+      // Duplicate serial check — reject if any generated serial already exists in the database
       const conflictingDevices = await deviceModel
-        .find({ serialNo: { $in: serials }, processID: { $ne: processID } })
+        .find({ serialNo: { $in: serials } })
         .select("serialNo processID")
         .populate({ path: "processID", select: "name processID", model: "process" })
         .lean();
@@ -772,7 +787,7 @@ module.exports = {
         }));
         return res.status(409).json({
           status: 409,
-          message: `${conflictingDevices.length} serial(s) already exist in another process. Cannot create duplicates.`,
+          message: `${conflictingDevices.length} serial(s) already exist in the database. Cannot create duplicates.`,
           conflicts,
         });
       }
@@ -852,16 +867,39 @@ module.exports = {
     try {
       const data = req.query;
       const escapeRegex = (string) => string.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
-      const escapedPrefix = escapeRegex(data.prefix || "");
-      const escapedSuffix = escapeRegex(data.suffix || "");
+      const prefixStr = data.prefix || "";
+      const suffixStr = data.suffix || "";
+      const escapedPrefix = escapeRegex(prefixStr);
+      const escapedSuffix = escapeRegex(suffixStr);
 
-      const lastEntry = await deviceModel
-        .findOne({
+      const candidates = await deviceModel
+        .find({
           serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` },
         })
+        .select("serialNo createdAt")
         .sort({ createdAt: -1 })
+        .limit(2000)
         .lean()
         .exec();
+
+      let lastEntry = candidates[0] || null;
+      if (candidates.length > 0) {
+        let maxSeq = -1;
+        for (const cand of candidates) {
+          let s = String(cand.serialNo || "").trim();
+          if (prefixStr && s.startsWith(prefixStr)) s = s.substring(prefixStr.length);
+          if (suffixStr && s.endsWith(suffixStr)) s = s.substring(0, s.length - suffixStr.length);
+          const match = s.match(/\d+/g);
+          if (match) {
+            const seq = parseInt(match[match.length - 1], 10);
+            if (seq > maxSeq) {
+              maxSeq = seq;
+              lastEntry = cand;
+            }
+          }
+        }
+      }
+
       return res.status(200).json({
         status: 200,
         message: "Last Entry Fetched Successfully",
@@ -2718,7 +2756,6 @@ module.exports = {
       const query = {
         ...(processId ? { processID: processId } : {}),
         ...(stageName ? { currentStage: stageName } : {}),
-        status: { $nin: ["Pass", "Completed", "NG"] },
       };
 
       const devices = await deviceModel.find(query)
@@ -3866,7 +3903,8 @@ function generateSerials(
   noOfZeroRequired,
   stepBy = 1,
   repeatTimes = 1,
-  startFrom = null
+  startFrom = null,
+  existingSerialsSet = null
 ) {
   let start = 1;
   if (startFrom !== null && !isNaN(startFrom)) {
@@ -3878,14 +3916,25 @@ function generateSerials(
     }
   }
 
-  const end = start + noOfSerialRequired;
   const serials = [];
-  for (let i = start; i < end; i += stepBy) {
+  let i = start;
+  let maxLoop = noOfSerialRequired * 100;
+  let loopCount = 0;
+
+  while (serials.length < noOfSerialRequired && loopCount < maxLoop) {
+    loopCount++;
     const paddedNumber = enableZero
       ? String(i).padStart(noOfZeroRequired, "0")
       : i;
+    const candidate = `${prefix}${paddedNumber}${suffix}`;
+    i += stepBy;
+
+    if (existingSerialsSet && existingSerialsSet.has(candidate)) {
+      continue;
+    }
+
     for (let r = 0; r < repeatTimes; r++) {
-      serials.push(`${prefix}${paddedNumber}${suffix}`);
+      serials.push(candidate);
     }
   }
   return serials;

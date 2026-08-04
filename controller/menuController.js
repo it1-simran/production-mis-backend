@@ -217,6 +217,15 @@ module.exports = {
       let getMenu = await Menu.find().limit(1);
 
       // Auto-migration: Ensure Repackaging menu exists
+      // The whole migration block is wrapped because it does several sequential
+      // doc.save() calls on this one shared Menu singleton. Under concurrent
+      // requests (this endpoint is hit on most page loads), two requests can each
+      // load the doc at the same version and race to save a migration step, and
+      // the loser gets a Mongoose VersionError ("No matching document found for
+      // id ... version ...") — that must not take down the whole menu response;
+      // the loser's in-memory `doc` still has the intended shape and a later
+      // request will persist it once the race isn't hit.
+      try {
       if (getMenu.length > 0) {
         const doc = getMenu[0];
         const menus = Array.isArray(doc.menus) ? doc.menus : [];
@@ -243,6 +252,26 @@ module.exports = {
           doc.markModified("menus");
           await doc.save();
           console.log("Auto-migrated: Added Repackaging menu.");
+          getMenu = [doc];
+        }
+
+        // Auto-migration: Fix "Planing & Scheduling Management" typo (missing the second "n").
+        // The permission editor derives each role's permission-map key from this exact label
+        // (lowercased, spaces -> underscores), while every authController.authorize(...) call
+        // for this module's routes uses the correctly-spelled "Planning & Scheduling
+        // Management" — so with the typo in place, the derived keys can never match and every
+        // role is silently denied this module's read/create/update/delete regardless of what's
+        // toggled in the UI. Child routes keep their existing "/planing-scheduling/..." paths;
+        // only the label used for permission-key derivation is corrected here.
+        const planingTypoIndex = menus.findIndex(
+          (m) => m?.label === "Planing & Scheduling Management",
+        );
+        if (planingTypoIndex !== -1) {
+          menus[planingTypoIndex].label = "Planning & Scheduling Management";
+          doc.menus = menus;
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Fixed 'Planing & Scheduling Management' label typo.");
           getMenu = [doc];
         }
 
@@ -352,6 +381,13 @@ module.exports = {
           console.log("Auto-migrated: Deduplicated and added missing modules.");
           getMenu = [doc];
         }
+      }
+      } catch (migrationError) {
+        // A lost save race here means this menu shape isn't persisted yet, not
+        // that we have nothing to return — fall through with best-effort data
+        // (either the pre-migration doc, or the in-memory doc with whichever
+        // earlier migration steps in this request did persist).
+        console.warn("Menu auto-migration save skipped (will retry on a later request):", migrationError.message);
       }
 
       return res.status(200).json({

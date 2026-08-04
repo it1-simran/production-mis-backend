@@ -834,7 +834,6 @@ const buildProcessDeviceScopeFilter = ({
 
   const filter = {
     processID: processId,
-    status: { $nin: ["NG"] },
   };
 
   const productTypeMatch = buildProductTypeMatch(selectedProduct);
@@ -1985,6 +1984,27 @@ module.exports = {
       }
 
       if (!device?._id) {
+        if (scanTokens.length > 0) {
+          const rootIndexedClauses = buildRootIndexedLookupOrClauses(scanTokens);
+          const globalCandidates = await deviceModel
+            .find(rootIndexedClauses.length > 0 ? { $or: rootIndexedClauses } : {})
+            .select(DEVICE_LOOKUP_SELECT_FIELDS)
+            .limit(50)
+            .lean()
+            .catch(() => []);
+          const { match: globalMatch } = resolveMatchFromCandidates(globalCandidates, scanTokens);
+          if (globalMatch?.device) {
+            const matchedDev = globalMatch.device;
+            const devProc = String(matchedDev.processID || matchedDev.processId || "").trim();
+            if (processId && devProc && String(processId) !== devProc) {
+              return res.status(409).json({
+                status: 409,
+                message: "Device is not assigned to this process.",
+                data: { device: matchedDev },
+              });
+            }
+          }
+        }
         return res.status(404).json({
           status: 404,
           message: scanTokens.length > 0
