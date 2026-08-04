@@ -110,7 +110,7 @@ deviceSchemas.pre('updateOne', function (next) {
   next();
 });
 
-deviceSchemas.index({ serialNo: 1 });
+deviceSchemas.index({ serialNo: 1 }, { unique: true, sparse: true });
 deviceSchemas.index({ processID: 1 });
 // getDevicesByProcessId sorts by createdAt within one process — without this,
 // Mongo can only use the processID-only index above for the match, then must
