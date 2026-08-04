@@ -2681,7 +2681,6 @@ module.exports = {
       const query = {
         ...(processId ? { processID: processId } : {}),
         ...(stageName ? { currentStage: stageName } : {}),
-        status: { $nin: ["Pass", "Completed", "NG"] },
       };
 
       const devices = await deviceModel.find(query)
