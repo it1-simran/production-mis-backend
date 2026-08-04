@@ -221,6 +221,15 @@ module.exports = {
       let getMenu = await Menu.find().limit(1);
 
       // Auto-migration: Ensure Repackaging menu exists
+      // The whole migration block is wrapped because it does several sequential
+      // doc.save() calls on this one shared Menu singleton. Under concurrent
+      // requests (this endpoint is hit on most page loads), two requests can each
+      // load the doc at the same version and race to save a migration step, and
+      // the loser gets a Mongoose VersionError ("No matching document found for
+      // id ... version ...") — that must not take down the whole menu response;
+      // the loser's in-memory `doc` still has the intended shape and a later
+      // request will persist it once the race isn't hit.
+      try {
       if (getMenu.length > 0) {
         const doc = getMenu[0];
         const menus = Array.isArray(doc.menus) ? doc.menus : [];
@@ -379,6 +388,13 @@ module.exports = {
           console.log("Auto-migrated: Deduplicated and added missing modules.");
           getMenu = [doc];
         }
+      }
+      } catch (migrationError) {
+        // A lost save race here means this menu shape isn't persisted yet, not
+        // that we have nothing to return — fall through with best-effort data
+        // (either the pre-migration doc, or the in-memory doc with whichever
+        // earlier migration steps in this request did persist).
+        console.warn("Menu auto-migration save skipped (will retry on a later request):", migrationError.message);
       }
 
       return res.status(200).json({

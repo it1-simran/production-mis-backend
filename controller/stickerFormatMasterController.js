@@ -27,10 +27,18 @@ module.exports = {
   // GET /sticker/format/list
   getAll: async (req, res) => {
     try {
-      const formats = await StickerFormatMaster.find()
-        .select("name dimensions createdAt updatedAt")
-        .sort({ createdAt: -1 })
-        .lean();
+      const formats = await StickerFormatMaster.aggregate([
+        { $sort: { createdAt: -1 } },
+        {
+          $project: {
+            name: 1,
+            dimensions: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            fieldsCount: { $size: { $ifNull: ["$fields", []] } },
+          },
+        },
+      ]);
       return res.status(200).json({ status: 200, message: "Sticker formats fetched successfully.", data: formats });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
