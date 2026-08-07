@@ -2384,16 +2384,10 @@ module.exports = {
       }
       let statusFilter = {};
       if (statusLower === "ng") {
-        statusFilter = { status: { $regex: /^NG$/i } };
+        statusFilter = { status: { $in: ["NG", "ng", "Fail"] } };
       } else if (modeRaw === "ngportal" || statusLower === "ngportal") {
         // NG queue + resolution outcomes only — excludes unrelated station "Pass" rows
-        // that were incorrectly winning client-side dedupe over active NG cycles.
-        statusFilter = {
-          $or: [
-            { status: { $regex: /^NG$/i } },
-            { status: { $regex: /resolved/i } },
-          ],
-        };
+        statusFilter = { status: { $in: ["NG", "ng", "Fail", "Resolved", "RESOLVED", "QC Resolved"] } };
       }
       const projection = {
         deviceId: 1,
@@ -2457,6 +2451,100 @@ module.exports = {
         status: 500,
         error: error.message,
       });
+    }
+  },
+  getNgPortalQueue: async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const searchRaw = String(req.query.search || "").trim();
+      const statusFilterRaw = String(req.query.statusFilter || req.query.status || "all").trim().toLowerCase();
+      const processIdRaw = req.query.processId;
+
+      const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 25, 1), 500);
+      const skip = (page - 1) * limit;
+
+      const baseFilter = {};
+      if (processIdRaw && mongoose.Types.ObjectId.isValid(processIdRaw)) {
+        baseFilter.processId = new mongoose.Types.ObjectId(processIdRaw);
+      }
+      if (searchRaw) {
+        baseFilter.serialNo = { $regex: searchRaw, $options: "i" };
+      }
+
+      const ngStatuses = ["NG", "ng", "Fail"];
+      const resolvedStatuses = ["Resolved", "RESOLVED", "QC Resolved"];
+      const allNgPortalStatuses = [...ngStatuses, ...resolvedStatuses];
+
+      let statusCondition = {};
+      if (statusFilterRaw === "ng") {
+        statusCondition = { status: { $in: ngStatuses } };
+      } else if (statusFilterRaw === "resolved") {
+        statusCondition = { status: { $in: resolvedStatuses } };
+      } else {
+        // "all" or default NG portal queue scope: NG devices + resolution outcomes only
+        statusCondition = { status: { $in: allNgPortalStatuses } };
+      }
+
+      const queryFilter = { ...baseFilter, ...statusCondition };
+
+      const projection = {
+        deviceId: 1,
+        processId: 1,
+        operatorId: 1,
+        serialNo: 1,
+        stageName: 1,
+        status: 1,
+        assignedDeviceTo: 1,
+        reason: 1,
+        ngDescription: 1,
+        logData: 1,
+        trcRemarks: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+
+      const dbQueryStart = Date.now();
+      const [rows, total, statsResolved, statsNgOpen] = await Promise.all([
+        deviceTestRecords
+          .find(queryFilter, projection)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage imeiNo ccid" })
+          .populate({ path: "processId", select: "name processName" })
+          .populate({ path: "operatorId", select: "name employeeCode" })
+          .lean(),
+        deviceTestRecords.countDocuments(queryFilter),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: resolvedStatuses } }),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: ngStatuses } }),
+      ]);
+      const dbQueryDuration = Date.now() - dbQueryStart;
+
+      const totalOverall = statsResolved + statsNgOpen;
+      const stats = {
+        total: totalOverall,
+        resolved: statsResolved,
+        unresolved: statsNgOpen,
+        ngOpen: statsNgOpen,
+        processCount: 0,
+      };
+
+      const totalDuration = Date.now() - startTime;
+      console.log(`[PERF] GET /ng-devices/queue (page=${page}, limit=${limit}, statusFilter=${statusFilterRaw}): DB query took ${dbQueryDuration}ms, total endpoint took ${totalDuration}ms. Found ${total} matching rows.`);
+
+      return res.status(200).json({
+        status: 200,
+        message: "NG portal queue fetched successfully",
+        data: rows,
+        meta: { page, limit, total },
+        stats,
+      });
+    } catch (error) {
+      console.error("[ERROR] getNgPortalQueue:", error);
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getDeviceTestEntryByOperatorId: async (req, res) => {
