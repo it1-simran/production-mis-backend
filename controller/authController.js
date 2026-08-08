@@ -158,8 +158,7 @@ module.exports = {
           normalizedUserType === "production_manager" ||
           normalizedUserType === "store_manager" ||
           normalizedUserType === "store_manger" ||
-          normalizedUserType === "store" ||
-          normalizedUserType === "operator"
+          normalizedUserType === "store"
         ) {
           logToFile(`>>> [AUTH_TRACE] Full access bypass granted for role: ${normalizedUserType}`);
           return next();
@@ -222,8 +221,7 @@ module.exports = {
         normalizedUserType === "production_manager" ||
         normalizedUserType === "store_manager" ||
         normalizedUserType === "store_manger" ||
-        normalizedUserType === "store" ||
-        normalizedUserType === "operator"
+        normalizedUserType === "store"
       ) {
         return next();
       }
