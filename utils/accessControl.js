@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const fs = require("fs");
 const path = require("path");
+const { isFullAccessRole } = require("./roleAccess");
 
 const LOG_FILE = path.join(process.cwd(), "debug_access.log");
 const logToFile = (msg) => {
@@ -25,15 +26,9 @@ const getDataAccessFilter = (req, options = {}) => {
   
   logToFile(`>>> [ACCESS_CONTROL] userRole: "${userRole}", department: "${req.user?.department}", id: "${req.user?.id}"`);
 
-  // Admin, Production Manager, and Store Manager always have full access
-  if (
-    userRole === "admin" ||
-    userRole === "administrator" ||
-    userRole === "production_manager" ||
-    userRole === "store_manager" ||
-    userRole === "store_manger" ||
-    userRole === "store"
-  ) {
+  // Full-access roles (kept in sync with authController.js via utils/roleAccess.js —
+  // this list previously omitted "operator", causing it to diverge from authorize()'s bypass).
+  if (isFullAccessRole(req.user?.userType)) {
     logToFile(`>>> [ACCESS_CONTROL] Full access granted for role: ${userRole}`);
     return {};
   }

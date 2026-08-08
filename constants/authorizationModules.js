@@ -11,12 +11,13 @@ const PROCESS_AND_PLANNING_READ_MODULES = [
   "Inventory",
   "FG Store Management",
   "Planning & Scheduling Management",
+  "View Planning & Scheduling",
 ];
 
 /** GET /device/get/:id — any role that legitimately opens a device from these menus. */
 const DEVICE_READ_MODULE_LABELS = [
   "Find Device",
-  "Operator Task",
+  "View Task",
   "Transfer Requests",
   "Repackaging",
   "NG Devices",

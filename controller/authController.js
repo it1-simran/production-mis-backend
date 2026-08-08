@@ -15,10 +15,7 @@ const userService = new UserService();
 const User = require("../models/User");
 const UserTypes = require("../models/userType");
 const { NG_PORTAL_DEVICE_WRITE_MODULE_LABELS } = require("../constants/authorizationModules");
-
-function normalizeUserTypeKey(userType) {
-  return String(userType || "").toLowerCase().replace(/[\s-]+/g, "_");
-}
+const { normalizeUserTypeKey, isFullAccessRole } = require("../utils/roleAccess");
 
 function getPerm(permissions, moduleKey) {
   if (!permissions) return null;
@@ -41,18 +38,10 @@ function hasAnyNgPortalWriteModuleUpdate(permissions) {
  * Shared policy for mark-as-resolved and restricted PATCH /updateStageByDeviceId (NG portal).
  */
 async function evaluateNgPortalDeviceWrite(user) {
-  const checkedModules = ["Operator Task", ...NG_PORTAL_DEVICE_WRITE_MODULE_LABELS, "NG Devices(read)"];
+  const checkedModules = ["View Task", ...NG_PORTAL_DEVICE_WRITE_MODULE_LABELS, "NG Devices(read)"];
   const t = normalizeUserTypeKey(user.userType);
-  const fullAccess = new Set([
-    "admin",
-    "production_manager",
-    "store_manager",
-    "store_manger",
-    "store",
-    "operator",
-  ]);
   const portalTypes = new Set(["trc", "qc", "quality_control"]);
-  if (fullAccess.has(t) || portalTypes.has(t)) {
+  if (isFullAccessRole(user.userType) || portalTypes.has(t)) {
     return { allowed: true, checkedModules };
   }
   const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
@@ -152,15 +141,7 @@ module.exports = {
           `>>> [AUTH_TRACE] Authorizing user: ${user.email}, role: "${user.userType}", normalized: "${normalizedUserType}"`
         );
 
-        if (
-          normalizedUserType === "admin" ||
-          normalizedUserType === "administrator" ||
-          normalizedUserType === "production_manager" ||
-          normalizedUserType === "store_manager" ||
-          normalizedUserType === "store_manger" ||
-          normalizedUserType === "store" ||
-          normalizedUserType === "operator"
-        ) {
+        if (isFullAccessRole(user.userType)) {
           logToFile(`>>> [AUTH_TRACE] Full access bypass granted for role: ${normalizedUserType}`);
           return next();
         }
@@ -215,16 +196,7 @@ module.exports = {
         return res.status(401).json({ message: "User not found" });
       }
 
-      const normalizedUserType = normalizeUserTypeKey(user.userType);
-      if (
-        normalizedUserType === "admin" ||
-        normalizedUserType === "administrator" ||
-        normalizedUserType === "production_manager" ||
-        normalizedUserType === "store_manager" ||
-        normalizedUserType === "store_manger" ||
-        normalizedUserType === "store" ||
-        normalizedUserType === "operator"
-      ) {
+      if (isFullAccessRole(user.userType)) {
         return next();
       }
 
@@ -301,16 +273,7 @@ module.exports = {
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }
-      const normalizedUserType = normalizeUserTypeKey(user.userType);
-      const unrestrictedTypes = new Set([
-        "admin",
-        "production_manager",
-        "store_manager",
-        "store_manger",
-        "store",
-        "operator",
-      ]);
-      if (unrestrictedTypes.has(normalizedUserType)) {
+      if (isFullAccessRole(user.userType)) {
         return next();
       }
 
@@ -323,7 +286,7 @@ module.exports = {
         });
       }
       const permissions = role.permissions || new Map();
-      if (hasModuleLabelAction(permissions, "Operator Task", "update")) {
+      if (hasModuleLabelAction(permissions, "View Task", "update")) {
         return next();
       }
 
@@ -333,9 +296,9 @@ module.exports = {
         return res.status(403).json({
           error: "Forbidden",
           message:
-            "You do not have permission to update this device. Grant Operator Task update, or NG portal access (same as mark resolved).",
+            "You do not have permission to update this device. Grant View Task update, or NG portal access (same as mark resolved).",
           checkedModules: decision.checkedModules,
-          requiredCapability: "operator_task_update or ng_portal_device_write",
+          requiredCapability: "view_task_update or ng_portal_device_write",
           requestId: req.requestId,
         });
       }
@@ -355,7 +318,7 @@ module.exports = {
       if (Array.isArray(req.files) && req.files.length > 0) {
         return res.status(403).json({
           error: "Forbidden",
-          message: "File uploads on this endpoint require Operator Task update permission.",
+          message: "File uploads on this endpoint require View Task update permission.",
           requestId: req.requestId,
         });
       }

@@ -1399,7 +1399,11 @@ module.exports = {
       const requestedProcessId = normalizeText(data.processId || "");
       const assignedDeviceTo = normalizeText(data.assignedDeviceTo);
       const actionMeta = buildActionResponseMeta(data.status);
-      const isAdminNG = !!assignedDeviceTo;
+      // NOT a role/permission check — just whether the caller supplied an explicit
+      // assignedDeviceTo, meaning "assign this NG device directly" rather than the
+      // normal seat-resolution flow. Named isAdminNG previously, which read like an
+      // authorization gate; it never was one.
+      const hasExplicitAssignedDeviceTo = !!assignedDeviceTo;
 
       const planStart = Date.now();
       const planPromise = planingAndScheduling
@@ -1531,7 +1535,7 @@ module.exports = {
       });
       markTiming("seatResolveMs", seatResolveStart);
 
-      if (!resolvedSeatContext && isAdminNG) {
+      if (!resolvedSeatContext && hasExplicitAssignedDeviceTo) {
         let savedDeviceTestRecord = null;
         const writeSession = await mongoose.startSession();
         try {

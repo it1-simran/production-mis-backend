@@ -324,6 +324,63 @@ module.exports = {
           }
         }
 
+        // Auto-migration: Ensure "Reports" > "NG Devices Report" exists. The frontend page
+        // (reports/ng-devices) and DEVICE_READ_MODULE_LABELS already check the "NG Devices
+        // Report" key, and QC/TRC already have it granted in their permission Map — but with
+        // no menu entry, no admin can currently see or manage that existing grant.
+        const ngReportsRoute = "/reports/ng-devices";
+        const hasNgReportsEntry = menus.some(
+          (m) =>
+            m.route === ngReportsRoute ||
+            (m.children || []).some((c) => c.route === ngReportsRoute),
+        );
+        if (!hasNgReportsEntry) {
+          const reportsIndex = menus.findIndex(
+            (m) => String(m?.label || "").toLowerCase() === "reports",
+          );
+          if (reportsIndex !== -1) {
+            const reportsMenu = menus[reportsIndex];
+            const reportsChildren = Array.isArray(reportsMenu.children) ? reportsMenu.children : [];
+            reportsChildren.push({ label: "NG Devices Report", route: ngReportsRoute });
+            reportsMenu.children = reportsChildren;
+          } else {
+            menus.push({
+              icon: `<svg class="fill-current" width="18" height="19" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h12v2H3v-2z" fill="#ffffff"/></svg>`,
+              label: "Reports",
+              route: "#",
+              children: [{ label: "NG Devices Report", route: ngReportsRoute }],
+            });
+          }
+          doc.menus = menus;
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Added Reports > NG Devices Report menu.");
+          getMenu = [doc];
+        }
+
+        // Auto-migration: Ensure "Skill Management" > "View Skills" exists. The controller,
+        // routes, and frontend page (skill/view) already exist for this feature but it has
+        // never had a menu entry, so it has never been grantable/manageable via the Permissions UI.
+        const viewSkillsRoute = "/skill/view";
+        const hasSkillsEntry = menus.some(
+          (m) =>
+            m.route === viewSkillsRoute ||
+            (m.children || []).some((c) => c.route === viewSkillsRoute),
+        );
+        if (!hasSkillsEntry) {
+          menus.push({
+            icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17L12 22L22 17" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12L12 17L22 12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+            label: "Skill Management",
+            route: "#",
+            children: [{ label: "View Skills", route: viewSkillsRoute }],
+          });
+          doc.menus = menus;
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Added Skill Management > View Skills menu.");
+          getMenu = [doc];
+        }
+
         // Auto-migration: Deduplicate and cleanup legacy menus
         const initialCount = menus.length;
         const seenRoutes = new Set();
@@ -353,11 +410,31 @@ module.exports = {
         });
 
         // Auto-migration: Ensure missing administrative modules exist
+        // Kit Transfer / Transfer Requests: routes and backend authorize(["Kit Transfer",
+        // "Transfer Requests"], ...) checks already exist and some roles already have these
+        // exact permission keys granted (e.g. Store has kit_transfer + transfer_requests set),
+        // but neither menu item exists in this live document — meaning no admin can currently
+        // see or manage that existing grant, or grant it to any other role. Restoring the menu
+        // entries (same pattern as the ESIM Removal entries below) makes the already-checked
+        // permission actually administrable again.
         const missingModules = [
           { label: "Find Device", route: "/device/search", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 21L16.65 16.65" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
           { label: "FG Store Management", route: "/fg-to-store/view", icon: `<svg class="fill-current" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
           { label: "ESIM Removal", route: "/production-manager/ccid-transfer", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 7h10M7 17h10M5 12h14" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M8 4l-4 4 4 4M16 12l4 4-4 4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
-          { label: "ESIM Removal Requests", route: "/store-portal/ccid-transfer-requests", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` }
+          { label: "ESIM Removal Requests", route: "/store-portal/ccid-transfer-requests", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` },
+          { label: "Kit Transfer", route: "/production-manager/kit-transfer", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 7h10M7 17h10M5 12h14" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M8 4l-4 4 4 4M16 12l4 4-4 4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "Transfer Requests", route: "/store-portal/transfer-requests", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` },
+          // Store Portal: real standalone page (`/store-portal`), previously had zero permission-system
+          // presence anywhere (not DB menu, not code seed, not the client-side injection list).
+          { label: "Store Portal", route: "/store-portal", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 7V17C20 18.1046 19.1046 19 18 19H6C4.89543 19 4 18.1046 4 17V7M20 7L12 12L4 7M20 7H4M12 12V19" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          // Carton Management: no dedicated page — the create/weigh/print/verify/shift/discard
+          // actions live embedded inside the operator task screen (/operators/task/[id]), which is
+          // already gated on "View Task". route "#" (like a parent-group entry) so it's a real,
+          // togglable permission without pretending there's a standalone page to link to.
+          { label: "Carton Management", route: "#", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/><polyline points="9 22 9 12 15 12 15 22" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` },
+          // Dispatch Management: same situation — invoice create/update/confirm/cancel and gate-pass
+          // actions all live inside a modal on /fg-to-store/view, not a separate route.
+          { label: "Dispatch Management", route: "#", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 3h9l5 5v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` }
         ];
 
         let changed = doc.menus.length !== initialCount;

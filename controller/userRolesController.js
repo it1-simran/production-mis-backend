@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
-const UserRoles = require("../models/userRoles");
 const UserTypes = require("../models/userType");
+const User = require("../models/User");
+const { normalizeUserTypeKey, isFullAccessRole } = require("../utils/roleAccess");
 console.log(">>> [DEBUG] UserTypes Model Loaded:", !!UserTypes, typeof UserTypes);
 const bcrypt = require("bcrypt");
 module.exports = {
@@ -36,30 +37,29 @@ module.exports = {
         .json({ message: "An error occurred while creating the role", error: error.message });
     }
   },
-  view: async (req, res) => {
-    try {
-      const userRoles = await UserRoles.find().sort({ _id: -1 }).lean();
-      return res.status(200).json({
-        status: 200,
-        status_msg: "Users Roles Fetched Sucessfully!!",
-        userRoles,
-      });
-    } catch (error) {
-      console.error(error);
-      res
-        .status(500)
-        .json({ message: "An error occurred while updating the user" });
-    }
-  },
   deleteUserRole: async (req, res) => {
     try {
-      const userRoles = await UserTypes.findByIdAndDelete(req.params.id);
-      if (!userRoles) {
+      const role = await UserTypes.findById(req.params.id);
+      if (!role) {
         return res.status(404).json({ message: "User Role not found" });
       }
+      if (isFullAccessRole(role.name)) {
+        return res.status(403).json({
+          message: `"${role.name}" is a system role and cannot be deleted.`,
+        });
+      }
+      const inUseCount = await User.countDocuments({
+        userType: new RegExp(`^${role.name}$`, "i"),
+      });
+      if (inUseCount > 0) {
+        return res.status(409).json({
+          message: `Cannot delete role "${role.name}" — it is currently assigned to ${inUseCount} user(s). Reassign them first.`,
+        });
+      }
+      await UserTypes.findByIdAndDelete(req.params.id);
       res
         .status(200)
-        .json({ message: "User Role deleted successfully", userRoles });
+        .json({ message: "User Role deleted successfully", userRoles: role });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
@@ -79,6 +79,26 @@ module.exports = {
           throw new Error(`Invalid ObjectId: ${id}`);
         }
       });
+
+      const roles = await UserTypes.find({ _id: { $in: objectIds } });
+      const protectedNames = roles.filter((r) => isFullAccessRole(r.name)).map((r) => r.name);
+      if (protectedNames.length > 0) {
+        return res.status(403).json({
+          message: `System role(s) cannot be deleted: ${protectedNames.join(", ")}`,
+        });
+      }
+      const inUseRoles = [];
+      for (const role of roles) {
+        const inUseCount = await User.countDocuments({
+          userType: new RegExp(`^${role.name}$`, "i"),
+        });
+        if (inUseCount > 0) inUseRoles.push(`${role.name} (${inUseCount})`);
+      }
+      if (inUseRoles.length > 0) {
+        return res.status(409).json({
+          message: `Cannot delete role(s) currently assigned to users: ${inUseRoles.join(", ")}`,
+        });
+      }
 
       const result = await UserTypes.deleteMany({ _id: { $in: objectIds } });
       if (result.deletedCount === 0) {
@@ -125,6 +145,15 @@ module.exports = {
   update: async (req, res) => {
     try {
       const id = req.params.id;
+      const existingRole = await UserTypes.findById(id);
+      if (!existingRole) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      if (isFullAccessRole(existingRole.name)) {
+        return res.status(403).json({
+          message: `"${existingRole.name}" is a system role with full access already — its permission map cannot be edited.`,
+        });
+      }
       // We are now updating permissions directly on the UserType (Role)
       const updatedUserType = await UserTypes.findByIdAndUpdate(
         id,
@@ -156,10 +185,14 @@ module.exports = {
     try {
       // Auto-cleanup: Remove legacy production_process permission from all roles
       await UserTypes.updateMany({}, { $unset: { "permissions.production_process": "" } });
-      
-      let userType = await UserTypes.find({
-        name: { $nin: ["ADMIN", "ADMINISTRATOR", "admin", "administrator"] }
-      }).sort({ name: 1 }).lean();
+
+      // Hide admin/administrator from the ordinary role-selection lists, normalized
+      // (a prior case-sensitive $nin let "Admin" — capital A — slip through unfiltered).
+      const allRoles = await UserTypes.find({}).sort({ name: 1 }).lean();
+      let userType = allRoles.filter((r) => {
+        const key = normalizeUserTypeKey(r.name);
+        return key !== "admin" && key !== "administrator";
+      });
       return res.status(200).json({
         status: 200,
         status_msg: "User Roles Fetched Successfully!!",
@@ -176,6 +209,19 @@ module.exports = {
   getUserTypeByType: async (req, res) => {
     try {
       const { type } = req.query;
+      // Bootstraps a logged-in user's OWN permission set — restrict to the caller's
+      // own role (or a full-access role, which may reasonably inspect any role) so an
+      // authenticated user can't enumerate every other role's permission map by name.
+      const requesterType = req.user?.userType;
+      if (!requesterType) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      if (
+        normalizeUserTypeKey(type) !== normalizeUserTypeKey(requesterType) &&
+        !isFullAccessRole(requesterType)
+      ) {
+        return res.status(403).json({ message: "You may only fetch your own role's permissions" });
+      }
       const userType = await UserTypes.findOne({ name: new RegExp(`^${type}$`, "i") }).lean();
       
       if (!userType) {
