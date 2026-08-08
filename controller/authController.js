@@ -154,11 +154,7 @@ module.exports = {
 
         if (
           normalizedUserType === "admin" ||
-          normalizedUserType === "administrator" ||
-          normalizedUserType === "production_manager" ||
-          normalizedUserType === "store_manager" ||
-          normalizedUserType === "store_manger" ||
-          normalizedUserType === "store"
+          normalizedUserType === "administrator"
         ) {
           logToFile(`>>> [AUTH_TRACE] Full access bypass granted for role: ${normalizedUserType}`);
           return next();
@@ -217,11 +213,7 @@ module.exports = {
       const normalizedUserType = normalizeUserTypeKey(user.userType);
       if (
         normalizedUserType === "admin" ||
-        normalizedUserType === "administrator" ||
-        normalizedUserType === "production_manager" ||
-        normalizedUserType === "store_manager" ||
-        normalizedUserType === "store_manger" ||
-        normalizedUserType === "store"
+        normalizedUserType === "administrator"
       ) {
         return next();
       }
