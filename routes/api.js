@@ -257,9 +257,9 @@ router.get('/devices/by-process/:processId', authController.authenticateToken, d
 router.get('/ng-devices/queue', authController.authenticateToken, deviceController.getNgPortalQueue);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
-router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
-router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.registerDeviceAttempt);
-router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.logDeviceRetryAttempt);
+router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("View Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
+router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("View Task", "create"), deviceController.registerDeviceAttempt);
+router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize("View Task", "create"), deviceController.logDeviceRetryAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
@@ -270,7 +270,7 @@ router.patch(
   authController.authorizeUpdateStageByDeviceId,
   deviceController.updateStageByDeviceId
 );
-router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageBySerialNo);
+router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("View Task", "update"), deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
 router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
