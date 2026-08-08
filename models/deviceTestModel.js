@@ -62,6 +62,10 @@ deviceTestSchema.index({ processId: 1, createdAt: -1 });
 deviceTestSchema.index({ productId: 1, createdAt: -1 });
 deviceTestSchema.index({ serialNo: 1 });
 deviceTestSchema.index({ serialNo: 1, planId: 1, processId: 1, createdAt: -1 });
+deviceTestSchema.index({ status: 1, createdAt: -1 });
+deviceTestSchema.index({ status: 1, processId: 1, createdAt: -1 });
+deviceTestSchema.index({ status: 1, serialNo: 1, createdAt: -1 });
+deviceTestSchema.index({ createdAt: -1 });
 
 const deviceTest = mongoose.model("deviceTestRecords", deviceTestSchema);
 

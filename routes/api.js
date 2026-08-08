@@ -254,6 +254,7 @@ router.get('/device/get/:id', authController.authenticateToken, authController.a
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
 router.get('/devices/by-process/:processId', authController.authenticateToken, deviceController.getDevicesByProcessId);
+router.get('/ng-devices/queue', authController.authenticateToken, deviceController.getNgPortalQueue);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
