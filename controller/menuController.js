@@ -259,6 +259,26 @@ module.exports = {
           getMenu = [doc];
         }
 
+        // Auto-migration: Fix "Planing & Scheduling Management" typo (missing the second "n").
+        // The permission editor derives each role's permission-map key from this exact label
+        // (lowercased, spaces -> underscores), while every authController.authorize(...) call
+        // for this module's routes uses the correctly-spelled "Planning & Scheduling
+        // Management" — so with the typo in place, the derived keys can never match and every
+        // role is silently denied this module's read/create/update/delete regardless of what's
+        // toggled in the UI. Child routes keep their existing "/planing-scheduling/..." paths;
+        // only the label used for permission-key derivation is corrected here.
+        const planingTypoIndex = menus.findIndex(
+          (m) => m?.label === "Planing & Scheduling Management",
+        );
+        if (planingTypoIndex !== -1) {
+          menus[planingTypoIndex].label = "Planning & Scheduling Management";
+          doc.menus = menus;
+          doc.markModified("menus");
+          await doc.save();
+          console.log("Auto-migrated: Fixed 'Planing & Scheduling Management' label typo.");
+          getMenu = [doc];
+        }
+
         // Auto-migration: Ensure Operator Assignment exists under the Process parent menu
         const operatorAssignmentRoute = "/process/operator-assignment";
         const processMenuIndex = menus.findIndex(

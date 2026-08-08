@@ -112,12 +112,19 @@ router.delete('/user/delete/:id', authController.authenticateToken, authControll
 router.post('/user/delete/multiple', authController.authenticateToken, authController.authorize("View User", "delete"), userController.deleteUserMultiple);
 router.put('/user/update/:id', authController.authenticateToken, authController.authorize("View User", "update"), userController.updateUser);
 router.get('/analytics/users/registration-trends', authController.authenticateToken, userController.getUserRegistrationTrends);
-router.post('/user-roles/create', authController.authenticateToken, userRolesController.create);
-router.get('/user-roles/view', authController.authenticateToken, userRolesController.view);
-router.delete('/user-roles/delete/:id', authController.authenticateToken, userRolesController.deleteUserRole);
-router.post('/user-roles/delete/multiple', authController.authenticateToken, userRolesController.deleteUserRoleMultiple);
-router.get('/user-roles/get/:id', authController.authenticateToken, userRolesController.getUserRolesByID);
-router.put('/roles/update/:id', authController.authenticateToken, userRolesController.update);
+// Role/permission management itself was reachable by any authenticated user of any
+// role — nothing gated create/update/delete here, so a non-admin could rewrite any
+// role's permissions (including their own) via PUT /roles/update/:id. Guarded on the
+// same "User Roles" module used by the frontend's Permissions editor. Left
+// /user-type/get and /user-type/getPermissionByType unguarded below — every
+// authenticated user (any role) calls those to bootstrap their OWN permission set,
+// not to manage roles.
+router.post('/user-roles/create', authController.authenticateToken, authController.authorize("User Roles", "create"), userRolesController.create);
+router.get('/user-roles/view', authController.authenticateToken, authController.authorize("User Roles", "read"), userRolesController.view);
+router.delete('/user-roles/delete/:id', authController.authenticateToken, authController.authorize("User Roles", "delete"), userRolesController.deleteUserRole);
+router.post('/user-roles/delete/multiple', authController.authenticateToken, authController.authorize("User Roles", "delete"), userRolesController.deleteUserRoleMultiple);
+router.get('/user-roles/get/:id', authController.authenticateToken, authController.authorize("User Roles", "read"), userRolesController.getUserRolesByID);
+router.put('/roles/update/:id', authController.authenticateToken, authController.authorize("User Roles", "update"), userRolesController.update);
 router.get('/user-type/get', authController.authenticateToken, userRolesController.getUserType);
 router.get('/user-type/getPermissionByType', authController.authenticateToken, userRolesController.getUserTypeByType);
 router.post('/menu/create', authController.authenticateToken, menuController.create);
@@ -248,6 +255,7 @@ router.get('/device/get/:id', authController.authenticateToken, authController.a
 router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize("View Product", "read"), deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
 router.get('/devices/by-process/:processId', authController.authenticateToken, deviceController.getDevicesByProcessId);
+router.get('/ng-devices/queue', authController.authenticateToken, deviceController.getNgPortalQueue);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
 router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);

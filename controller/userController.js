@@ -82,6 +82,19 @@ module.exports = {
         mobileNo,
       } = req?.body;
 
+      // Access control check: HR role can ONLY create Operator users. Only Admin has ALL access.
+      const requesterRole = String(req?.user?.userType || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+      const isRequesterHr = requesterRole === "hr" || requesterRole === "human_resource" || requesterRole === "humanresource";
+      if (isRequesterHr) {
+        const targetRole = String(userType || "").trim();
+        if (!/operator/i.test(targetRole)) {
+          return res.status(403).json({
+            status: 403,
+            message: "HR role only has access to add Operator users.",
+          });
+        }
+      }
+
       const trimmedCode = String(employeeCode || "").trim();
       if (!trimmedCode) {
         return res
@@ -478,7 +491,6 @@ module.exports = {
       
       const rawPassword = String(req?.body?.password || "").trim();
       if (rawPassword) {
-        const bcrypt = require("bcryptjs");
         const salt = await bcrypt.genSalt(10);
         updatedData.password = await bcrypt.hash(rawPassword, salt);
       }
@@ -591,6 +603,19 @@ module.exports = {
       const { users, userType: defaultUserType } = req.body;
       if (!Array.isArray(users) || users.length === 0) {
         return res.status(400).json({ status: 400, message: "No user records provided" });
+      }
+
+      // Access control check: HR role can ONLY bulk create Operator users.
+      const requesterRole = String(req?.user?.userType || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+      const isRequesterHr = requesterRole === "hr" || requesterRole === "human_resource" || requesterRole === "humanresource";
+      if (isRequesterHr) {
+        const targetRole = String(defaultUserType || "").trim();
+        if (!/operator/i.test(targetRole)) {
+          return res.status(403).json({
+            status: 403,
+            message: "HR role only has access to add Operator users.",
+          });
+        }
       }
 
       let insertedCount = 0;

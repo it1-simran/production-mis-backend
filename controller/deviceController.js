@@ -7,6 +7,7 @@ const productModel = require("../models/Products");
 const inventoryModel = require("../models/inventoryManagement");
 const imeiModel = require("../models/imeiModel");
 const DeletedDevice = require("../models/deletedDevice");
+const CcidReassignmentLog = require("../models/ccidReassignmentLog");
 const NGDevice = require("../models/NGDevice");
 const User = require("../models/User");
 const mongoose = require("mongoose");
@@ -743,6 +744,20 @@ module.exports = {
         }
       }
 
+      const escapeRegex = (string) => String(string || "").replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
+      const escapedPrefix = escapeRegex(prefix || "");
+      const escapedSuffix = escapeRegex(suffix || "");
+
+      const existingDevices = await deviceModel
+        .find({
+          serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` }
+        })
+        .select("serialNo")
+        .limit(10000)
+        .lean();
+
+      const existingSerialsSet = new Set(existingDevices.map((d) => String(d.serialNo || "").trim()));
+
       const parsedStartFrom = Number.parseInt(startFrom, 10);
       const serials = generateSerials(
         lastSerialNo,
@@ -753,12 +768,13 @@ module.exports = {
         noOfZeroRequired,
         1,
         1,
-        Number.isNaN(parsedStartFrom) ? null : parsedStartFrom
+        Number.isNaN(parsedStartFrom) ? null : parsedStartFrom,
+        existingSerialsSet
       );
 
-      // Cross-process duplicate check — reject if any generated serial already exists in another active process
+      // Duplicate serial check — reject if any generated serial already exists in the database
       const conflictingDevices = await deviceModel
-        .find({ serialNo: { $in: serials }, processID: { $ne: processID } })
+        .find({ serialNo: { $in: serials } })
         .select("serialNo processID")
         .populate({ path: "processID", select: "name processID", model: "process" })
         .lean();
@@ -771,7 +787,7 @@ module.exports = {
         }));
         return res.status(409).json({
           status: 409,
-          message: `${conflictingDevices.length} serial(s) already exist in another process. Cannot create duplicates.`,
+          message: `${conflictingDevices.length} serial(s) already exist in the database. Cannot create duplicates.`,
           conflicts,
         });
       }
@@ -851,16 +867,39 @@ module.exports = {
     try {
       const data = req.query;
       const escapeRegex = (string) => string.replace(/[/\-\\^$*+?.()|[\]{}]/g, "\\$&");
-      const escapedPrefix = escapeRegex(data.prefix || "");
-      const escapedSuffix = escapeRegex(data.suffix || "");
+      const prefixStr = data.prefix || "";
+      const suffixStr = data.suffix || "";
+      const escapedPrefix = escapeRegex(prefixStr);
+      const escapedSuffix = escapeRegex(suffixStr);
 
-      const lastEntry = await deviceModel
-        .findOne({
+      const candidates = await deviceModel
+        .find({
           serialNo: { $regex: `^${escapedPrefix}.*${escapedSuffix}$` },
         })
+        .select("serialNo createdAt")
         .sort({ createdAt: -1 })
+        .limit(2000)
         .lean()
         .exec();
+
+      let lastEntry = candidates[0] || null;
+      if (candidates.length > 0) {
+        let maxSeq = -1;
+        for (const cand of candidates) {
+          let s = String(cand.serialNo || "").trim();
+          if (prefixStr && s.startsWith(prefixStr)) s = s.substring(prefixStr.length);
+          if (suffixStr && s.endsWith(suffixStr)) s = s.substring(0, s.length - suffixStr.length);
+          const match = s.match(/\d+/g);
+          if (match) {
+            const seq = parseInt(match[match.length - 1], 10);
+            if (seq > maxSeq) {
+              maxSeq = seq;
+              lastEntry = cand;
+            }
+          }
+        }
+      }
+
       return res.status(200).json({
         status: 200,
         message: "Last Entry Fetched Successfully",
@@ -1448,26 +1487,32 @@ module.exports = {
 
       // Extract identification data (IMEI, CCID) from logs to promote to root-level device fields
       if (Array.isArray(data.logs) && data.logs.length > 0) {
+        const extractFields = (obj) => {
+          if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+          Object.keys(obj).forEach(k => {
+            const key = String(k || "").toLowerCase();
+            const val = String(obj[k] || "").trim();
+            if (!val || typeof obj[k] === "object") return;
+            // last non-blank wins — higher-priority sources are called last and overwrite
+            if (key === "imei" || key === "imeino") {
+              deviceUpdatePayload.imeiNo = val;
+              shouldUpdateDevice = true;
+            } else if (key === "ccid" || key === "iccid") {
+              deviceUpdatePayload.ccid = val;
+              shouldUpdateDevice = true;
+            } else if (key === "modelname" || key === "model_name") {
+              deviceUpdatePayload.modelName = val;
+              shouldUpdateDevice = true;
+            }
+          });
+        };
         data.logs.forEach(log => {
           const parsed = log.logData?.parsedData ?? log.logData;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            Object.keys(parsed).forEach(k => {
-              const key = String(k || "").toLowerCase();
-              const val = String(parsed[k] || "").trim();
-              if (!val) return;
-
-              if (key === "imei" || key === "imeino") {
-                deviceUpdatePayload.imeiNo = val;
-                shouldUpdateDevice = true;
-              } else if (key === "ccid" || key === "iccid") {
-                deviceUpdatePayload.ccid = val;
-                shouldUpdateDevice = true;
-              } else if (key === "modelname" || key === "model_name") {
-                deviceUpdatePayload.modelName = val;
-                shouldUpdateDevice = true;
-              }
-            });
-          }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+          // priority order: top-level first (old firmware, lowest), then PARAMETERS, then STORED_FIELDS last (highest)
+          extractFields(parsed);
+          extractFields(parsed.PARAMETERS);
+          extractFields(parsed.STORED_FIELDS);
         });
       }
 
@@ -1671,17 +1716,47 @@ module.exports = {
       }
 
       if (duplicate) {
-        let conflictMsg = "Data Integrity Error: ";
-        if (duplicate.imeiNo === deviceUpdatePayload.imeiNo) {
-          conflictMsg += `IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}. `;
+        const imeiConflict = deviceUpdatePayload.imeiNo && duplicate.imeiNo === deviceUpdatePayload.imeiNo;
+        const ccidConflict = deviceUpdatePayload.ccid && duplicate.ccid === deviceUpdatePayload.ccid;
+
+        if (imeiConflict) {
+          // IMEI is flashed to hardware — a conflict here is a real data integrity error
+          return res.status(409).json({
+            status: 409,
+            message: `Data Integrity Error: IMEI ${deviceUpdatePayload.imeiNo} is already linked to device ${duplicate.serialNo}.`,
+          });
         }
-        if (duplicate.ccid === deviceUpdatePayload.ccid) {
-          conflictMsg += `CCID ${deviceUpdatePayload.ccid} is already linked to device ${duplicate.serialNo}. `;
+
+        if (ccidConflict) {
+          // Jig physically read this SIM from the current device — the old entry is wrong.
+          // Auto-clear CCID from old device and continue without blocking.
+          const ccidMsg = `CCID ${deviceUpdatePayload.ccid} was previously linked to ${duplicate.serialNo}. Auto-cleared from old device — jig confirmed physical presence on ${data.serialNo}.`;
+          if (!Array.isArray(data.logs)) data.logs = [];
+          data.logs.push({
+            stepName: "CCID Reassignment",
+            stepType: "system",
+            status: "WARNING",
+            logData: { message: ccidMsg, previousDevice: duplicate.serialNo, ccid: deviceUpdatePayload.ccid },
+            createdAt: new Date(),
+          });
+          // Clear only the CCID field on the old device — all other fields remain unchanged
+          deviceModel
+            .updateOne({ _id: duplicate._id }, { $set: { ccid: "" } })
+            .catch((err) => console.error(`[CCID-REASSIGN] Failed to clear CCID from ${duplicate.serialNo}:`, err));
+          // Persist audit record
+          new CcidReassignmentLog({
+            ccid: deviceUpdatePayload.ccid,
+            fromDeviceId: duplicate._id,
+            fromSerialNo: duplicate.serialNo,
+            fromProcessId: deviceSnapshot.processID || null,
+            toDeviceId: deviceSnapshot._id,
+            toSerialNo: data.serialNo || deviceSnapshot.serialNo,
+            toProcessId: deviceSnapshot.processID || null,
+            stageName: currentStageName || "",
+            planId: data.planId || null,
+            operatorId: data.operatorId || data.userId || null,
+          }).save().catch((err) => console.error(`[CCID-REASSIGN] Failed to save reassignment log:`, err));
         }
-        return res.status(409).json({
-          status: 409,
-          message: conflictMsg.trim(),
-        });
       }
 
       let nextSeatRouting = {
@@ -2309,16 +2384,10 @@ module.exports = {
       }
       let statusFilter = {};
       if (statusLower === "ng") {
-        statusFilter = { status: { $regex: /^NG$/i } };
+        statusFilter = { status: { $in: ["NG", "ng", "Fail"] } };
       } else if (modeRaw === "ngportal" || statusLower === "ngportal") {
         // NG queue + resolution outcomes only — excludes unrelated station "Pass" rows
-        // that were incorrectly winning client-side dedupe over active NG cycles.
-        statusFilter = {
-          $or: [
-            { status: { $regex: /^NG$/i } },
-            { status: { $regex: /resolved/i } },
-          ],
-        };
+        statusFilter = { status: { $in: ["NG", "ng", "Fail", "Resolved", "RESOLVED", "QC Resolved"] } };
       }
       const projection = {
         deviceId: 1,
@@ -2382,6 +2451,100 @@ module.exports = {
         status: 500,
         error: error.message,
       });
+    }
+  },
+  getNgPortalQueue: async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const searchRaw = String(req.query.search || "").trim();
+      const statusFilterRaw = String(req.query.statusFilter || req.query.status || "all").trim().toLowerCase();
+      const processIdRaw = req.query.processId;
+
+      const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 25, 1), 500);
+      const skip = (page - 1) * limit;
+
+      const baseFilter = {};
+      if (processIdRaw && mongoose.Types.ObjectId.isValid(processIdRaw)) {
+        baseFilter.processId = new mongoose.Types.ObjectId(processIdRaw);
+      }
+      if (searchRaw) {
+        baseFilter.serialNo = { $regex: searchRaw, $options: "i" };
+      }
+
+      const ngStatuses = ["NG", "ng", "Fail"];
+      const resolvedStatuses = ["Resolved", "RESOLVED", "QC Resolved"];
+      const allNgPortalStatuses = [...ngStatuses, ...resolvedStatuses];
+
+      let statusCondition = {};
+      if (statusFilterRaw === "ng") {
+        statusCondition = { status: { $in: ngStatuses } };
+      } else if (statusFilterRaw === "resolved") {
+        statusCondition = { status: { $in: resolvedStatuses } };
+      } else {
+        // "all" or default NG portal queue scope: NG devices + resolution outcomes only
+        statusCondition = { status: { $in: allNgPortalStatuses } };
+      }
+
+      const queryFilter = { ...baseFilter, ...statusCondition };
+
+      const projection = {
+        deviceId: 1,
+        processId: 1,
+        operatorId: 1,
+        serialNo: 1,
+        stageName: 1,
+        status: 1,
+        assignedDeviceTo: 1,
+        reason: 1,
+        ngDescription: 1,
+        logData: 1,
+        trcRemarks: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+
+      const dbQueryStart = Date.now();
+      const [rows, total, statsResolved, statsNgOpen] = await Promise.all([
+        deviceTestRecords
+          .find(queryFilter, projection)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage imeiNo ccid" })
+          .populate({ path: "processId", select: "name processName" })
+          .populate({ path: "operatorId", select: "name employeeCode" })
+          .lean(),
+        deviceTestRecords.countDocuments(queryFilter),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: resolvedStatuses } }),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: ngStatuses } }),
+      ]);
+      const dbQueryDuration = Date.now() - dbQueryStart;
+
+      const totalOverall = statsResolved + statsNgOpen;
+      const stats = {
+        total: totalOverall,
+        resolved: statsResolved,
+        unresolved: statsNgOpen,
+        ngOpen: statsNgOpen,
+        processCount: 0,
+      };
+
+      const totalDuration = Date.now() - startTime;
+      console.log(`[PERF] GET /ng-devices/queue (page=${page}, limit=${limit}, statusFilter=${statusFilterRaw}): DB query took ${dbQueryDuration}ms, total endpoint took ${totalDuration}ms. Found ${total} matching rows.`);
+
+      return res.status(200).json({
+        status: 200,
+        message: "NG portal queue fetched successfully",
+        data: rows,
+        meta: { page, limit, total },
+        stats,
+      });
+    } catch (error) {
+      console.error("[ERROR] getNgPortalQueue:", error);
+      return res.status(500).json({ status: 500, error: error.message });
     }
   },
   getDeviceTestEntryByOperatorId: async (req, res) => {
@@ -2681,7 +2844,6 @@ module.exports = {
       const query = {
         ...(processId ? { processID: processId } : {}),
         ...(stageName ? { currentStage: stageName } : {}),
-        status: { $nin: ["Pass", "Completed", "NG"] },
       };
 
       const devices = await deviceModel.find(query)
@@ -3829,7 +3991,8 @@ function generateSerials(
   noOfZeroRequired,
   stepBy = 1,
   repeatTimes = 1,
-  startFrom = null
+  startFrom = null,
+  existingSerialsSet = null
 ) {
   let start = 1;
   if (startFrom !== null && !isNaN(startFrom)) {
@@ -3841,14 +4004,25 @@ function generateSerials(
     }
   }
 
-  const end = start + noOfSerialRequired;
   const serials = [];
-  for (let i = start; i < end; i += stepBy) {
+  let i = start;
+  let maxLoop = noOfSerialRequired * 100;
+  let loopCount = 0;
+
+  while (serials.length < noOfSerialRequired && loopCount < maxLoop) {
+    loopCount++;
     const paddedNumber = enableZero
       ? String(i).padStart(noOfZeroRequired, "0")
       : i;
+    const candidate = `${prefix}${paddedNumber}${suffix}`;
+    i += stepBy;
+
+    if (existingSerialsSet && existingSerialsSet.has(candidate)) {
+      continue;
+    }
+
     for (let r = 0; r < repeatTimes; r++) {
-      serials.push(`${prefix}${paddedNumber}${suffix}`);
+      serials.push(candidate);
     }
   }
   return serials;
