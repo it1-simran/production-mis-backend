@@ -77,6 +77,45 @@ const freeOperatorFromOtherProcesses = async (userObjId, exceptProcessId) => {
   return freedProcesses;
 };
 
+// Clears `seatKey` in this plan's own seat map (used by both Planning & Scheduling and the
+// Operator Assignment page's occupied-seat display), returning the ids of whoever was evicted
+// so the caller can free their AssignOperatorToPlanModel record once they no longer hold any
+// other seat in this same plan. Mirrors freeOperatorFromOtherProcesses's cleanup, scoped to one
+// seat within this process instead of every other process.
+const evictSeatOccupants = (plan, seatKey, keepUserIdStr) => {
+  const safeParse = (val, fallback) => {
+    if (val == null) return fallback;
+    if (typeof val === "object") return val;
+    try { return JSON.parse(val); } catch { return fallback; }
+  };
+  const seatMap = safeParse(plan.assignedOperators, {}) || {};
+  const existing = Array.isArray(seatMap[seatKey])
+    ? seatMap[seatKey]
+    : seatMap[seatKey] ? [seatMap[seatKey]] : [];
+  const evictedIds = existing
+    .map((op) => String(op?._id || op?.userId || ""))
+    .filter((id) => id && id !== keepUserIdStr);
+  seatMap[seatKey] = [];
+  return { seatMap, evictedIds };
+};
+
+const freeEvictedOperatorsIfUnseated = async (processObjId, seatMap, seatKey, evictedIds) => {
+  for (const evictedId of evictedIds) {
+    if (!mongoose.Types.ObjectId.isValid(evictedId)) continue;
+    const stillElsewhere = Object.entries(seatMap).some(([key, slot]) => {
+      if (key === seatKey) return false;
+      const list = Array.isArray(slot) ? slot : slot ? [slot] : [];
+      return list.some((op) => String(op?._id || op?.userId || "") === evictedId);
+    });
+    if (!stillElsewhere) {
+      await AssignOperatorToPlanModel.deleteOne({
+        processId: processObjId,
+        userId: new mongoose.Types.ObjectId(evictedId),
+      });
+    }
+  }
+};
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -844,7 +883,7 @@ module.exports = {
             ? { processId: { $ne: new mongoose.Types.ObjectId(processId) } }
             : {}),
         })
-          .select("userId processId roomName createdAt")
+          .select("userId processId roomName createdAt seatDetails")
           .lean()
         : [];
 
@@ -862,9 +901,23 @@ module.exports = {
         ...new Set(otherAssignments.map((a) => String(a.roomName)).filter(Boolean)),
       ].filter((id) => mongoose.Types.ObjectId.isValid(id));
       const roomDocs = roomIds.length
-        ? await RoomPlanModel.find({ _id: { $in: roomIds } }).select("floorName").lean()
+        ? await RoomPlanModel.find({ _id: { $in: roomIds } }).select("floorName lines").lean()
         : [];
       const roomById = new Map(roomDocs.map((r) => [String(r._id), r]));
+
+      // Plans give us each seat's stage name via assignedStages (JSON, keyed "rowIndex-seatIndex")
+      // — the same map the seat-picker on the Operator Assignment page reads.
+      const planDocs = assignedProcessIds.length
+        ? await PlaningAndSchedulingModel.find({ selectedProcess: { $in: assignedProcessIds } })
+          .select("selectedProcess assignedStages")
+          .lean()
+        : [];
+      const planByProcessId = new Map(planDocs.map((p) => [String(p.selectedProcess), p]));
+      const safeParseSeatMap = (val) => {
+        if (!val) return {};
+        if (typeof val === "object") return val;
+        try { return JSON.parse(val); } catch { return {}; }
+      };
 
       // One assignment per operator is enough for the badge/confirm.
       const assignmentByUser = new Map();
@@ -874,12 +927,38 @@ module.exports = {
         const proc = processById.get(String(a.processId));
         const room = roomById.get(String(a.roomName));
         const statusText = String(proc?.status || "");
+
+        const rowIdx = Number(a.seatDetails?.rowNumber);
+        const seatIdx = Number(a.seatDetails?.seatNumber);
+        const hasSeat = Number.isInteger(rowIdx) && Number.isInteger(seatIdx) && rowIdx >= 0 && seatIdx >= 0;
+        const line = hasSeat ? room?.lines?.[rowIdx] : null;
+        const seat = hasSeat ? line?.seats?.[seatIdx] : null;
+        const rowLabel = hasSeat ? String(line?.rowName || `Row ${rowIdx + 1}`) : null;
+        const seatLabel = hasSeat ? String(seat?.seatNumber || `Seat ${seatIdx + 1}`) : null;
+
+        let stageName = null;
+        if (hasSeat) {
+          const plan = planByProcessId.get(String(a.processId));
+          const seatMap = safeParseSeatMap(plan?.assignedStages);
+          const seatKey = `${rowIdx}-${seatIdx}`;
+          const stageEntry = Array.isArray(seatMap[seatKey])
+            ? seatMap[seatKey]
+            : seatMap[seatKey] ? [seatMap[seatKey]] : [];
+          stageName = stageEntry
+            .map((s) => s?.name || s?.stageName || s?.stage)
+            .filter(Boolean)
+            .join(", ") || null;
+        }
+
         assignmentByUser.set(uid, {
           processId: String(a.processId),
           floorName: room?.floorName || null,
           assignedAt: a.createdAt || null,
           processName: proc?.name || proc?.processID || "another process",
           inProduction: /production|progress|running|active|ongoing/i.test(statusText),
+          rowLabel,
+          seatLabel,
+          stageName,
         });
       }
 
@@ -925,22 +1004,26 @@ module.exports = {
 
   /**
    * POST /operators/assign — Operator Assignment page (Process submenu).
-   * Coarse assignment: process + room only, no seat/stage picking. Atomically frees the
-   * operator from any other process before creating/updating the new assignment, so an
-   * operator is never left assigned to two processes at once.
-   * Body: { userId, processId, roomName }
+   * Seat-aware assignment: process + seat only. The room is derived server-side from the
+   * process's own Planning & Scheduling plan (selectedRoom) instead of being picked manually,
+   * so the assignment always matches the seat/line grid that plan already defines. Atomically
+   * frees the operator from any other process before creating/updating the new assignment, so
+   * an operator is never left assigned to two processes at once.
+   * Body: { userId, processId, seatDetails: { rowNumber, seatNumber } }
    */
   assignOperatorToProcess: async (req, res) => {
     try {
-      const { userId, processId, roomName } = req.body || {};
+      const { userId, processId, seatDetails } = req.body || {};
       if (!mongoose.Types.ObjectId.isValid(userId)) {
         return res.status(400).json({ status: 400, message: "Invalid operator id" });
       }
       if (!mongoose.Types.ObjectId.isValid(processId)) {
         return res.status(400).json({ status: 400, message: "Invalid process id" });
       }
-      if (!mongoose.Types.ObjectId.isValid(roomName)) {
-        return res.status(400).json({ status: 400, message: "A room must be selected" });
+      const rowNumber = String(seatDetails?.rowNumber || "").trim();
+      const seatNumber = String(seatDetails?.seatNumber || "").trim();
+      if (!rowNumber || !seatNumber) {
+        return res.status(400).json({ status: 400, message: "A seat must be selected" });
       }
 
       const operator = await OperatorModel.findById(userId).lean();
@@ -956,21 +1039,60 @@ module.exports = {
         return res.status(404).json({ status: 404, message: "Process not found" });
       }
 
+      const plan = await PlaningAndSchedulingModel.findOne({ selectedProcess: processId });
+      if (!plan?.selectedRoom) {
+        return res.status(400).json({
+          status: 400,
+          message: "This process has no seat/room plan yet. Create a Planning & Scheduling plan for it first.",
+        });
+      }
+
       const userObjId = new mongoose.Types.ObjectId(userId);
+      const processObjId = new mongoose.Types.ObjectId(processId);
       const previousAssignments = await AssignOperatorToPlanModel.find({
         userId: userObjId,
-        processId: { $ne: new mongoose.Types.ObjectId(processId) },
+        processId: { $ne: processObjId },
       })
         .populate("processId", "name processID")
         .lean();
 
       await freeOperatorFromOtherProcesses(userObjId, processId);
 
+      // A seat already held by a different operator can still be picked here — the new
+      // operator replaces them (same "coarse reassignment" contract as the process-level
+      // free-from-other-processes above, just scoped to this one seat).
+      const seatKey = `${rowNumber}-${seatNumber}`;
+      const { seatMap, evictedIds } = evictSeatOccupants(plan, seatKey, String(userObjId));
+
+      // Also drop this operator from any *other* seat in this same plan — they may be moving
+      // seats within one process rather than coming from a different process, which
+      // freeOperatorFromOtherProcesses (scoped to processId != this one) wouldn't catch.
+      const keepUserIdStr = String(userObjId);
+      Object.keys(seatMap).forEach((key) => {
+        if (key === seatKey) return;
+        const list = Array.isArray(seatMap[key]) ? seatMap[key] : seatMap[key] ? [seatMap[key]] : [];
+        const filtered = list.filter((op) => String(op?._id || op?.userId || "") !== keepUserIdStr);
+        if (filtered.length !== list.length) seatMap[key] = filtered;
+      });
+
+      seatMap[seatKey] = [{
+        _id: String(userObjId),
+        name: operator.name,
+        employeeCode: operator.employeeCode,
+        userType: operator.userType,
+        skills: operator.skills,
+      }];
+      plan.assignedOperators = JSON.stringify(seatMap);
+      plan.updatedAt = new Date();
+      await plan.save();
+      await freeEvictedOperatorsIfUnseated(processObjId, seatMap, seatKey, evictedIds);
+
       const assignment = await AssignOperatorToPlanModel.findOneAndUpdate(
-        { userId: userObjId, processId: new mongoose.Types.ObjectId(processId) },
+        { userId: userObjId, processId: processObjId },
         {
           $set: {
-            roomName: new mongoose.Types.ObjectId(roomName),
+            roomName: plan.selectedRoom,
+            seatDetails: { rowNumber, seatNumber },
             status: "Occupied",
             updatedAt: new Date(),
           },
@@ -988,8 +1110,8 @@ module.exports = {
         processId,
         userId: req.user?.id || userId,
         description: previousProcessName
-          ? `${operator.name || "Operator"} reassigned from ${previousProcessName} to ${process.name || process.processID} by ${req.user?.name || "admin"}.`
-          : `${operator.name || "Operator"} assigned to ${process.name || process.processID} by ${req.user?.name || "admin"}.`,
+          ? `${operator.name || "Operator"} reassigned from ${previousProcessName} to ${process.name || process.processID} (Seat ${rowNumber}-${seatNumber})${evictedIds.length ? ", replacing the previous operator on that seat" : ""} by ${req.user?.name || "admin"}.`
+          : `${operator.name || "Operator"} assigned to ${process.name || process.processID} (Seat ${rowNumber}-${seatNumber})${evictedIds.length ? ", replacing the previous operator on that seat" : ""} by ${req.user?.name || "admin"}.`,
       });
 
       return res.status(200).json({
@@ -998,6 +1120,79 @@ module.exports = {
           ? `Operator reassigned from ${previousProcessName} to ${process.name || process.processID}`
           : `Operator assigned to ${process.name || process.processID}`,
         assignment,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+
+  /**
+   * POST /operators/unassign — Operator Assignment page (Process submenu).
+   * Removes the operator from the process entirely: clears them from the process's plan seat
+   * map (so no stale occupant shows in the seat picker or Planning & Scheduling) and deletes
+   * their AssignOperatorToPlanModel record, moving them back to Inactive Operators.
+   * Body: { userId, processId }
+   */
+  unassignOperatorFromProcess: async (req, res) => {
+    try {
+      const { userId, processId } = req.body || {};
+      if (!mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({ status: 400, message: "Invalid operator id" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process id" });
+      }
+
+      const operator = await OperatorModel.findById(userId).lean();
+      if (!operator) {
+        return res.status(404).json({ status: 404, message: "Operator not found" });
+      }
+
+      const userObjId = new mongoose.Types.ObjectId(userId);
+      const processObjId = new mongoose.Types.ObjectId(processId);
+      const process = await ProcessModel.findById(processId).lean();
+
+      const plan = await PlaningAndSchedulingModel.findOne({ selectedProcess: processId });
+      if (plan) {
+        const safeParse = (val, fallback) => {
+          if (val == null) return fallback;
+          if (typeof val === "object") return val;
+          try { return JSON.parse(val); } catch { return fallback; }
+        };
+        const seatMap = safeParse(plan.assignedOperators, {}) || {};
+        const keepUserIdStr = String(userObjId);
+        let changed = false;
+        Object.keys(seatMap).forEach((key) => {
+          const list = Array.isArray(seatMap[key]) ? seatMap[key] : seatMap[key] ? [seatMap[key]] : [];
+          const filtered = list.filter((op) => String(op?._id || op?.userId || "") !== keepUserIdStr);
+          if (filtered.length !== list.length) {
+            seatMap[key] = filtered;
+            changed = true;
+          }
+        });
+        if (changed) {
+          plan.assignedOperators = JSON.stringify(seatMap);
+          plan.updatedAt = new Date();
+          await plan.save();
+        }
+      }
+
+      const deleteResult = await AssignOperatorToPlanModel.deleteMany({
+        userId: userObjId,
+        processId: processObjId,
+      });
+
+      await ProcessLogModel.create({
+        action: "UNASSIGN",
+        processId,
+        userId: req.user?.id || userId,
+        description: `${operator.name || "Operator"} unassigned from ${process?.name || process?.processID || "process"} by ${req.user?.name || "admin"}.`,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        message: `Operator unassigned from ${process?.name || process?.processID || "the process"}`,
+        removed: deleteResult?.deletedCount || 0,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });

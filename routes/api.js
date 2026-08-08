@@ -149,21 +149,21 @@ router.get('/process/get/:id', authController.authenticateToken, processControll
 router.put('/process/update/:id', authController.authenticateToken, authController.authorizeProcessUpdate, processController.update);
 router.post('/planing/get', authController.authenticateToken, planningAndSchedulingController.checkAvailability);
 router.get('/planing/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.view);
-router.delete('/planing/delete/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.delete);
-router.post('/planing/delete/multiple', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "delete"), planningAndSchedulingController.deletePlaningMultiple);
+router.delete('/planing/delete/:id', authController.authenticateToken, authController.authorize(["Planning & Scheduling Management", "View Planning & Scheduling"], "delete"), planningAndSchedulingController.delete);
+router.post('/planing/delete/multiple', authController.authenticateToken, authController.authorize(["Planning & Scheduling Management", "View Planning & Scheduling"], "delete"), planningAndSchedulingController.deletePlaningMultiple);
 router.get('/planingAndScheduling/get/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByID);
 router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlanInsights);
 router.get('/planingAndScheduling/testing-analytics/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getSeatStageTestingAnalytics);
 router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getProcessInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
-router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "update"), planningAndSchedulingController.update);
+router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize(["Planning & Scheduling Management", "View Planning & Scheduling"], "update"), planningAndSchedulingController.update);
 router.get('/holiday/view', authController.authenticateToken, holidayController.view);
 router.post('/holiday/create', authController.authenticateToken, holidayController.create);
 router.delete('/holiday/delete/:id', authController.authenticateToken, holidayController.delete);
 router.post('/holiday/delete/multiple', authController.authenticateToken, holidayController.deleteHolidayMultiple);
 router.post('/planing/getFromCurrentDate', authController.authenticateToken, planningAndSchedulingController.checkAvailabilityFromCurrentDate);
 router.get('/planing/getPlaningAndSchedulingModel', authController.authenticateToken, planningAndSchedulingController?.fetchAllPlaningModel);
-router.post('/planing/create', authController.authenticateToken, authController.authorize("Planning & Scheduling Management", "create"), planningAndSchedulingController.create);
+router.post('/planing/create', authController.authenticateToken, authController.authorize(["Planning & Scheduling Management", "View Planning & Scheduling"], "create"), planningAndSchedulingController.create);
 router.post('/process/log/create', authController.authenticateToken, processController.processLogs);
 router.get('/process/logs/getLogsByProcessID/:id', authController.authenticateToken, planningAndSchedulingController.getProcessLogsByProcessId);
 router.post('/assignPlanToOperator/create', authController.authenticateToken, assignedOperatorsToPlan.create);
@@ -258,9 +258,9 @@ router.get('/devices/by-process/:processId', authController.authenticateToken, d
 router.get('/ng-devices/queue', authController.authenticateToken, deviceController.getNgPortalQueue);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, deviceController.getNGDevicesByProcessId);
 router.post('/devices/create', authController.authenticateToken, authController.authorize("Find Device", "create"), deviceController.create);
-router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("Operator Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
-router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.registerDeviceAttempt);
-router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize("Operator Task", "create"), deviceController.logDeviceRetryAttempt);
+router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize("View Task", "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
+router.post('/device/attempts/register', authController.authenticateToken, authController.authorize("View Task", "create"), deviceController.registerDeviceAttempt);
+router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize("View Task", "create"), deviceController.logDeviceRetryAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
@@ -271,7 +271,7 @@ router.patch(
   authController.authorizeUpdateStageByDeviceId,
   deviceController.updateStageByDeviceId
 );
-router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("Operator Task", "update"), deviceController.updateStageBySerialNo);
+router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize("View Task", "update"), deviceController.updateStageBySerialNo);
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize("Find Device", "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
 router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
@@ -329,6 +329,7 @@ router.get('/operators/getVacantOperator', authController.authenticateToken, pro
 router.post('/operators/reassign', authController.authenticateToken, processController.reassignOperator);
 router.put('/operator/updateStatus/:id', authController.authenticateToken, processController.updateStatusAssignedOperator);
 router.post('/operators/assign', authController.authenticateToken, processController.assignOperatorToProcess);
+router.post('/operators/unassign', authController.authenticateToken, processController.unassignOperatorFromProcess);
 router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, jigController.updateJigStatus);
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, processController.updateIssuedKitsToLine);

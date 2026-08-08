@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const assignOperatorToPlanSchema = new mongoose.Schema({
   processId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "processes",
+    ref: "process",
     required: true,
   },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
