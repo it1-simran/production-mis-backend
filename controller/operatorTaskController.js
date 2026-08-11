@@ -724,7 +724,7 @@ const findDevicesByScanTokens = (devices = [], scanTokens = []) => {
 };
 
 const DEVICE_LOOKUP_SELECT_FIELDS =
-  "_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt";
+  "_id serialNo imeiNo ccid customFields modelName status currentStage processID productType flowVersion flowStartedAt";
 
 const isLikelyImeiToken = (token = "") => /^\d{15}$/.test(String(token || "").trim());
 const isLikelyCcidToken = (token = "") =>
@@ -1476,7 +1476,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
             : {}),
           ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
         })
-        .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+        .select(DEVICE_LOOKUP_SELECT_FIELDS)
         .lean()
       : Promise.resolve([]),
     process?._id

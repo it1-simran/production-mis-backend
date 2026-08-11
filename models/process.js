@@ -48,6 +48,7 @@ const processSchema = new mongoose.Schema({
         awaitNgTimeout: { type: Boolean, required: false, default: true },
         assignDepartment: { type: String, required: false, default: "" },
         isPrinterEnable: { type: Boolean, required: false, default: false },
+        stickerFormatId: { type: mongoose.Schema.Types.ObjectId, ref: "StickerFormatMaster", default: null },
         disabled: { type: Boolean, default: false },
         isCheckboxNGStatus: {
           type: Boolean,
