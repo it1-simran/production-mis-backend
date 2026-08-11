@@ -22,6 +22,7 @@ const {
   parseStickerScanTokensFromJigFields,
   findDevicesByScanTokensStrict,
 } = require("../services/deviceScanMatcher");
+const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/customFieldsCcid");
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
 const { cachedCompute } = require("../utils/ttlCache");
@@ -2889,6 +2890,10 @@ module.exports = {
       const serialNo = String(req.body?.serialNo || "").trim();
       const imeiNo = String(req.body?.imeiNo || "").trim();
       const ccid = String(req.body?.ccid || "").trim();
+      const planId = String(req.body?.planId || "").trim();
+      const processId = String(req.body?.processId || "").trim();
+      const stageName = String(req.body?.stageName || "").trim();
+      const operatorId = String(req.body?.operatorId || "").trim();
 
       if (!imeiNo && !ccid) {
         return res.status(400).json({
@@ -2955,6 +2960,55 @@ module.exports = {
           "",
       ).trim();
 
+      // Determine which field actually collided on THIS specific duplicate record —
+      // matchedBy below just echoes the request, it doesn't verify against duplicate's
+      // own values, so that can't be relied on for branching.
+      const imeiCollision = Boolean(imeiNo) && String(duplicate?.imeiNo || "").trim() === imeiNo;
+      const ccidCollision = Boolean(ccid) && String(duplicate?.ccid || "").trim() === ccid;
+
+      // A CCID can legitimately move between devices (rework, ESIM re-use); if the jig
+      // just confirmed it's physically present on the current device, trust that and
+      // auto-clear it from the old device instead of blocking. An IMEI collision is a
+      // more serious hardware-identity problem and always still blocks below.
+      if (ccidCollision && !imeiCollision) {
+        try {
+          const oldDevice = await deviceModel.findById(duplicate._id);
+          if (oldDevice) {
+            // Deep clone, not a shallow spread: stripCcidValuesFromObject mutates
+            // nested sub-objects in place, and a shallow copy shares those nested
+            // references with oldDevice.customFields itself - the mutation would
+            // corrupt Mongoose's own "old value" snapshot before it diffs, so
+            // isModified comes back false and the change silently never persists.
+            const customFields = structuredClone(oldDevice.customFields || {});
+            stripCcidValuesFromObject(customFields, new Set([normalizeForCompare(ccid)]));
+            oldDevice.ccid = "";
+            oldDevice.customFields = customFields;
+            await oldDevice.save();
+
+            await CcidReassignmentLog.create({
+              ccid,
+              fromSerialNo: existingSerial,
+              toSerialNo: serialNo,
+              fromProcessId: duplicate?.processID?._id || duplicate?.processID || null,
+              toProcessId: processId || null,
+              stageName: stageName || currentStage || "",
+              operatorId: operatorId || null,
+              planId: planId || null,
+            });
+          }
+        } catch (reassignError) {
+          console.warn("Failed to auto-reassign CCID from duplicate device:", reassignError);
+        }
+
+        return res.status(200).json({
+          status: 200,
+          duplicate: false,
+          warning: true,
+          message: `CCID was previously linked to ${existingSerial}. Auto-cleared — jig confirmed physical presence on ${serialNo}.`,
+          data: { previousSerialNumber: existingSerial, ccid },
+        });
+      }
+
       const message = `Duplicate device detected. This device is already present in ${currentStage || "Unknown Stage"} for ${processName || "Unknown Process"}.`;
 
       return res.status(409).json({
@@ -2978,6 +3032,75 @@ module.exports = {
       return res.status(500).json({
         status: 500,
         message: "Failed to validate device identity",
+        error: error.message,
+      });
+    }
+  },
+  listCcidReassignmentLogs: async (req, res) => {
+    try {
+      const filter = {};
+      const search = String(req.query?.search || "").trim();
+      if (search) {
+        const pattern = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [{ ccid: pattern }, { fromSerialNo: pattern }, { toSerialNo: pattern }];
+      }
+      if (req.query?.processId && mongoose.Types.ObjectId.isValid(String(req.query.processId))) {
+        const pId = new mongoose.Types.ObjectId(String(req.query.processId));
+        filter.$and = filter.$and || [];
+        filter.$and.push({ $or: [{ fromProcessId: pId }, { toProcessId: pId }] });
+      }
+      if (req.query?.fromDate || req.query?.toDate) {
+        filter.createdAt = {};
+        if (req.query.fromDate) filter.createdAt.$gte = new Date(req.query.fromDate);
+        if (req.query.toDate) {
+          const end = new Date(req.query.toDate);
+          end.setHours(23, 59, 59, 999);
+          filter.createdAt.$lte = end;
+        }
+      }
+
+      const pageRaw = req.query.page;
+      const limitRaw = req.query.limit;
+      const shouldPaginate = Boolean(pageRaw || limitRaw);
+
+      let logs;
+      let meta;
+      if (shouldPaginate) {
+        const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 50, 1), 500);
+        const skip = (page - 1) * limit;
+        const [rows, total] = await Promise.all([
+          CcidReassignmentLog.find(filter)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .populate({ path: "fromProcessId", select: "name processName processID" })
+            .populate({ path: "toProcessId", select: "name processName processID" })
+            .populate({ path: "operatorId", select: "name fullName employeeCode username" })
+            .lean(),
+          CcidReassignmentLog.countDocuments(filter),
+        ]);
+        logs = rows;
+        meta = { page, limit, total };
+      } else {
+        logs = await CcidReassignmentLog.find(filter)
+          .sort({ createdAt: -1 })
+          .populate({ path: "fromProcessId", select: "name processName processID" })
+          .populate({ path: "toProcessId", select: "name processName processID" })
+          .populate({ path: "operatorId", select: "name fullName employeeCode username" })
+          .lean();
+      }
+
+      return res.status(200).json({
+        status: 200,
+        message: "CCID reassignment log fetched successfully",
+        logs,
+        ...(meta ? { meta } : {}),
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to fetch CCID reassignment log",
         error: error.message,
       });
     }

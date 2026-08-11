@@ -186,6 +186,7 @@ module.exports = {
           route: "#",
           children: [
             { label: "NG Devices Report", route: "/reports/ng-devices" },
+            { label: "CCID Reassignment Log", route: "/production-manager/ccid-reassignment-log" },
           ],
         },
         {
@@ -368,13 +369,31 @@ module.exports = {
         for (const mod of missingModules) {
           const modLabelLower = mod.label.toLowerCase();
           const existingIndex = doc.menus.findIndex(m => m.label.toLowerCase() === modLabelLower);
-          
+
           if (existingIndex === -1) {
             doc.menus.push(mod);
             changed = true;
           } else if (doc.menus[existingIndex].route !== mod.route) {
             // Update route if it's incorrect (e.g. from previous bad migration)
             doc.menus[existingIndex].route = mod.route;
+            changed = true;
+          }
+        }
+
+        // CCID Reassignment Log lives as a submenu under Reports, not a
+        // top-level module, so it needs its own nested-child migration rather
+        // than the flat missingModules loop above.
+        const reportsMenu = doc.menus.find((m) => String(m?.label || "").toLowerCase() === "reports");
+        if (reportsMenu) {
+          if (!Array.isArray(reportsMenu.children)) reportsMenu.children = [];
+          const hasReassignmentLogChild = reportsMenu.children.some(
+            (c) => String(c?.label || "").toLowerCase() === "ccid reassignment log",
+          );
+          if (!hasReassignmentLogChild) {
+            reportsMenu.children.push({
+              label: "CCID Reassignment Log",
+              route: "/production-manager/ccid-reassignment-log",
+            });
             changed = true;
           }
         }
