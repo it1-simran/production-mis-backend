@@ -482,8 +482,20 @@ module.exports = {
       if (email !== undefined && String(email).trim()) updatedData.email = email;
       if (trimmedCode) updatedData.employeeCode = trimmedCode;
       if (gender !== undefined) updatedData.gender = gender;
-      if (dateOfBirth !== undefined) updatedData.dateOfBirth = dateOfBirth;
-      if (dateOfJoining !== undefined) updatedData.dateOfJoining = dateOfJoining;
+      if (dateOfBirth !== undefined) {
+        if (dateOfBirth && String(dateOfBirth).trim() !== "" && !isNaN(new Date(dateOfBirth).getTime())) {
+          updatedData.dateOfBirth = new Date(dateOfBirth);
+        } else {
+          updatedData.dateOfBirth = null;
+        }
+      }
+      if (dateOfJoining !== undefined) {
+        if (dateOfJoining && String(dateOfJoining).trim() !== "" && !isNaN(new Date(dateOfJoining).getTime())) {
+          updatedData.dateOfJoining = new Date(dateOfJoining);
+        } else {
+          updatedData.dateOfJoining = null;
+        }
+      }
       if (payroll !== undefined) updatedData.payroll = payroll;
       if (userType !== undefined) updatedData.userType = userType;
       if (skills !== undefined) updatedData.skills = skills;
@@ -520,7 +532,7 @@ module.exports = {
         });
       }
       console.error("Error updating user:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ status: 500, error: error.message || "Internal Server Error", message: error.message || "Failed to update user details" });
     }
   },
   updateOperatorSkillSet: async (req, res) => {

@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema({
   mobileNo: { type: String, unique: true, sparse: true },
   gender: { type: String, required: true },
   password: { type: String, required: true },
-  dateOfBirth: { type: Date, required: true },
+  dateOfBirth: { type: Date, default: null },
   dateOfJoining: { type: Date, default: null },
   payroll: { type: String, default: "" },
   userType: { type: String, required: true },
