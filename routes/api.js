@@ -341,6 +341,7 @@ router.get("/ccid-transfer/request", authController.authenticateToken, authContr
 router.get("/ccid-transfer/request/:id", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "read"), ccidTransferController.getRequestById);
 router.put("/ccid-transfer/request/:id/approve", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "update"), ccidTransferController.approveRequest);
 router.put("/ccid-transfer/request/:id/reject", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "update"), ccidTransferController.rejectRequest);
+router.get("/ccid-reassignment-log", authController.authenticateToken, authController.authorize(["CCID Transfer", "Transfer Requests"], "read"), deviceController.listCcidReassignmentLogs);
 
 router.get("/process/orderConfirmation/get", authController.authenticateToken, OrderConfirmationController.view); // Assuming view is the correct method name
 router.post('/process/orderConfirmation/create', authController.authenticateToken, OrderConfirmationController.create);

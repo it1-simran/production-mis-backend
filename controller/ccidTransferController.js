@@ -304,10 +304,14 @@ module.exports = {
         for (const device of sourceDevices) {
           const removedCcid = device.ccid;
           // customFields is a Mixed-type path - Mongoose only detects the change
-          // and persists it on save() if the path is reassigned a NEW top-level
-          // reference, so this shallow copy (not a full deep clone) is required,
-          // not just a nicety. Nested mutation below is fine to do in place.
-          const customFields = { ...(device.customFields || {}) };
+          // and persists it on save() if the reassigned value is deep-different
+          // from what it already had tracked. stripCcidValuesFromObject mutates
+          // nested sub-objects in place, so a SHALLOW copy shares those nested
+          // references with device.customFields itself - the mutation corrupts
+          // Mongoose's own "old value" snapshot before it can diff, so isModified
+          // comes back false and the change silently never persists. Must deep
+          // clone first so the nested objects being mutated are not shared.
+          const customFields = structuredClone(device.customFields || {});
           const customFieldsRemoved = stripCcidValuesFromObject(
             customFields,
             new Set([normalizeForCompare(removedCcid)]),
