@@ -2848,7 +2848,7 @@ module.exports = {
       };
 
       const devices = await deviceModel.find(query)
-        .select("_id serialNo imeiNo customFields modelName status currentStage processID productType flowVersion flowStartedAt")
+        .select("_id serialNo imeiNo ccid customFields modelName status currentStage processID productType flowVersion flowStartedAt")
         .lean();
 
       const matchingDevices = findDevicesByScanTokensStrict(devices, scanTokens);

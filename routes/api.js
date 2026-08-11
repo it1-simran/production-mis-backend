@@ -21,6 +21,7 @@ const connectDB = require('../config/db');
 const RoomPlan = require('../models/roomPlan');
 const reportController = require('../controller/reportController');
 const stickerController = require('../controller/stickerController');
+const stickerFormatMasterController = require('../controller/stickerFormatMasterController');
 const inventoryController = require('../controller/inventoryController');
 const inventory = require('../models/inventoryManagement');
 const productionManagerController = require('../controller/productionManagerController');
@@ -285,6 +286,13 @@ router.post('/sticker/fields/create', authController.authenticateToken, stickerC
 router.get('/sticker/fields/get', authController.authenticateToken, stickerController.getStickerField);
 router.delete('/sticker/fields/delete/:id', authController.authenticateToken, stickerController.deleteStickerField);
 router.post('/sticker/fields/delete/multiple', authController.authenticateToken, stickerController.deleteStickerFieldMultiple);
+
+// Sticker Format Master
+router.post('/sticker/format/create', authController.authenticateToken, authController.authorize("Sticker Management", "create"), stickerFormatMasterController.create);
+router.get('/sticker/format/list', authController.authenticateToken, authController.authorize("Sticker Management", "read"), stickerFormatMasterController.getAll);
+router.get('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "read"), stickerFormatMasterController.getById);
+router.put('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "update"), stickerFormatMasterController.update);
+router.delete('/sticker/format/:id', authController.authenticateToken, authController.authorize("Sticker Management", "delete"), stickerFormatMasterController.delete);
 router.post('/devices/createIMEI', authController.authenticateToken, deviceController.createIMEI);
 router.get('/devices/viewIMEI', authController.authenticateToken, deviceController.viewIMEI);
 router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, deviceController.deleteIMEI);

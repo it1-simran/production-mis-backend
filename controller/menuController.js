@@ -23,7 +23,11 @@ module.exports = {
         {
           icon: `<svg width="18px" height="19px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M9 16C9.85038 16.6303 10.8846 17 12 17C13.1154 17 14.1496 16.6303 15 16" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> <ellipse cx="15" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <ellipse cx="9" cy="10.5" rx="1" ry="1.5" fill="#ffffff"></ellipse> <path d="M15 22H12C7.28595 22 4.92893 22 3.46447 20.5355C2 19.0711 2 16.714 2 12C2 7.28595 2 4.92893 3.46447 3.46447C4.92893 2 7.28595 2 12 2C16.714 2 19.0711 2 20.5355 3.46447C21.5093 4.43821 21.8356 5.80655 21.9449 8M15 22C18.866 22 22 18.866 22 15M15 22C15 20.1387 15 19.2081 15.2447 18.4549C15.7393 16.9327 16.9327 15.7393 18.4549 15.2447C19.2081 15 20.1387 15 22 15M22 12V15" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> </g></svg>`,
           label: "Sticker Management",
-          route: "/sticker-management/view",
+          route: "#",
+          children: [
+            { label: "Sticker Fields", route: "/sticker-management/view" },
+            { label: "Sticker Format Master", route: "/sticker-management/formats" },
+          ],
         },
         {
           icon: `<svg fill="#ffffff" width="18px" height="19px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" data-name="Layer 1" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M10,17h1v1a1,1,0,0,0,2,0V17h1a1,1,0,0,0,0-2H13V14a1,1,0,0,0-2,0v1H10a1,1,0,0,0,0,2ZM19,6H17V5a3,3,0,0,0-3-3H10A3,3,0,0,0,7,5V6H5A3,3,0,0,0,2,9V19a3,3,0,0,0,3,3H19a3,3,0,0,0,3-3V9A3,3,0,0,0,19,6ZM9,5a1,1,0,0,1,1-1h4a1,1,0,0,1,1,1V6H9ZM20,19a1,1,0,0,1-1,1H5a1,1,0,0,1-1-1V12H20Zm0-9H4V9A1,1,0,0,1,5,8H19a1,1,0,0,1,1,1Z"></path></g></svg>`,
@@ -391,6 +395,29 @@ module.exports = {
               route: "/production-manager/ccid-reassignment-log",
             });
             changed = true;
+          }
+        }
+
+        // Auto-migration: Convert flat "Sticker Management" to parent with children
+        const stickerMenuIndex = doc.menus.findIndex(
+          (m) => String(m?.label || "").toLowerCase() === "sticker management",
+        );
+        if (stickerMenuIndex !== -1) {
+          const stickerMenu = doc.menus[stickerMenuIndex];
+          const isFlat = stickerMenu.route !== "#" || !Array.isArray(stickerMenu.children) || stickerMenu.children.length === 0;
+          const hasFormatChild = Array.isArray(stickerMenu.children) && stickerMenu.children.some((c) => c.route === "/sticker-management/formats");
+          if (isFlat || !hasFormatChild) {
+            doc.menus[stickerMenuIndex] = {
+              icon: stickerMenu.icon,
+              label: "Sticker Management",
+              route: "#",
+              children: [
+                { label: "Sticker Fields", route: "/sticker-management/view" },
+                { label: "Sticker Format Master", route: "/sticker-management/formats" },
+              ],
+            };
+            changed = true;
+            console.log("Auto-migrated: Converted Sticker Management to parent with children.");
           }
         }
 
