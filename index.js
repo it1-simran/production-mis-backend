@@ -7,8 +7,21 @@ const dotenv = require('dotenv');
 const morgan = require('morgan');
 const compression = require('compression');
 
+const fs = require('fs');
+
 const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
-dotenv.config({ path: path.join(__dirname, envFile) });
+const envPath = path.join(__dirname, envFile);
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath });
+} else {
+  dotenv.config();
+}
+if (!process.env.MONGODB_URI) {
+  const devEnvPath = path.join(__dirname, '.env.development');
+  if (fs.existsSync(devEnvPath)) {
+    dotenv.config({ path: devEnvPath });
+  }
+}
 
 // Contain unrelated async bugs to a single failed request instead of taking
 // down the whole process. Paired with the res.headersSent guards added to

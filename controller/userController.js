@@ -24,17 +24,26 @@ module.exports = {
   generateEmployeeCode: async (req, res) => {
     try {
       const year = new Date().getFullYear().toString().slice(-2);
-      const prefix = `JSD-${year}-`;
-      const Sequence = require("../models/Sequence");
+      const prefix = `JSD-${year}-O`;
       
-      let seq = await Sequence.findOneAndUpdate(
-        { name: `employeeCode_${year}` },
-        { $inc: { value: 1 } },
-        { new: true, upsert: true }
-      );
-      
-      const serial = String(seq.value).padStart(4, "0");
-      const newCode = `${prefix}${serial}`;
+      const userCount = await User.countDocuments();
+      let nextSerialNum = userCount + 1;
+      let serial = String(nextSerialNum).padStart(3, "0");
+      let newCode = `${prefix}${serial}`;
+
+      while (
+        await User.findOne({
+          employeeCode: {
+            $regex: `^${newCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+            $options: "i",
+          },
+        })
+      ) {
+        nextSerialNum++;
+        serial = String(nextSerialNum).padStart(3, "0");
+        newCode = `${prefix}${serial}`;
+      }
+
       return res.status(200).json({ status: 200, code: newCode, prefix, serial });
     } catch (error) {
       console.error("Error generating employee code:", error);
@@ -185,7 +194,7 @@ module.exports = {
       await User.collection.insertOne(userPayload);
 
       // Ensure sequence stays ahead if manually entered
-      const yearMatch = trimmedCode.match(/^JSD-(\d{2})-(\d+)$/i);
+      const yearMatch = trimmedCode.match(/^JSD-(\d{2})-(?:O-?)?(\d+)$/i);
       if (yearMatch) {
         const year = yearMatch[1];
         const num = parseInt(yearMatch[2], 10);
@@ -482,8 +491,20 @@ module.exports = {
       if (email !== undefined && String(email).trim()) updatedData.email = email;
       if (trimmedCode) updatedData.employeeCode = trimmedCode;
       if (gender !== undefined) updatedData.gender = gender;
-      if (dateOfBirth !== undefined) updatedData.dateOfBirth = dateOfBirth;
-      if (dateOfJoining !== undefined) updatedData.dateOfJoining = dateOfJoining;
+      if (dateOfBirth !== undefined) {
+        if (dateOfBirth && String(dateOfBirth).trim() !== "" && !isNaN(new Date(dateOfBirth).getTime())) {
+          updatedData.dateOfBirth = new Date(dateOfBirth);
+        } else {
+          updatedData.dateOfBirth = null;
+        }
+      }
+      if (dateOfJoining !== undefined) {
+        if (dateOfJoining && String(dateOfJoining).trim() !== "" && !isNaN(new Date(dateOfJoining).getTime())) {
+          updatedData.dateOfJoining = new Date(dateOfJoining);
+        } else {
+          updatedData.dateOfJoining = null;
+        }
+      }
       if (payroll !== undefined) updatedData.payroll = payroll;
       if (userType !== undefined) updatedData.userType = userType;
       if (skills !== undefined) updatedData.skills = skills;
@@ -520,7 +541,7 @@ module.exports = {
         });
       }
       console.error("Error updating user:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ status: 500, error: error.message || "Internal Server Error", message: error.message || "Failed to update user details" });
     }
   },
   updateOperatorSkillSet: async (req, res) => {
