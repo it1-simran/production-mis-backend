@@ -295,7 +295,9 @@ router.patch(
   deviceController.updateStageByDeviceId
 );
 router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_TASK, "update"), deviceController.updateStageBySerialNo);
-router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize(MODULE_KEYS.FIND_DEVICE, "read"), deviceController.searchByJigFields);
+// Also the core lookup every operator's jig session uses to find a device by its scanned
+// fields — not just the admin Find Device page — so VIEW_TASK must pass here too.
+router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize([MODULE_KEYS.FIND_DEVICE, MODULE_KEYS.VIEW_TASK], "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
 router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
@@ -480,7 +482,9 @@ router.put('/esim-make/update/:id', authController.authenticateToken, authContro
 router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "delete"), esimMakeController.delete);
 
 router.post('/esim-profile/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "create"), esimProfileController.create);
-router.get('/esim-profile/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_PROFILES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW], "read"), esimProfileController.view);
+// Also hit by the operator portal's jig ESIM Settings Validation flow (viewEsimProfiles()),
+// so VIEW_TASK must pass here too — see the analogous /esim-master/ccid/:ccid fix above.
+router.get('/esim-profile/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_PROFILES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.VIEW_TASK], "read"), esimProfileController.view);
 router.get('/esim-profile/view/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "read"), esimProfileController.esimProfileById);
 router.put('/esim-profile/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "update"), esimProfileController.update);
 router.delete('/esim-profile/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "delete"), esimProfileController.delete);
