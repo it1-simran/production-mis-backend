@@ -469,7 +469,10 @@ router.delete('/esim-master/delete/:id', authController.authenticateToken, authC
 router.post('/esim-master/bulk-delete', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_VIEW, "delete"), esimMasterController.bulkDelete);
 router.post('/esim-master/bulk-delete-by-ccid', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_VIEW, "delete"), esimMasterController.bulkDeleteByCcid);
 router.post('/esim-master/check-duplicates', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.ESIM_MASTER_BULK_UPLOAD], "read"), esimMasterController.checkDuplicates);
-router.get('/esim-master/ccid/:ccid', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_VIEW, "read"), esimMasterController.getByCcid);
+// Also used by the operator portal's jig ESIM Settings Validation step to look up
+// eSIM master data by CCID — not just the admin ESIM Master Data page — so any role
+// with VIEW_TASK (the operator task permission) must pass here too.
+router.get('/esim-master/ccid/:ccid', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.VIEW_TASK], "read"), esimMasterController.getByCcid);
 
 router.post('/esim-make/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "create"), esimMakeController.create);
 router.get('/esim-make/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_MAKES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW], "read"), esimMakeController.view);
