@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const UserRoles = require("../models/userRoles");
 const UserTypes = require("../models/userType");
+const { invalidateRoleCache } = require("./authController");
 console.log(">>> [DEBUG] UserTypes Model Loaded:", !!UserTypes, typeof UserTypes);
 const bcrypt = require("bcrypt");
 module.exports = {
@@ -23,6 +24,7 @@ module.exports = {
         updatedAt: new Date()
       });
       await newUserType.save();
+      invalidateRoleCache(roleName);
 
       return res.status(200).json({
         status: 200,
@@ -57,6 +59,7 @@ module.exports = {
       if (!userRoles) {
         return res.status(404).json({ message: "User Role not found" });
       }
+      invalidateRoleCache(userRoles.name);
       res
         .status(200)
         .json({ message: "User Role deleted successfully", userRoles });
@@ -84,6 +87,7 @@ module.exports = {
       if (result.deletedCount === 0) {
         return res.status(404).json({ message: "No Users found to delete" });
       }
+      invalidateRoleCache(); // bulk delete — clear everything rather than looking up each deleted role's name
       return res.status(200).json({
         message: `${result.deletedCount} roles(s) deleted successfully`,
       });
@@ -138,6 +142,7 @@ module.exports = {
       if (!updatedUserType) {
         return res.status(404).json({ message: "Role not found" });
       }
+      invalidateRoleCache(updatedUserType.name);
 
       return res.status(200).json({
         status: 200,
