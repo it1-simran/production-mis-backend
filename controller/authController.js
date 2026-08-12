@@ -24,42 +24,26 @@ function normalizeUserTypeKey(userType) {
 }
 
 /**
- * Short-TTL in-memory cache for role documents, keyed by normalized userType.
- * `authorize()` and its siblings previously ran a fresh `UserTypes.findOne`
- * (regex match, uncached) on EVERY gated request — including endpoints
- * polled every few seconds by the live floor UI (operator-work session
- * status, idle sync). This app has documented history of CPU/DB load issues
- * from exactly this class of polling endpoint, so re-querying the role on
- * every poll tick is a real, avoidable cost.
- *
- * TTL is short (30s) rather than infinite: role permissions can be changed
- * live from the Configure Permission page and should take effect promptly.
- * `invalidateRoleCache()` is also called directly from userRolesController's
- * create/update/delete so a saved permission change is reflected immediately
- * rather than waiting out the TTL.
+ * REVERTED: an in-memory, per-process TTL cache used to live here to cut
+ * down on repeated `UserTypes.findOne` calls on polling endpoints. Removed
+ * because this backend can run as more than one Node process (PM2 cluster
+ * mode / multiple instances behind a load balancer) — each process has its
+ * own separate copy of an in-memory Map, so `invalidateRoleCache()` only
+ * ever cleared the cache on whichever single process handled the save
+ * request. Any other process kept serving stale permissions for up to the
+ * TTL window after an admin change, which is exactly the "admin enabled a
+ * permission but the app still shows the old one" bug this caused in
+ * production. Correctness matters more than the modest per-request latency
+ * saved here — a proper fix (shared cache invalidation across processes, or
+ * caching at a layer that's actually process-safe) can be revisited later
+ * if the polling load becomes a real problem again.
  */
-const ROLE_CACHE_TTL_MS = 30_000;
-const roleCache = new Map(); // normalizedUserType -> { role, expiresAt }
-
 async function getCachedRoleForUserType(userType) {
-  const key = normalizeUserTypeKey(userType);
-  const cached = roleCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.role;
-  }
-  const role = await UserTypes.findOne({ name: new RegExp(`^${userType}$`, "i") });
-  roleCache.set(key, { role, expiresAt: Date.now() + ROLE_CACHE_TTL_MS });
-  return role;
+  return UserTypes.findOne({ name: new RegExp(`^${userType}$`, "i") });
 }
 
-/** Call after any create/update/delete of a role's permissions so the change is visible immediately, not after the TTL. */
-function invalidateRoleCache(roleName) {
-  if (roleName) {
-    roleCache.delete(normalizeUserTypeKey(roleName));
-  } else {
-    roleCache.clear();
-  }
-}
+/** No-op now that the cache above is gone — kept so existing call sites (userRolesController) don't need to change. */
+function invalidateRoleCache() {}
 
 function getPerm(permissions, moduleKey) {
   if (!permissions) return null;
