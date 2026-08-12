@@ -404,6 +404,11 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Insufficient kit stock" });
       }
 
+      const effectiveIapNo = req?.body?.iapNo || process?.iapNo;
+      if (!effectiveIapNo || !String(effectiveIapNo).trim()) {
+        return res.status(400).json({ status: 400, message: "IAP NO. is required" });
+      }
+
       const packagingData = await getPackagingDataByProductId(process.selectedProduct);
       const maxCapacity = toPositiveInt(packagingData?.maxCapacity);
       const nextIssuedKits = currentIssuedKits + kitQty;
@@ -424,10 +429,10 @@ module.exports = {
         updatedAt: new Date(),
       };
 
-      if (req?.body?.iapNo) {
-        updatedData.iapNo = req.body.iapNo;
+      if (effectiveIapNo) {
+        updatedData.iapNo = effectiveIapNo;
         const AssignKitsToLineModel = require("../models/assignKitsToLine");
-        await AssignKitsToLineModel.updateMany({ processId: id }, { $set: { iapNo: req.body.iapNo } });
+        await AssignKitsToLineModel.updateMany({ processId: id }, { $set: { iapNo: effectiveIapNo } });
       }
 
       await InventoryModel.findByIdAndUpdate(Inventory._id, updateIssueKit);

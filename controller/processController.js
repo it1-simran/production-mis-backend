@@ -1279,6 +1279,11 @@ module.exports = {
         });
       }
 
+      const effectiveIapNo = data.iapNo || existingEntry?.iapNo || process?.iapNo;
+      if (!effectiveIapNo || !String(effectiveIapNo).trim()) {
+        return res.status(400).json({ status: 400, message: "IAP NO. is required" });
+      }
+
       const updateData = {
         planId: data.planId,
         processId: data.processId,
@@ -1286,16 +1291,12 @@ module.exports = {
         seatDetails: mergedSeats,
         issuedKitsStatus: data.issuedKitsStatus,
         status: "ASSIGN_TO_OPERATOR",
+        iapNo: effectiveIapNo,
       };
-      if (data.iapNo) {
-        updateData.iapNo = data.iapNo;
-      }
       let processData = {
         status: req.body.processStatus,
+        iapNo: effectiveIapNo,
       };
-      if (data.iapNo) {
-        processData.iapNo = data.iapNo;
-      }
       const options = {
         new: true,
         upsert: true,
