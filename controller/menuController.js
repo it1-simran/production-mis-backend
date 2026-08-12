@@ -337,7 +337,6 @@ module.exports = {
           "transfer requests": "kit_management__transfer_requests",
           "esim removal requests": "esim_removal__requests",
           "ccid transfer requests": "esim_removal__requests", // pre-rename label, same module as ESIM Removal Requests
-          "gate keeper portal": "gate_keeper_portal",
           "ng issue master": "ng_devices__issue_master",
           "carton management": "carton_management",
           "dispatch management": "dispatch_management",

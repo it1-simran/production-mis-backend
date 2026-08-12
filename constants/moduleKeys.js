@@ -99,7 +99,6 @@ const MODULE_KEYS = {
   // authenticateToken-only), but still need real keys so the Menu doc
   // doesn't carry permanent `legacy.*` fallback keys for real modules.
   // (NG_ISSUE_MASTER itself is defined above, nested under ng_devices.)
-  GATE_KEEPER_PORTAL: "gate_keeper_portal",
   CARTON_MANAGEMENT: "carton_management",
   DISPATCH_MANAGEMENT: "dispatch_management",
 

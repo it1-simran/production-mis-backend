@@ -85,7 +85,6 @@ module.exports = {
   "reports__ng_devices": ["NG Devices Report"],
   "reports__ccid_reassignment_log": ["CCID Reassignment Log"],
   "kit_management__transfer_requests": ["Transfer Requests"],
-  "gate_keeper_portal": ["Gate Keeper Portal"],
   "ng_devices__issue_master": ["NG Issue Master"],
   "ng_devices__view": ["NG Devices"],
   "carton_management": ["Carton Management"],
