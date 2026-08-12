@@ -87,6 +87,7 @@ module.exports = {
             kitRecievedConfirmationStatus: "$assignKitsToLine.status",
             issuedKitsStatus: "$assignKitsToLine.issuedKitsStatus",
             assignedKitsToOperator: "$assignKitsToLine.issuedKits",
+            iapNo: { $ifNull: ["$assignKitsToLine.iapNo", "$iapNo", ""] },
           },
         },
       ];

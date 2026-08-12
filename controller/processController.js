@@ -1279,6 +1279,11 @@ module.exports = {
         });
       }
 
+      const effectiveIapNo = data.iapNo || existingEntry?.iapNo || process?.iapNo;
+      if (!effectiveIapNo || !String(effectiveIapNo).trim()) {
+        return res.status(400).json({ status: 400, message: "IAP NO. is required" });
+      }
+
       const updateData = {
         planId: data.planId,
         processId: data.processId,
@@ -1286,9 +1291,11 @@ module.exports = {
         seatDetails: mergedSeats,
         issuedKitsStatus: data.issuedKitsStatus,
         status: "ASSIGN_TO_OPERATOR",
+        iapNo: effectiveIapNo,
       };
       let processData = {
         status: req.body.processStatus,
+        iapNo: effectiveIapNo,
       };
       const options = {
         new: true,
@@ -1327,6 +1334,31 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  generateIapNo: async (req, res) => {
+    try {
+      const Sequence = require("../models/Sequence");
+      const currentYear = new Date().getFullYear();
+      const sequenceName = `iapNo_${currentYear}`;
+
+      const seqDoc = await Sequence.findOneAndUpdate(
+        { name: sequenceName },
+        { $inc: { value: 1 } },
+        { new: true, upsert: true }
+      );
+
+      const paddedVal = String(seqDoc.value).padStart(4, "0");
+      const iapNo = `IAP-${currentYear}-${paddedVal}`;
+
+      return res.status(200).json({
+        status: 200,
+        iapNo,
+        message: "IAP number generated successfully",
+      });
+    } catch (error) {
+      console.error("Error in generateIapNo:", error);
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   updateStatusRecievedKit: async (req, res) => {
     try {
       let id = req.params.id;
@@ -1334,9 +1366,15 @@ module.exports = {
         status: req?.body?.status,
         issuedKitsStatus: req?.body?.issuedKitsStatus,
       };
+      if (req?.body?.iapNo) {
+        data.iapNo = req.body.iapNo;
+      }
       let processData = {
         status: req.body.processStatus,
       };
+      if (req?.body?.iapNo) {
+        processData.iapNo = req.body.iapNo;
+      }
       const updateStatus = await AssignKitsToLineModel.findByIdAndUpdate(
         id,
         data,

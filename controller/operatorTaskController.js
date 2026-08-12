@@ -1807,6 +1807,7 @@ module.exports = {
             issuedKitsStatus: "$assignKitsToLine.issuedKitsStatus",
             assignedKitsToOperator: "$assignKitsToLine.issuedKits",
             requiredKits: "$processDetails.issuedKits",
+            iapNo: { $ifNull: ["$assignKitsToLine.iapNo", "$processDetails.iapNo", "$iapNo", ""] },
           },
         },
         { $sort: { _id: -1 } },
