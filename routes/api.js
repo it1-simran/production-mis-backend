@@ -136,6 +136,7 @@ router.post('/shift/delete/multiple', authController.authenticateToken, shiftCon
 router.get('/shift/get/:id', authController.authenticateToken, shiftController.getShiftByID);
 router.put('/shift/update/:id', authController.authenticateToken, shiftController.updateshift);
 router.post('/process/create', authController.authenticateToken, authController.authorize("View Process", "create"), processController.create);
+router.get('/process/generate-iap-no', authController.authenticateToken, processController.generateIapNo);
 router.get('/process/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), processController.view);
 router.get(
   '/getProcessesByProductId/:id',

@@ -144,11 +144,21 @@ module.exports = {
         },
         { $unwind: "$productDetails" },
         {
+          $lookup: {
+            from: "assignkitstolines",
+            localField: "_id",
+            foreignField: "processId",
+            as: "assignKitsToLine",
+          },
+        },
+        { $unwind: { path: "$assignKitsToLine", preserveNullAndEmptyArrays: true } },
+        {
           $project: {
             _id: 1,
             name: 1,
             processID: 1,
             orderConfirmationNo: 1,
+            iapNo: { $ifNull: ["$assignKitsToLine.iapNo", "$iapNo", ""] },
             processQuantity: "$quantity",
             inventoryQuantity: { $ifNull: ["$inventoryProcess.quantity", 0] },
             cartonQuantity: { $ifNull: ["$inventoryProcess.cartonQuantity", 0] },
@@ -413,6 +423,12 @@ module.exports = {
         status: req?.body?.status,
         updatedAt: new Date(),
       };
+
+      if (req?.body?.iapNo) {
+        updatedData.iapNo = req.body.iapNo;
+        const AssignKitsToLineModel = require("../models/assignKitsToLine");
+        await AssignKitsToLineModel.updateMany({ processId: id }, { $set: { iapNo: req.body.iapNo } });
+      }
 
       await InventoryModel.findByIdAndUpdate(Inventory._id, updateIssueKit);
       const updatedProcess = await ProcessModel.findByIdAndUpdate(id, updatedData, {
