@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Menu = require("../models/menu");
+const MODULE_DEPENDENCIES = require("../constants/moduleDependencies");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -833,10 +834,11 @@ module.exports = {
         status: 200,
         status_msg: "Menus Fetched Sucessfully!!",
         getMenu,
+        moduleDependencies: MODULE_DEPENDENCIES,
       });
     } catch (error) {
       console.error("Error fetching Menu details:", error);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: "MENU_VIEW_ERROR", 
         details: error.message 
       });
