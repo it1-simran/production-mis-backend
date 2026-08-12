@@ -24,11 +24,11 @@ module.exports = {
   generateEmployeeCode: async (req, res) => {
     try {
       const year = new Date().getFullYear().toString().slice(-2);
-      const prefix = `JSD-${year}-O`;
+      const prefix = `JSD-${year}-`;
       
       const userCount = await User.countDocuments();
       let nextSerialNum = userCount + 1;
-      let serial = String(nextSerialNum).padStart(3, "0");
+      let serial = `O${String(nextSerialNum).padStart(3, "0")}`;
       let newCode = `${prefix}${serial}`;
 
       while (
@@ -40,7 +40,7 @@ module.exports = {
         })
       ) {
         nextSerialNum++;
-        serial = String(nextSerialNum).padStart(3, "0");
+        serial = `O${String(nextSerialNum).padStart(3, "0")}`;
         newCode = `${prefix}${serial}`;
       }
 
