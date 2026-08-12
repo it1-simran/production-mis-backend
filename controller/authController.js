@@ -15,20 +15,77 @@ const userService = new UserService();
 const User = require("../models/User");
 const UserTypes = require("../models/userType");
 const { NG_PORTAL_DEVICE_WRITE_MODULE_LABELS } = require("../constants/authorizationModules");
+const MODULE_KEYS = require("../constants/moduleKeys");
+const LEGACY_MODULE_LABELS = require("../constants/legacyModuleLabels");
+const { ADMIN_ONLY_BYPASS, DEVICE_WRITE_BYPASS } = require("../constants/permissionBypass");
 
 function normalizeUserTypeKey(userType) {
   return String(userType || "").toLowerCase().replace(/[\s-]+/g, "_");
 }
+
+/**
+ * REVERTED: an in-memory, per-process TTL cache used to live here to cut
+ * down on repeated `UserTypes.findOne` calls on polling endpoints. Removed
+ * because this backend can run as more than one Node process (PM2 cluster
+ * mode / multiple instances behind a load balancer) — each process has its
+ * own separate copy of an in-memory Map, so `invalidateRoleCache()` only
+ * ever cleared the cache on whichever single process handled the save
+ * request. Any other process kept serving stale permissions for up to the
+ * TTL window after an admin change, which is exactly the "admin enabled a
+ * permission but the app still shows the old one" bug this caused in
+ * production. Correctness matters more than the modest per-request latency
+ * saved here — a proper fix (shared cache invalidation across processes, or
+ * caching at a layer that's actually process-safe) can be revisited later
+ * if the polling load becomes a real problem again.
+ */
+async function getCachedRoleForUserType(userType) {
+  return UserTypes.findOne({ name: new RegExp(`^${userType}$`, "i") });
+}
+
+/** No-op now that the cache above is gone — kept so existing call sites (userRolesController) don't need to change. */
+function invalidateRoleCache() {}
 
 function getPerm(permissions, moduleKey) {
   if (!permissions) return null;
   return permissions instanceof Map ? permissions.get(moduleKey) : permissions[moduleKey];
 }
 
-function hasModuleLabelAction(permissions, moduleLabel, action) {
-  const key = moduleLabel.toLowerCase().replace(/[\s-]+/g, "_");
-  const p = getPerm(permissions, key);
-  return Boolean(p && p[action] === true);
+/**
+ * Checks a role's permission map for `action` on `moduleKey`. Looks up the
+ * stable moduleKey directly first. A parent-level grant (namespace separator
+ * is "__" — see constants/moduleKeys.js) always cascades to its children on
+ * top of that, by design — mirrors the frontend's resolveStoredModulePermissions.ts,
+ * keep both in sync.
+ *
+ * Legacy derived-label keys (constants/legacyModuleLabels.js) are consulted
+ * ONLY when the role has no explicit entry at all for this moduleKey. This
+ * matters: once the Configure Permission editor has written a real value for
+ * a moduleKey — even an explicit "false" to intentionally downgrade a grant
+ * — that value is authoritative. Falling back to a legacy key whenever the
+ * requested action happened to be false would mean a role that was ever
+ * granted full access under the old key format could never be downgraded
+ * through the new editor: unchecking the new box would appear to work but
+ * the stale legacy grant (never cleared, since migration is additive-only)
+ * would keep silently winning.
+ */
+function hasModuleLabelAction(permissions, moduleKey, action) {
+  const direct = getPerm(permissions, moduleKey);
+  if (direct && direct[action] === true) return true;
+
+  if (moduleKey.includes("__")) {
+    const parentKey = moduleKey.split("__")[0];
+    const parentPerm = getPerm(permissions, parentKey);
+    if (parentPerm && parentPerm[action] === true) return true;
+  }
+
+  if (direct) return false; // explicit entry exists for this moduleKey — authoritative, no legacy fallback
+
+  const legacyLabels = LEGACY_MODULE_LABELS[moduleKey] || [moduleKey];
+  return legacyLabels.some((label) => {
+    const legacyKey = String(label || "").toLowerCase().replace(/[\s-]+/g, "_");
+    const p = getPerm(permissions, legacyKey);
+    return Boolean(p && p[action] === true);
+  });
 }
 
 function hasAnyNgPortalWriteModuleUpdate(permissions) {
@@ -43,19 +100,11 @@ function hasAnyNgPortalWriteModuleUpdate(permissions) {
 async function evaluateNgPortalDeviceWrite(user) {
   const checkedModules = ["View Task", ...NG_PORTAL_DEVICE_WRITE_MODULE_LABELS, "NG Devices(read)"];
   const t = normalizeUserTypeKey(user.userType);
-  const fullAccess = new Set([
-    "admin",
-    "production_manager",
-    "store_manager",
-    "store_manger",
-    "store",
-    "operator",
-  ]);
   const portalTypes = new Set(["trc", "qc", "quality_control"]);
-  if (fullAccess.has(t) || portalTypes.has(t)) {
+  if (DEVICE_WRITE_BYPASS.has(t) || portalTypes.has(t)) {
     return { allowed: true, checkedModules };
   }
-  const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+  const role = await getCachedRoleForUserType(user.userType);
   if (!role) {
     return { allowed: false, checkedModules, reason: "role_not_found" };
   }
@@ -63,7 +112,7 @@ async function evaluateNgPortalDeviceWrite(user) {
   if (hasAnyNgPortalWriteModuleUpdate(permissions)) {
     return { allowed: true, checkedModules };
   }
-  const ngDevices = getPerm(permissions, "ng_devices");
+  const ngDevices = getPerm(permissions, MODULE_KEYS.NG_DEVICES);
   if (ngDevices && ngDevices.read === true) {
     return { allowed: true, checkedModules };
   }
@@ -82,6 +131,7 @@ const PORTAL_PATCH_ALLOWED_BODY_KEYS = new Set([
 ]);
 
 module.exports = {
+  invalidateRoleCache,
   login: async (req, res) => {
     try {
       const result = await userService.authenticate(req.body);
@@ -133,6 +183,31 @@ module.exports = {
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
     }
   },
+  /**
+   * For system-structural operations (e.g. recreating the menu document)
+   * that should never be grantable to any role via the permission editor —
+   * unlike authorize(), there is no moduleKey a non-admin could ever be
+   * given to pass this.
+   */
+  authorizeAdminOnly: async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Unauthorized - No user identity" });
+      }
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      const normalizedUserType = normalizeUserTypeKey(user.userType);
+      if (ADMIN_ONLY_BYPASS.has(normalizedUserType)) {
+        return next();
+      }
+      return res.status(403).json({ error: "Forbidden", message: "This action requires an administrator account." });
+    } catch (error) {
+      console.error(">>> [AUTH] authorizeAdminOnly error:", error);
+      return res.status(500).json({ error: "Internal Server Authorization Error" });
+    }
+  },
   authorize: (moduleNames, action) => {
     const modules = Array.isArray(moduleNames) ? moduleNames : [moduleNames];
     return async (req, res, next) => {
@@ -152,15 +227,12 @@ module.exports = {
           `>>> [AUTH_TRACE] Authorizing user: ${user.email}, role: "${user.userType}", normalized: "${normalizedUserType}"`
         );
 
-        if (
-          normalizedUserType === "admin" ||
-          normalizedUserType === "administrator"
-        ) {
+        if (ADMIN_ONLY_BYPASS.has(normalizedUserType)) {
           logToFile(`>>> [AUTH_TRACE] Full access bypass granted for role: ${normalizedUserType}`);
           return next();
         }
 
-        const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+        const role = await getCachedRoleForUserType(user.userType);
         if (!role) {
           logToFile(`>>> [AUTH] Role ${user.userType} not found for user ${user.email}`);
           return res.status(403).json({ error: `Forbidden - Role '${user.userType}' not configured` });
@@ -168,11 +240,9 @@ module.exports = {
 
         const permissions = role.permissions || new Map();
 
-        const hasPermission = modules.some((moduleName) => {
-          const moduleKey = moduleName.toLowerCase().replace(/[\s-]+/g, "_");
-          const permsObj = getPerm(permissions, moduleKey);
-          return permsObj && permsObj[action] === true;
-        });
+        const hasPermission = modules.some((moduleKey) =>
+          hasModuleLabelAction(permissions, moduleKey, action)
+        );
 
         if (!hasPermission) {
           logToFile(
@@ -211,21 +281,18 @@ module.exports = {
       }
 
       const normalizedUserType = normalizeUserTypeKey(user.userType);
-      if (
-        normalizedUserType === "admin" ||
-        normalizedUserType === "administrator"
-      ) {
+      if (ADMIN_ONLY_BYPASS.has(normalizedUserType)) {
         return next();
       }
 
-      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      const role = await getCachedRoleForUserType(user.userType);
       if (!role) {
         return res.status(403).json({ error: `Forbidden - Role '${user.userType}' not configured` });
       }
 
       const permissions = role.permissions || new Map();
-      const hasProcessUpdate = hasModuleLabelAction(permissions, "View Process", "update");
-      const hasProductUpdate = hasModuleLabelAction(permissions, "View Product", "update");
+      const hasProcessUpdate = hasModuleLabelAction(permissions, MODULE_KEYS.VIEW_PROCESS, "update");
+      const hasProductUpdate = hasModuleLabelAction(permissions, MODULE_KEYS.VIEW_PRODUCT, "update");
       const isCloningRequest = String(req?.body?.isCloning || "").toLowerCase() === "true";
 
       if (hasProcessUpdate || (isCloningRequest && hasProductUpdate)) {
@@ -292,19 +359,11 @@ module.exports = {
         return res.status(401).json({ message: "User not found" });
       }
       const normalizedUserType = normalizeUserTypeKey(user.userType);
-      const unrestrictedTypes = new Set([
-        "admin",
-        "production_manager",
-        "store_manager",
-        "store_manger",
-        "store",
-        "operator",
-      ]);
-      if (unrestrictedTypes.has(normalizedUserType)) {
+      if (DEVICE_WRITE_BYPASS.has(normalizedUserType)) {
         return next();
       }
 
-      const role = await UserTypes.findOne({ name: new RegExp(`^${user.userType}$`, "i") });
+      const role = await getCachedRoleForUserType(user.userType);
       if (!role) {
         return res.status(403).json({
           error: "Forbidden",
@@ -313,7 +372,7 @@ module.exports = {
         });
       }
       const permissions = role.permissions || new Map();
-      if (hasModuleLabelAction(permissions, "View Task", "update")) {
+      if (hasModuleLabelAction(permissions, MODULE_KEYS.VIEW_TASK, "update")) {
         return next();
       }
 

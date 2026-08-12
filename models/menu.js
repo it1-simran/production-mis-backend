@@ -6,11 +6,13 @@ const menuSchema = new mongoose.Schema({
       icon: { type: String, required: true },
       label: { type: String, required: true },
       route: { type: String, required: true },
+      moduleKey: { type: String, required: true },
       children: {
         type: [
           {
             label: { type: String, required: true },
             route: { type: String, required: true },
+            moduleKey: { type: String, required: true },
           },
         ],
         default: [],
