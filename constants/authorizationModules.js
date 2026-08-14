@@ -23,6 +23,10 @@ const PROCESS_AND_PLANNING_READ_MODULES = [
   MODULE_KEYS.NG_DEVICES_VIEW,
   // Operator Assignment page's process dropdown uses this same read path too.
   MODULE_KEYS.OPERATOR_ASSIGNMENT,
+  // CCID Transfer / CCID Transfer Requests pages' process dropdown/list uses
+  // this same read path too.
+  MODULE_KEYS.ESIM_REMOVAL,
+  MODULE_KEYS.ESIM_REMOVAL_REQUESTS,
 ];
 
 /**
@@ -39,6 +43,9 @@ const DEVICE_READ_MODULE_LABELS = [
   MODULE_KEYS.NG_DEVICES,
   MODULE_KEYS.NG_DEVICES_VIEW,
   MODULE_KEYS.NG_DEVICES_REPORT,
+  // FG Store Management page opens devices from its carton cards via this
+  // same read path too.
+  MODULE_KEYS.FG_TO_STORE,
 ];
 
 /** RBAC labels for NG portal write flows (OR semantics with `authorize(modules, "update")`). */

@@ -66,8 +66,12 @@ router.use((req, res, next) => {
 });
 
 router.get('/items', authController.getItems);
-router.get('/product/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.PRODUCT_CATEGORY], "read"), productController.view);
-router.get('/product/get/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "read"), productController.getProductByID);
+// Also the product-dropdown lookup on the Add/Edit Process pages (getAllProduct
+// -> viewProduct), which gate themselves on VIEW_PROCESS/ADD_PROCESS, not the
+// admin Product Management module — so those keys must pass here too.
+router.get('/product/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.ADD_PROCESS], "read"), productController.view);
+// Also the product-detail lookup on the Planning & Scheduling add/edit/view pages.
+router.get('/product/get/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), productController.getProductByID);
 router.get('/get-user-details', authController.authenticateToken, userController.getUserById);
 router.delete('/product/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "delete"), productController.delete);
 router.post('/product/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "delete"), productController.deleteMultiple);
@@ -80,7 +84,8 @@ router.put('/product/activate/:id', authController.authenticateToken, authContro
 
 // Product Category Routes
 router.post('/product-category/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "create"), productCategoryController.create);
-router.get('/product-category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PRODUCT], "read"), productCategoryController.view);
+// Also the product-category dropdown on the Kit Transfer page.
+router.get('/product-category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.KIT_TRANSFER], "read"), productCategoryController.view);
 router.delete('/product-category/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.delete);
 router.post('/product-category/delete-multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.deleteMultiple);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
@@ -89,7 +94,8 @@ router.get('/protected', authController.authenticateToken, authController.getPro
 router.post('/jig/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "create"), jigController.createOrUpdate);
 router.post('/jig/category/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_CATEGORIES, "create"), jigController.createOrUpdateJigCategory);
 router.get('/jig/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "read"), jigController.view);
-router.get('/jig/category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.JIG_CATEGORIES, MODULE_KEYS.JIG_VIEW], "read"), jigController.viewCategory);
+// Also the jig-category dropdown on the Planning & Scheduling pages.
+router.get('/jig/category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.JIG_CATEGORIES, MODULE_KEYS.JIG_VIEW, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), jigController.viewCategory);
 router.delete('/jig/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "delete"), jigController.delete);
 router.delete('/jig/category/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_CATEGORIES, "delete"), jigController.deleteCategory);
 router.post('/jig/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "delete"), jigController.deleteJigMultiple);
@@ -97,7 +103,8 @@ router.post('/jig/categories/delete/multiple', authController.authenticateToken,
 router.get(`/fetchJigsById/:id`, authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "read"), jigController.fetchJigsById);
 router.get(`/fetchJigByJigId/:id`, authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "read"), jigController.fetchJigByJigId);
 router.post('/room-plan/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "create"), roomPlanController.create);
-router.get('/room-plan/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "read"), roomPlanController.view);
+// Also the room dropdown on the Planning & Scheduling pages.
+router.get('/room-plan/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_ROOMS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), roomPlanController.view);
 router.delete('/room-plan/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "delete"), roomPlanController.deleteRoomPlan);
 router.post('/room-plan/deleteRoomPlan', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "delete"), roomPlanController.deleteMultipleRoomPlan);
 router.get('/room-plan/getRoomPlanByID/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_ROOMS, MODULE_KEYS.OPERATOR_ASSIGNMENT], "read"), roomPlanController.getRoomPlanByID)
@@ -106,7 +113,8 @@ router.get('/user/generate-code', authController.authenticateToken, userControll
 router.post('/user/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "create"), userController.createUser);
 router.post('/user/bulk-create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "create"), userController.bulkCreateUsers);
 router.post('/user/check-duplicates', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "read"), userController.checkUserDuplicates);
-router.get('/user/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "read"), userController.getUsers);
+// Also the user list on the Planning & Scheduling view page.
+router.get('/user/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_USER, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), userController.getUsers);
 router.get('/user/operator-dashboard-stats', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "read"), userController.getOperatorDashboardStats);
 router.put('/user/deboard/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "update"), userController.deboardOperator);
 router.delete('/user/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "delete"), userController.deleteUser);
@@ -131,7 +139,8 @@ router.get('/user-type/getPermissionByType', authController.authenticateToken, u
 router.post('/menu/create', authController.authenticateToken, authController.authorizeAdminOnly, menuController.create);
 router.get('/menu/get', authController.authenticateToken, menuController.view);
 router.post('/shift/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "create"), shiftController.create);
-router.get('/shift/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "read"), shiftController.view);
+// Also the shift dropdown on the Planning & Scheduling pages.
+router.get('/shift/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_SHIFTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), shiftController.view);
 router.delete('/shift/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "delete"), shiftController.delete);
 router.post('/shift/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "delete"), shiftController.deleteUserRoleMultiple);
 router.get('/shift/get/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "read"), shiftController.getShiftByID);
@@ -159,7 +168,8 @@ router.get('/planingAndScheduling/testing-analytics/:id', authController.authent
 router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getProcessInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
 router.put('/planingAndScheduling/update/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), planningAndSchedulingController.update);
-router.get('/holiday/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.HOLIDAY_MANAGEMENT, "read"), holidayController.view);
+// Also the holiday calendar on the Planning & Scheduling add/edit/view pages.
+router.get('/holiday/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.HOLIDAY_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), holidayController.view);
 router.post('/holiday/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.HOLIDAY_MANAGEMENT, "create"), holidayController.create);
 router.delete('/holiday/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.HOLIDAY_MANAGEMENT, "delete"), holidayController.delete);
 router.post('/holiday/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.HOLIDAY_MANAGEMENT, "delete"), holidayController.deleteHolidayMultiple);
@@ -276,19 +286,27 @@ router.get(
 );
 router.get('/device/getLastEntryBasedOnPrefixAndSuffix', authController.authenticateToken, deviceController.getLastEntryBasedOnPrefixAndSuffix);
 router.get('/device/get/:id', authController.authenticateToken, authController.authorize(DEVICE_READ_MODULE_LABELS, "read"), deviceController.getDeviceById);
-router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "read"), deviceController.getDeviceByProductId);
+// Also the device-by-product lookup on the Planning & Scheduling view page.
+router.get('/devices/devicesByProductID/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), deviceController.getDeviceByProductId);
 router.get('/devices/countByProcessId/:processId', authController.authenticateToken, deviceController.getDeviceCountByProcessId);
-router.get('/devices/by-process/:processId', authController.authenticateToken, authController.authorize([MODULE_KEYS.KIT_TRANSFER, MODULE_KEYS.ESIM_REMOVAL, MODULE_KEYS.ESIM_REMOVAL_REQUESTS, MODULE_KEYS.TRANSFER_REQUESTS, MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.STORE_PORTAL, MODULE_KEYS.CARTON_MANAGEMENT], "read"), deviceController.getDevicesByProcessId);
+router.get('/devices/by-process/:processId', authController.authenticateToken, authController.authorize([MODULE_KEYS.KIT_TRANSFER, MODULE_KEYS.ESIM_REMOVAL, MODULE_KEYS.ESIM_REMOVAL_REQUESTS, MODULE_KEYS.TRANSFER_REQUESTS, MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.STORE_PORTAL, MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), deviceController.getDevicesByProcessId);
 router.get('/ng-devices/queue', authController.authenticateToken, authController.authorize([MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW], "read"), deviceController.getNgPortalQueue);
 router.get('/ng-devices/process/:processId', authController.authenticateToken, authController.authorize([MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW], "read"), deviceController.getNGDevicesByProcessId);
-router.post('/devices/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.FIND_DEVICE, "create"), deviceController.create);
-router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_TASK, "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
+// Also the actual save action behind both "Add Multiple Devices"
+// (device/addDevices) and "Generate Serials" (device/generate-serials), both
+// of which gate their own page on ADD_MULTIPLE_DEVICES — so that key must
+// pass here too, or a role granted exactly what those pages ask for still
+// 403s on save.
+router.post('/devices/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.FIND_DEVICE, MODULE_KEYS.ADD_MULTIPLE_DEVICES], "create"), deviceController.create);
+// Also the NG Devices detail page's "Assign to TRC" audit-trail write.
+router.post('/deviceRecord/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_TASK, MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW], "create"), createRequestTimeoutMiddleware(15000), submitDeduplicationMiddleware, deviceController.createDeviceTestEntry);
 router.post('/device/attempts/register', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_TASK, "create"), deviceController.registerDeviceAttempt);
 router.post('/device/attempts/log-retry', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_TASK, "create"), deviceController.logDeviceRetryAttempt);
 router.get('/getOverallDeviceTestEntry', authController.authenticateToken, authController.authorize([MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW], "read"), deviceController.getOverallDeviceTestEntry);
 router.get('/getDeviceTestEntryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestEntryByOperatorId);
 router.get('/getDeviceTestHistoryByOperatorId/:id', authController.authenticateToken, deviceController.getDeviceTestHistoryByOperatorId);
-router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, authController.authorize([MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW, MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.STORE_PORTAL], "read"), deviceController.getDeviceTestHistoryByDeviceId);
+// Also the FG Store Management page's carton-card device-history lookup.
+router.get('/deviceTestHistoryByDeviceId/:deviceId', authController.authenticateToken, authController.authorize([MODULE_KEYS.NG_DEVICES, MODULE_KEYS.NG_DEVICES_VIEW, MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.STORE_PORTAL, MODULE_KEYS.FG_TO_STORE], "read"), deviceController.getDeviceTestHistoryByDeviceId);
 router.patch(
   '/updateStageByDeviceId/:deviceId',
   authController.authenticateToken,
@@ -343,15 +361,18 @@ router.get('/analytics/production/completion-trends', authController.authenticat
 router.get('/analytics/mes/production-dashboard', authController.authenticateToken, productionManagerController.getMesProductionDashboard);
 router.put('/operator/updateOperatorSkillSet/:id', authController.authenticateToken, userController.updateOperatorSkillSet);
 router.post('/skill-management/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SKILLS, "create"), skillManagementController.create);
-router.get('/skill-management/get', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SKILLS, "read"), skillManagementController.getSkills);
+// Also the skill dropdown on Product (add/edit) and Operators (view/add/edit) pages.
+router.get('/skill-management/get', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_SKILLS, MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.VIEW_USER], "read"), skillManagementController.getSkills);
 router.delete('/skill-management/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SKILLS, "delete"), skillManagementController.delete);
 router.post('/skill-management/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SKILLS, "delete"), skillManagementController.deleteMultiple);
 router.put('/process/updateQuantity/:id', authController.authenticateToken, processController.updateMoreQuantity);
 router.put('/process/updateMarkAsCompleted/:id', authController.authenticateToken, processController.updateMarkasCompletedProcess);
-router.post('/production/returnKitsToStore', authController.authenticateToken, authController.authorize(MODULE_KEYS.RETURNED_KITS, "create"), kitsController.createKitsEntry);
+// Also the "Return Surplus to Store" button on the Remaining Kits page.
+router.post('/production/returnKitsToStore', authController.authenticateToken, authController.authorize([MODULE_KEYS.RETURNED_KITS, MODULE_KEYS.REMAINING_KITS], "create"), kitsController.createKitsEntry);
 router.put('/store/updateKitsStatus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.RETURNED_KITS, "update"), kitsController.updateKitsStatus);
 router.get('/process/viewReturnToStore', authController.authenticateToken, authController.authorize(MODULE_KEYS.RETURNED_KITS, "read"), kitsController.viewReturnKitStore);
-router.get('/operators/getVacantOperator', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "read"), processController.getVacantOperator);
+// Also the vacant-operator dropdown on the Planning & Scheduling pages.
+router.get('/operators/getVacantOperator', authController.authenticateToken, authController.authorize([MODULE_KEYS.OPERATOR_ASSIGNMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), processController.getVacantOperator);
 router.post('/operators/reassign', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "update"), processController.reassignOperator);
 router.put('/operator/updateStatus/:id', authController.authenticateToken, processController.updateStatusAssignedOperator);
 router.post('/operators/assign', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "update"), processController.assignOperatorToProcess);
@@ -399,11 +420,7 @@ router.post('/carton/verifySticker', authController.authenticateToken, authContr
 router.get("/cartons/:processId/partial", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), CartonController.getPartialCarton);
 router.get("/cartons/:processId/open", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), CartonController.getOpenCartonsByProcessId);
 // IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
-router.get("/cartons/store-portal", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.STORE_PORTAL],"read"), cartonController.getStorePortalCartons);
-router.get("/cartons/:processId/partial", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), CartonController.getPartialCarton);
-router.get("/cartons/:processId/open", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), CartonController.getOpenCartonsByProcessId);
-// IMPORTANT: put the specific route before "/cartons/:processId" so it doesn't get treated as a processId param.
-router.get("/cartons/store-portal", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.STORE_PORTAL],"read"), cartonController.getStorePortalCartons);
+router.get("/cartons/store-portal", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.STORE_PORTAL, MODULE_KEYS.FG_TO_STORE],"read"), cartonController.getStorePortalCartons);
 router.get("/cartons/:processId", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), cartonController.getCartonByProcessId);
 router.get("/cartonsProcessId/:processId", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), cartonController.getCartonByProcessIdToPDI);
 router.get("/cartonsIntoStore/:processId", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK],"read"), cartonController.getCartonsIntoStore);
@@ -421,7 +438,7 @@ router.delete('/carton/discard/:cartonSerial', authController.authenticateToken,
 
 router.get("/process/getFGInventory", authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK, MODULE_KEYS.VIEW_PRODUCT_INVENTORY],"read"), cartonController.fetchCurrentRunningProcessFG);
 router.get("/dispatch/cartons/ready", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS],"read"), dispatchController.getReadyCartons);
-router.get("/dispatch/summary/processes", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS],"read"), dispatchController.getProcessDispatchSummaries);
+router.get("/dispatch/summary/processes", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING],"read"), dispatchController.getProcessDispatchSummaries);
 router.get("/dispatch/cartons/:cartonSerial", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS],"read"), dispatchController.getCartonBySerial);
 router.post("/dispatch/invoices", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS],"create"), dispatchController.createInvoice);
 router.get("/dispatch/invoices", authController.authenticateToken, authController.authorize([MODULE_KEYS.DISPATCH_MANAGEMENT, MODULE_KEYS.FG_TO_STORE, MODULE_KEYS.VIEW_PROCESS],"read"), dispatchController.getInvoices);
@@ -478,7 +495,8 @@ router.post('/esim-master/check-duplicates', authController.authenticateToken, a
 router.get('/esim-master/ccid/:ccid', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.VIEW_TASK], "read"), esimMasterController.getByCcid);
 
 router.post('/esim-make/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "create"), esimMakeController.create);
-router.get('/esim-make/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_MAKES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW], "read"), esimMakeController.view);
+// Also the ESIM make dropdown on the Product edit page.
+router.get('/esim-make/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_MAKES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.VIEW_PRODUCT], "read"), esimMakeController.view);
 router.put('/esim-make/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "update"), esimMakeController.update);
 router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "delete"), esimMakeController.delete);
 
