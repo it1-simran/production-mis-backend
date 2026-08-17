@@ -9,6 +9,7 @@ const processSchema = new mongoose.Schema({
   },
   orderConfirmationNo: { type: String, required: false },
   iapNo: { type: String, required: false, default: "" },
+  fgIapNo: { type: String, required: false, default: "" },
   processID: { type: String, required: true },
   quantity: { type: String, required: true },
   issuedKits: { type: Number, required: false, default: 0 },

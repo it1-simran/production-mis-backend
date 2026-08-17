@@ -60,15 +60,13 @@ const cartonManagementSchema = new mongoose.Schema(
       default: null,
     },
     dispatchDate: { type: Date, required: false, default: null },
-    dispatchedCustomerName: { type: String, required: false, default: "" },
-    gatePassNumber: { type: String, required: false, default: "" },
-    reservedAt: { type: Date, required: false, default: null },
     reservedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: false,
       default: null,
     },
+    fgIapNo: { type: String, required: false, default: "" },
   },
   { timestamps: true }
 );

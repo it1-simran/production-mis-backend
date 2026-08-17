@@ -379,8 +379,8 @@ router.post('/operators/assign', authController.authenticateToken, authControlle
 router.post('/operators/unassign', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "update"), processController.unassignOperatorFromProcess);
 router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "update"), jigController.updateJigStatus);
-router.put("/process/updateIssueKitsToLine", authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PROCESS, "update"), processController.updateIssuedKitsToLine);
-router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PROCESS, "update"), processController.updateStatusRecievedKit);
+router.put("/process/updateIssueKitsToLine", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateIssuedKitsToLine);
+router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
 router.get("/devices/retry-logs/:id", authController.authenticateToken, deviceController.getDeviceRetryLogsByProcessId);
 router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);

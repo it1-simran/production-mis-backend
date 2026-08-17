@@ -3000,7 +3000,10 @@ module.exports = {
         stageName,
         logs,
         timeConsumed,
+        fgIapNo,
+        iapNo,
       } = req.body;
+      const effectiveFgIapNo = String(fgIapNo || iapNo || "").trim();
 
       if (!selectedCarton) {
         return res
@@ -3020,6 +3023,24 @@ module.exports = {
         return res
           .status(404)
           .json({ success: false, message: "Process not found." });
+      }
+
+      const existingProcessFgIapNo = String(process?.fgIapNo || "").trim();
+      if (!existingProcessFgIapNo && effectiveFgIapNo) {
+        const duplicateProcess = await ProcessModel.findOne({
+          _id: { $ne: process._id },
+          $or: [
+            { fgIapNo: effectiveFgIapNo },
+            { iapNo: effectiveFgIapNo }
+          ]
+        }).lean();
+
+        if (duplicateProcess) {
+          return res.status(400).json({
+            success: false,
+            message: `FG IAP Number '${effectiveFgIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique FG IAP Number.`
+          });
+        }
       }
 
       const requesterId = String(req.user?.id || req.user?._id || operatorId || "").trim();
@@ -3106,10 +3127,16 @@ module.exports = {
       }));
       await deviceTestModel.insertMany(testEntries);
 
+      const lockedProcessFgIapNo = String(process?.fgIapNo || "").trim();
+      const finalFgIapNo = lockedProcessFgIapNo || effectiveFgIapNo;
+
       // 4. Update the count for the consumed kits into the process
       if (process) {
         process.consumedKits = (process.consumedKits || 0) + deviceCount;
         process.fgToStore = (process.fgToStore || 0) + deviceCount;
+        if (finalFgIapNo && !process.fgIapNo) {
+          process.fgIapNo = finalFgIapNo;
+        }
         await process.save();
       }
 
@@ -3135,14 +3162,19 @@ module.exports = {
       }
 
       // 7. Update all devices' current stage
+      const deviceSetFields = {
+        currentStage: "KEEP_IN_STORE",
+        dispatchStatus: "READY",
+        dispatchInvoiceId: null,
+      };
+      if (finalFgIapNo) {
+        deviceSetFields.fgIapNo = finalFgIapNo;
+      }
+
       await deviceModel.updateMany(
         { _id: { $in: carton.devices } },
         {
-          $set: {
-            currentStage: "KEEP_IN_STORE",
-            dispatchStatus: "READY",
-            dispatchInvoiceId: null,
-          },
+          $set: deviceSetFields,
           $unset: {
             customerName: 1,
             dispatchDate: 1,
@@ -3163,6 +3195,9 @@ module.exports = {
       carton.gatePassNumber = "";
       carton.reservedAt = null;
       carton.reservedBy = null;
+      if (finalFgIapNo) {
+        carton.fgIapNo = finalFgIapNo;
+      }
       await carton.save();
 
       await createCartonHistoryEvent({
@@ -3425,6 +3460,10 @@ module.exports = {
           $project: {
             processId: 1,
             cartonSerial: 1,
+            fgIapNo: 1,
+            iapNo: 1,
+            processFgIapNo: { $ifNull: ["$processInfo.fgIapNo", ""] },
+            processIapNo: { $ifNull: ["$processInfo.iapNo", ""] },
             processName: { $ifNull: ["$processInfo.name", "Unknown Process"] },
             processID: { $ifNull: ["$processInfo.processID", ""] },
             orderConfirmationNo: { $ifNull: ["$processInfo.orderConfirmationNo", ""] },
