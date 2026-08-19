@@ -34,6 +34,7 @@ const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
 const esimMasterController = require('../controller/esimMasterController');
 const esimMakeController = require('../controller/esimMakeController');
+const slugMappingController = require('../controller/slugMappingController');
 const esimProfileController = require('../controller/esimProfileController');
 const dispatchController = require('../controller/dispatchController');
 const device = require('../models/device');
@@ -44,6 +45,8 @@ const {
 const MODULE_KEYS = require('../constants/moduleKeys');
 const { submitDeduplicationMiddleware } = require('../middleware/requestDeduplication');
 const { createRequestTimeoutMiddleware } = require('../middleware/requestTimeout');
+const serviceKeyAuth = require('../middleware/serviceKeyAuth');
+const purchaseOrderController = require('../controller/purchaseOrderController');
 connectDB();
 
 /** Parses multipart/form-data for API routes that receive FormData from the frontend. */
@@ -84,6 +87,7 @@ router.put('/product/activate/:id', authController.authenticateToken, authContro
 
 // Product Category Routes
 router.post('/product-category/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "create"), productCategoryController.create);
+router.post('/product-category/sync-from-cpanel', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "create"), productCategoryController.syncFromCpanel);
 // Also the product-category dropdown on the Kit Transfer page.
 router.get('/product-category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.KIT_TRANSFER], "read"), productCategoryController.view);
 router.delete('/product-category/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.delete);
@@ -403,6 +407,32 @@ router.get("/process/orderConfirmation/get", authController.authenticateToken, a
 router.post('/process/orderConfirmation/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.OC_MANAGEMENT, "create"), OrderConfirmationController.create);
 router.delete('/process/orderConfirmation/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.OC_MANAGEMENT, "delete"), OrderConfirmationController.delete);
 router.post('/process/orderConfirmation/delete-multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.OC_MANAGEMENT, "delete"), OrderConfirmationController.deleteMultiple);
+
+// ============================= Purchase Orders =============================
+// Integration API — GPS CPanel (machine-to-machine via shared x-api-key).
+router.post('/integrations/cpanel/purchase-orders', serviceKeyAuth, purchaseOrderController.createFromCpanel);
+router.get('/integrations/cpanel/purchase-orders', serviceKeyAuth, purchaseOrderController.listForCpanel);
+router.get('/integrations/cpanel/purchase-orders/:id', serviceKeyAuth, purchaseOrderController.getForCpanel);
+router.put('/integrations/cpanel/purchase-orders/:id/resubmit', serviceKeyAuth, purchaseOrderController.resubmitFromCpanel);
+router.get('/integrations/cpanel/esim-options', serviceKeyAuth, purchaseOrderController.esimOptions);
+// Internal Sales UI — user JWT + PURCHASE_ORDER module.
+// Master-data for the Sales edit form (proxied from GPSCPANEL). Hyphen prefix avoids the /purchase-orders/:id route.
+router.get('/purchase-orders-master/categories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.masterCategories);
+router.get('/purchase-orders-master/firmware', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.masterFirmware);
+router.get('/purchase-orders-master/model-lookup', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.masterModelLookup);
+router.get('/purchase-orders-master/esim-options', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.esimOptions);
+router.get('/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.list);
+router.get('/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.getOne);
+router.put('/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.update);
+router.put('/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.approve);
+router.put('/purchase-orders/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.reject);
+
+// Accounts Portal — read-only view of approved (and post-approval cancelled) POs.
+router.get('/accounts/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.listForAccounts);
+router.get('/accounts/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.getOne);
+router.put('/accounts/purchase-orders/:id/oc-number', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "update"), purchaseOrderController.setOcNumber);
+router.get('/accounts/purchase-orders/:id/stock', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.stockForAccounts);
+router.post('/accounts/purchase-orders/:id/invoice', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "update"), purchaseOrderController.createInvoiceForAccounts);
 router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
 router.put('/process/addOvertime/:id', authController.authenticateToken, planningAndSchedulingController.addOvertime);
 router.delete('/process/removeOvertime/:id/:windowId', authController.authenticateToken, planningAndSchedulingController.removeOvertime);
@@ -499,6 +529,16 @@ router.post('/esim-make/create', authController.authenticateToken, authControlle
 router.get('/esim-make/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_MASTER_MAKES, MODULE_KEYS.ESIM_MASTER_APNS, MODULE_KEYS.ESIM_MASTER_VIEW, MODULE_KEYS.VIEW_PRODUCT], "read"), esimMakeController.view);
 router.put('/esim-make/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "update"), esimMakeController.update);
 router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "delete"), esimMakeController.delete);
+
+// Engineering — approve auto-created products from POs (activate + inventory).
+router.get('/engineering/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringList);
+router.get('/engineering/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringDetail);
+router.put('/engineering/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringApprove);
+
+// Slug Management — maps ${slug} tokens in testing plans to PO fields.
+router.get('/slug-mapping/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), slugMappingController.view);
+router.post('/slug-mapping/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "create"), slugMappingController.create);
+router.delete('/slug-mapping/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "delete"), slugMappingController.delete);
 
 router.post('/esim-profile/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "create"), esimProfileController.create);
 // Also hit by the operator portal's jig ESIM Settings Validation flow (viewEsimProfiles()),
