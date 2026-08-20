@@ -120,6 +120,16 @@ module.exports = {
   create: async (req, res) => {
     try {
       const data = req?.body;
+      const parseJsonSafely = (val, fallback = []) => {
+        if (!val || val === "undefined" || val === "null") return fallback;
+        if (typeof val === "object") return val;
+        try {
+          return JSON.parse(val);
+        } catch (e) {
+          return fallback;
+        }
+      };
+
       const bindData = {
         name: data?.name,
         selectedProduct: data?.selectedProduct,
@@ -127,8 +137,8 @@ module.exports = {
         processID: data?.processID,
         quantity: data?.quantity,
         descripition: data?.descripition,
-        stages: JSON.parse(data?.stages),
-        commonStages: JSON.parse(data?.commonStages),
+        stages: parseJsonSafely(data?.stages, []),
+        commonStages: parseJsonSafely(data?.commonStages, []),
         autoNgEnabled: data?.autoNgEnabled === "true" || data?.autoNgEnabled === true,
         createdBy: req.user?.id,
         department: req.user?.department || "",
@@ -141,6 +151,7 @@ module.exports = {
         newProcess,
       });
     } catch (error) {
+      console.error("Error in process create:", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
@@ -1037,6 +1048,14 @@ module.exports = {
       const process = await ProcessModel.findById(processId).lean();
       if (!process) {
         return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      const procStatus = String(process.status || "").toLowerCase();
+      if (procStatus === "completed") {
+        return res.status(400).json({
+          status: 400,
+          message: `Cannot assign operator to process '${process.name || process.processID}' because its status is 'Completed'.`,
+        });
       }
 
       const plan = await PlaningAndSchedulingModel.findOne({ selectedProcess: processId });

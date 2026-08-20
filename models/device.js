@@ -27,6 +27,7 @@ const deviceSchemas = new mongoose.Schema({
   warrantyStartDate: { type: Date, required: false, default: null },
   warrantyEndDate: { type: Date, required: false, default: null },
   cartonSerial: { type: String, required: false, default: "" },
+  fgIapNo: { type: String, required: false, default: "" },
   flowVersion: { type: Number, required: false, default: 1 },
   flowStartedAt: { type: Date, required: false, default: null },
   createdAt: { type: Date, default: Date.now },

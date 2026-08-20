@@ -128,8 +128,12 @@ module.exports = {
         {
           $lookup: {
             from: "inventories",
-            localField: "selectedProduct",
-            foreignField: "productType",
+            let: { productType: "$selectedProduct" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$productType", "$$productType"] } } },
+              { $sort: { updatedAt: -1, _id: -1 } },
+              { $limit: 1 },
+            ],
             as: "inventoryProcess",
           },
         },
@@ -146,8 +150,12 @@ module.exports = {
         {
           $lookup: {
             from: "assignkitstolines",
-            localField: "_id",
-            foreignField: "processId",
+            let: { pid: "$_id" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$processId", "$$pid"] } } },
+              { $sort: { updatedAt: -1, _id: -1 } },
+              { $limit: 1 },
+            ],
             as: "assignKitsToLine",
           },
         },
@@ -177,7 +185,14 @@ module.exports = {
         { $sort: { _id: -1 } },
         { $limit: 500 },
       ]);
-      const processInventory = data
+      const seenProcessIds = new Set();
+      const dedupedData = data.filter((item) => {
+        const id = String(item._id);
+        if (seenProcessIds.has(id)) return false;
+        seenProcessIds.add(id);
+        return true;
+      });
+      const processInventory = dedupedData
         .filter(
           (item) =>
             item?.status === "Waiting_Kits_allocation" ||
@@ -407,6 +422,24 @@ module.exports = {
       const effectiveIapNo = req?.body?.iapNo || process?.iapNo;
       if (!effectiveIapNo || !String(effectiveIapNo).trim()) {
         return res.status(400).json({ status: 400, message: "IAP NO. is required" });
+      }
+
+      if (req?.body?.iapNo) {
+        const inputIapNo = String(req.body.iapNo).trim();
+        const duplicateProcess = await ProcessModel.findOne({
+          _id: { $ne: id },
+          $or: [
+            { iapNo: inputIapNo },
+            { fgIapNo: inputIapNo }
+          ]
+        }).lean();
+
+        if (duplicateProcess) {
+          return res.status(400).json({
+            status: 400,
+            message: `IAP Number '${inputIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique IAP Number.`
+          });
+        }
       }
 
       const packagingData = await getPackagingDataByProductId(process.selectedProduct);
