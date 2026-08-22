@@ -71,7 +71,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   fulfilment: {
     state: {
       type: String,
-      enum: ["awaiting", "oc_raised", "engineering_pending", "engineering_approved", "invoiced", "dispatched"],
+      enum: ["awaiting", "oc_raised", "engineering_pending", "engineering_hold", "engineering_approved", "invoiced", "dispatched"],
       default: "awaiting",
     },
     availableAtCheck: { type: Number, default: null }, // stock seen at last decision

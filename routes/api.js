@@ -534,6 +534,8 @@ router.delete('/esim-make/delete/:id', authController.authenticateToken, authCon
 router.get('/engineering/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringList);
 router.get('/engineering/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringDetail);
 router.put('/engineering/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringApprove);
+router.put('/engineering/purchase-orders/:id/hold', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringHold);
+router.put('/engineering/purchase-orders/:id/resume', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringResumeFromHold);
 
 // Slug Management — maps ${slug} tokens in testing plans to PO fields.
 router.get('/slug-mapping/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), slugMappingController.view);

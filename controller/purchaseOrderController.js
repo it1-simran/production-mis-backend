@@ -525,7 +525,12 @@ module.exports = {
   engineeringList: async (req, res) => {
     try {
       const { search } = req.query;
-      const view = req.query.view === "approved" ? "engineering_approved" : "engineering_pending";
+      const view =
+        req.query.view === "approved"
+          ? "engineering_approved"
+          : req.query.view === "hold"
+          ? "engineering_hold"
+          : "engineering_pending";
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
@@ -575,7 +580,7 @@ module.exports = {
     try {
       const po = await PurchaseOrder.findById(req.params.id);
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
-      if (po.fulfilment?.state !== "engineering_pending") {
+      if (po.fulfilment?.state !== "engineering_pending" && po.fulfilment?.state !== "engineering_hold") {
         return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${po.fulfilment?.state}).` });
       }
       const productId = po.fulfilment?.productId;
@@ -589,6 +594,17 @@ module.exports = {
       if (!Array.isArray(product.stages) || !product.stages.length) {
         const plan = await resolvedPlanForPo(po, product);
         if (plan.length) product.stages = plan;
+      }
+      // Refuse to activate a product with zero testing stages - that would put a
+      // device into production with nothing to validate it against. Engineering
+      // must configure the category's testing plan first, or explicitly override.
+      if ((!Array.isArray(product.stages) || !product.stages.length) && !req.body?.force) {
+        return res.status(409).json({
+          status: 409,
+          message:
+            "This product has no testing plan (0 stages) — configure a testing plan for its category before approving, or pass force to override.",
+          code: "NO_TESTING_PLAN",
+        });
       }
       if (String(product.status || "").toLowerCase() !== "active") {
         product.status = "active";
@@ -613,7 +629,9 @@ module.exports = {
         actorType: "mes",
         changedBy: req.user?._id || null,
         changedByName: req.user?.name || req.user?.email || "",
-        remarks: `Engineering approved product "${product.name}"${categoryName ? ` under category "${categoryName}"` : ""} — activated with inventory`,
+        remarks: `Engineering approved product "${product.name}"${categoryName ? ` under category "${categoryName}"` : ""} — activated with inventory${
+          !product.stages?.length ? " (approved with 0 testing stages, forced)" : ""
+        }`,
         changedAt: new Date(),
       });
       await po.save();
@@ -621,6 +639,66 @@ module.exports = {
       return res.status(200).json({ status: 200, message: "Product approved and activated with inventory.", data: { po, product } });
     } catch (error) {
       console.error("engineeringApprove error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /** Engineering sends the PO back for rework instead of approving it. */
+  engineeringHold: async (req, res) => {
+    try {
+      const remarks = String(req.body?.remarks || "").trim();
+      if (!remarks) {
+        return res.status(400).json({ status: 400, message: "Remarks are required to put a PO on hold." });
+      }
+      const po = await PurchaseOrder.findById(req.params.id);
+      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      if (po.fulfilment?.state !== "engineering_pending") {
+        return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${po.fulfilment?.state}).` });
+      }
+
+      po.fulfilment.state = "engineering_hold";
+      po.statusHistory.push({
+        fromStatus: po.status,
+        toStatus: po.status,
+        actorType: "mes",
+        changedBy: req.user?._id || null,
+        changedByName: req.user?.name || req.user?.email || "",
+        remarks: `Engineering put on hold: ${remarks}`,
+        changedAt: new Date(),
+      });
+      await po.save();
+
+      return res.status(200).json({ status: 200, message: "PO put on hold.", data: { po } });
+    } catch (error) {
+      console.error("engineeringHold error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /** Move a held PO back to the pending queue for re-review (e.g. after the testing plan is fixed). */
+  engineeringResumeFromHold: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id);
+      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      if (po.fulfilment?.state !== "engineering_hold") {
+        return res.status(409).json({ status: 409, message: `PO is not on hold (state: ${po.fulfilment?.state}).` });
+      }
+
+      po.fulfilment.state = "engineering_pending";
+      po.statusHistory.push({
+        fromStatus: po.status,
+        toStatus: po.status,
+        actorType: "mes",
+        changedBy: req.user?._id || null,
+        changedByName: req.user?.name || req.user?.email || "",
+        remarks: `Moved back to pending from hold${req.body?.remarks ? `: ${String(req.body.remarks).trim()}` : ""}`,
+        changedAt: new Date(),
+      });
+      await po.save();
+
+      return res.status(200).json({ status: 200, message: "PO moved back to pending.", data: { po } });
+    } catch (error) {
+      console.error("engineeringResumeFromHold error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
   },
