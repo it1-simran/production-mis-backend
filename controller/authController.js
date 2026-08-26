@@ -39,7 +39,7 @@ function normalizeUserTypeKey(userType) {
  * if the polling load becomes a real problem again.
  */
 async function getCachedRoleForUserType(userType) {
-  return UserTypes.findOne({ name: new RegExp(`^${userType}$`, "i") });
+  return UserTypes.findOne({ name: new RegExp(`^${userType}$`, "i") }).lean();
 }
 
 /** No-op now that the cache above is gone — kept so existing call sites (userRolesController) don't need to change. */
@@ -194,7 +194,7 @@ module.exports = {
       if (!req.user || !req.user.id) {
         return res.status(401).json({ error: "Unauthorized - No user identity" });
       }
-      const user = await User.findById(req.user.id);
+      const user = await User.findById(req.user.id).lean();
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }
@@ -216,7 +216,7 @@ module.exports = {
           return res.status(401).json({ error: "Unauthorized - No user identity" });
         }
 
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user.id).lean();
         if (!user) {
           console.log(`>>> [AUTH_TRACE] User not found: ${req.user.id}`);
           return res.status(401).json({ message: "User not found" });
@@ -275,7 +275,7 @@ module.exports = {
         return res.status(401).json({ error: "Unauthorized - No user identity" });
       }
 
-      const user = await User.findById(req.user.id);
+      const user = await User.findById(req.user.id).lean();
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }
@@ -321,7 +321,7 @@ module.exports = {
       if (!req.user || !req.user.id) {
         return res.status(401).json({ error: "Unauthorized - No user identity" });
       }
-      const user = await User.findById(req.user.id);
+      const user = await User.findById(req.user.id).lean();
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }
@@ -354,7 +354,7 @@ module.exports = {
       if (!req.user || !req.user.id) {
         return res.status(401).json({ error: "Unauthorized - No user identity" });
       }
-      const user = await User.findById(req.user.id);
+      const user = await User.findById(req.user.id).lean();
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }

@@ -88,14 +88,14 @@ module.exports = {
   view: async (req, res) => {
     try {
       const filter = getUnscopedAuthorizedReadListFilter();
-      const Products = await Product.find(filter).sort({ _id: -1 }).lean();
+      const Products = await Product.find(filter).sort({ _id: -1 }).limit(2000).lean();
 
       // Attach Product Category information (only active categories)
       await ProductCategory.updateMany(
         { status: { $in: ["0", "inactive"] } },
         { $set: { products: [] } }
       );
-      const categories = await ProductCategory.find({ status: { $nin: ["0", "inactive"] } }).lean();
+      const categories = await ProductCategory.find({ status: { $nin: ["0", "inactive"] } }).limit(2000).lean();
       const productCategoryMap = {};
       categories.forEach((cat) => {
         if (Array.isArray(cat.products)) {

@@ -22,14 +22,14 @@ module.exports = {
       if (!req.body.processID) {
         return res.status(400).json({ status: 400, message: "processID is required" });
       }
-      const processData = await ProcessModel.findOne({_id:req.body.processID});
+      const processData = await ProcessModel.findOne({_id:req.body.processID}).lean();
       let updatedProcessData = {
         issuedKits : processData.issuedKits - parseInt(req.body.returnedKits),
         issuedCartons:processData.issuedCartons - parseInt(req.body.returnedCarton),
       }
 
       const updatedProcess  = await ProcessModel.findByIdAndUpdate(req.body.processID,updatedProcessData,{new:true});
-      const currentInventory = await InventoryModel.findOne({productType:req.body.selectedProduct});
+      const currentInventory = await InventoryModel.findOne({productType:req.body.selectedProduct}).lean();
       const inventoryData = {
         'quantity':parseInt(currentInventory.quantity) + parseInt(req.body.returnedKits) ,
         'cartonQuantity':parseInt(currentInventory.cartonQuantity) + parseInt(req.body.returnedCarton),

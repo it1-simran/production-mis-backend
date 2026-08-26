@@ -375,7 +375,7 @@ module.exports = {
         requests = rows;
         meta = { page, limit, total };
       } else {
-        requests = await KitTransferRequest.find(filter).sort({ createdAt: -1 }).lean();
+        requests = await KitTransferRequest.find(filter).sort({ createdAt: -1 }).limit(2000).lean();
       }
 
       return res.status(200).json({

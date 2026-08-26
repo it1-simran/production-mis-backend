@@ -114,6 +114,7 @@ module.exports = {
         const esimMasters = await EsimMaster.find(filter)
           .select(ESIM_MASTER_SELECT)
           .sort({ createdAt: -1 })
+          .limit(5000)
           .lean();
         await attachCanonicalApnNames(esimMasters);
 

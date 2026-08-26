@@ -126,6 +126,7 @@ module.exports = {
       const productCategories = await ProductCategory.find()
         .populate("products", "name status")
         .sort({ _id: -1 })
+        .limit(1000)
         .lean();
 
       const sanitizedCategories = productCategories.map((cat) => {
