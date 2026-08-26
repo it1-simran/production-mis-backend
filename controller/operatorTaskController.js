@@ -1720,7 +1720,7 @@ module.exports = {
       const checkEntryExist = await assignedOperatorsToPlanModel.findOne({
         processId: data.processId,
         userId: data.userId,
-      });
+      }).select("_id").lean();
       if (!checkEntryExist) {
         const assignedOperatorsToPlan = new assignedOperatorsToPlanModel(data1);
         newassignOp = await assignedOperatorsToPlan.save();
@@ -2143,7 +2143,7 @@ module.exports = {
         status: data.status || "pending",
         startDate: moment(data.startDate, "YY/MM/DD HH:mm:ss").toDate(),
       };
-      let jigData = await assignedJigToPlanModel.findOne({ jigId: data.jigId });
+      let jigData = await assignedJigToPlanModel.findOne({ jigId: data.jigId }).select("_id status").lean();
       if (jigData && Object.keys(jigData).length > 0) {
         newassignJig = await assignedJigToPlanModel.findByIdAndUpdate(
           jigData._id,

@@ -733,7 +733,7 @@ module.exports = {
       // an error — just proceed as before.
       const latestEpisode = await OperatorIdleEpisode.findOne({
         operatorId: new mongoose.Types.ObjectId(operatorId),
-      }).sort({ createdAt: -1 });
+      }).sort({ createdAt: -1 }).lean();
 
       if (latestEpisode && latestEpisode.status === "resolved") {
         return res.status(409).json({

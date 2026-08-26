@@ -1038,6 +1038,7 @@ module.exports = {
           .populate("deviceId")
           .populate("processId")
           .sort({ _id: -1 })
+          .limit(2000)
           .lean();
       }
 
@@ -2325,6 +2326,7 @@ module.exports = {
         retryLogs = await DeviceRetryLog.find({ processId })
           .populate("operatorId", "name employeeCode")
           .sort({ startTime: -1 })
+          .limit(2000)
           .lean();
       }
 
@@ -2438,7 +2440,7 @@ module.exports = {
           .find(statusFilter, projection, { sort: { createdAt: -1 } })
           .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
           .populate({ path: "processId", select: "name processName" })
-          .lean()
+          .limit(2000)
           .lean();
       }
       return res.status(200).json({
@@ -2658,7 +2660,7 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
-        .lean()
+        .limit(1000)
         .lean();
 
 
@@ -2698,7 +2700,7 @@ module.exports = {
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
-        .lean()
+        .limit(2000)
         .lean();
 
       if (devices.length === 0) {
@@ -2915,6 +2917,7 @@ module.exports = {
         .find(matchRootOr)
         .select("_id serialNo imeiNo ccid currentStage status processID")
         .populate({ path: "processID", select: "name processName processID" })
+        .limit(50)
         .lean();
 
       const candidateList = Array.isArray(candidates) ? candidates : [];
@@ -3088,6 +3091,7 @@ module.exports = {
           .populate({ path: "fromProcessId", select: "name processName processID" })
           .populate({ path: "toProcessId", select: "name processName processID" })
           .populate({ path: "operatorId", select: "name fullName employeeCode username" })
+          .limit(2000)
           .lean();
       }
 

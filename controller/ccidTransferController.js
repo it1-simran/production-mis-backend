@@ -207,7 +207,7 @@ module.exports = {
         requests = rows;
         meta = { page, limit, total };
       } else {
-        requests = await CcidTransferRequest.find(filter).sort({ createdAt: -1 }).lean();
+        requests = await CcidTransferRequest.find(filter).sort({ createdAt: -1 }).limit(2000).lean();
       }
 
       return res.status(200).json({

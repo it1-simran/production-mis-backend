@@ -12,7 +12,7 @@ module.exports = {
         return res.status(400).json({ message: "Role name is required" });
       }
       const roleName = name.trim();
-      const existingRole = await UserTypes.findOne({ name: new RegExp(`^${roleName}$`, "i") });
+      const existingRole = await UserTypes.findOne({ name: new RegExp(`^${roleName}$`, "i") }).lean();
       if (existingRole) {
         return res.status(400).json({ message: "Role already exists" });
       }

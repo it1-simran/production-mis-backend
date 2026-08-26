@@ -37,7 +37,7 @@ module.exports = {
             $regex: `^${newCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
             $options: "i",
           },
-        })
+        }).select("_id").lean()
       ) {
         nextSerialNum++;
         serial = `O${String(nextSerialNum).padStart(3, "0")}`;

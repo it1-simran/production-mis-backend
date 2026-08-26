@@ -875,6 +875,7 @@ module.exports = {
         ...(occupiedUserIds.length > 0 ? { _id: { $nin: occupiedUserIds } } : {}),
       })
         .select("name email phoneNumber userType skills employeeCode profilePic status")
+        .limit(2000)
         .lean();
 
       // Annotate operators who are assigned to ANOTHER process, so the UI can

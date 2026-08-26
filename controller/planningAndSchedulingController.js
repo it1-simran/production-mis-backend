@@ -810,6 +810,7 @@ module.exports = {
             ],
           },
         },
+        { $limit: 1000 },
       ];
       const plans = await PlaningAndSchedulingModel.aggregate(query);
       const filteredPlans = plans.filter((plan) => {
@@ -897,6 +898,7 @@ module.exports = {
             "processDetails.status": { $nin: ["completed", "waiting_schedule"] },
           },
         },
+        { $limit: 1000 },
       ]);
 
       if (!plans || plans.length === 0) {
@@ -1214,7 +1216,7 @@ module.exports = {
       const PlaningAndScheduling = await PlaningAndSchedulingModel.find({
         ...getUnscopedAuthorizedReadListFilter(),
         selectedProcess: id,
-      }).lean();
+      }).limit(1).lean();
       if (!PlaningAndScheduling) {
         return res.status(404).json({ error: "Product not found" });
       }
@@ -1493,6 +1495,7 @@ module.exports = {
             processId: new mongoose.Types.ObjectId(id),
           },
         },
+        { $limit: 1000 },
         {
           $lookup: {
             from: "processes",
@@ -1677,6 +1680,7 @@ module.exports = {
         {
           $sort: { startDate: 1 },
         },
+        { $limit: 1000 },
       ]);
 
       // compute active flag based on Asia/Kolkata current datetime and process status

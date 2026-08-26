@@ -34,6 +34,12 @@ const MODULE_KEYS = {
 
   OC_MANAGEMENT: "oc_management",
 
+  ACCOUNTS_PO: "accounts_po_management",
+  SLUG_MANAGEMENT: "slug_management",
+  ENGINEERING_APPROVALS: "engineering_approvals",
+
+  PURCHASE_ORDER: "purchase_order_management",
+
   PROCESS_MANAGEMENT: "process_management",
   VIEW_PROCESS: "process_management__view",
   ADD_PROCESS: "process_management__add",

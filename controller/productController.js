@@ -6,6 +6,7 @@ const InventoryModel = require("../models/inventoryManagement");
 
 const ProductCategory = require("../models/productCategory");
 const Carton = require('../models/cartonManagement');
+const { createInventoryForProduct } = require("../services/inventoryService");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -73,14 +74,7 @@ module.exports = {
         );
       }
       if (savedProduct && savedProduct.status !== "draft") {
-        const InventoryData = {
-          productName: name,
-          productType: savedProduct._id,
-          createdBy: req.user?.id,
-          department: req.user?.department || "",
-        };
-        const newInventoryModel = new InventoryModel(InventoryData);
-        await newInventoryModel.save();
+        await createInventoryForProduct(savedProduct, req.user);
       }
       return res.status(200).json({
         status: 200,
@@ -94,14 +88,14 @@ module.exports = {
   view: async (req, res) => {
     try {
       const filter = getUnscopedAuthorizedReadListFilter();
-      const Products = await Product.find(filter).sort({ _id: -1 }).lean();
+      const Products = await Product.find(filter).sort({ _id: -1 }).limit(2000).lean();
 
       // Attach Product Category information (only active categories)
       await ProductCategory.updateMany(
         { status: { $in: ["0", "inactive"] } },
         { $set: { products: [] } }
       );
-      const categories = await ProductCategory.find({ status: { $nin: ["0", "inactive"] } }).lean();
+      const categories = await ProductCategory.find({ status: { $nin: ["0", "inactive"] } }).limit(2000).lean();
       const productCategoryMap = {};
       categories.forEach((cat) => {
         if (Array.isArray(cat.products)) {
@@ -273,11 +267,7 @@ module.exports = {
         await product.save();
       }
 
-      await InventoryModel.findOneAndUpdate(
-        { productType: product._id },
-        { $setOnInsert: { productName: product.name, productType: product._id } },
-        { upsert: true, new: true }
-      );
+      await createInventoryForProduct(product, req.user);
 
       return res.status(200).json({
         status: 200,

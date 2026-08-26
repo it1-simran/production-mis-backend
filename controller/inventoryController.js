@@ -279,7 +279,7 @@ module.exports = {
     try {
       const ProcessByProductID = await ProcessModel.find({
         selectedProduct: req.params.id,
-      }).lean();
+      }).limit(1000).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Processes Fetched Sucessfully!!",
@@ -351,6 +351,7 @@ module.exports = {
         quantity: { $lte: threshold },
       })
         .select("productName quantity cartonQuantity status")
+        .limit(1000)
         .lean();
 
       return res.status(200).json({
@@ -390,7 +391,7 @@ module.exports = {
 
       let Inventory = await InventoryModel.findOne({
         productType: process?.selectedProduct,
-      });
+      }).lean();
 
       if (!Inventory) {
         Inventory = new InventoryModel({

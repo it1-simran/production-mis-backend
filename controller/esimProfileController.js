@@ -28,6 +28,7 @@ module.exports = {
             const profiles = await EsimProfile.find()
                 .select("_id profileId name activeStatus remarks createdAt updatedAt")
                 .sort({ updatedAt: -1, createdAt: -1 })
+                .limit(1000)
                 .lean();
             return res.status(200).json({
                 status: 200,

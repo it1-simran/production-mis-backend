@@ -92,7 +92,7 @@ module.exports = {
   // },
   view: async (req, res) => {
     try {
-      const Jigs = await Jig.find().sort({ _id: -1 }).lean();
+      const Jigs = await Jig.find().sort({ _id: -1 }).limit(1000).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Jigs Fetched Sucessfully!!",
@@ -104,7 +104,7 @@ module.exports = {
   },
   viewCategory: async (req, res) => {
     try {
-      const JigCategories = await jigCategory.find().sort({ _id: -1 }).lean();
+      const JigCategories = await jigCategory.find().sort({ _id: -1 }).limit(500).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Jigs Fetched Sucessfully!!",
@@ -249,7 +249,7 @@ module.exports = {
       if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ error: "Invalid jigCategory ID" });
       }
-      const jigs = await Jig.find({ jigCategory: id });
+      const jigs = await Jig.find({ jigCategory: id }).limit(1000).lean();
       if (!jigs) {
         return res.status(404).json({ error: "Jig not found" });
       }

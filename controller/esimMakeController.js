@@ -3,8 +3,8 @@ const EsimMake = require("../models/EsimMake");
 module.exports = {
     create: async (req, res) => {
         try {
-            const { simId, name, activeStatus, remarks } = req.body;
-            const newMake = new EsimMake({ simId, name, activeStatus, remarks });
+            const { simId, name, activeStatus, showInCpanel, remarks } = req.body;
+            const newMake = new EsimMake({ simId, name, activeStatus, showInCpanel: !!showInCpanel, remarks });
             await newMake.save();
             return res.status(201).json({
                 status: 201,
@@ -23,7 +23,7 @@ module.exports = {
     view: async (req, res) => {
         try {
             const makes = await EsimMake.find()
-                .select("_id simId name activeStatus remarks createdAt updatedAt")
+                .select("_id simId name activeStatus showInCpanel remarks createdAt updatedAt")
                 .sort({ _id: -1 })
                 .limit(1000)
                 .lean();

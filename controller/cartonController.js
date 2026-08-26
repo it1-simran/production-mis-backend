@@ -344,7 +344,7 @@ const isPartialOrDerivedCarton = (carton, configuredCapacity = 0) => {
 
 const findDeviceStageForCarton = async (carton) => {
   if (!Array.isArray(carton?.devices) || carton.devices.length === 0) return "";
-  const firstDevice = await deviceModel.findOne({ _id: { $in: carton.devices } }).lean();
+  const firstDevice = await deviceModel.findOne({ _id: { $in: carton.devices } }).select("currentStage").lean();
   return String(firstDevice?.currentStage || "").trim();
 };
 
@@ -354,6 +354,7 @@ const findLatestCartonHistory = async (cartonSerial) => {
     .find({ cartonSerial })
     .populate("performedBy", "name empId")
     .sort({ timestamp: -1, createdAt: -1 })
+    .limit(500)
     .lean();
 };
 
@@ -453,7 +454,7 @@ const findCartonConflicts = async (deviceIds = [], excludeCartonIds = [], sessio
   const query = cartonModel.findOne({
     _id: { $nin: normalizedExcludeIds },
     devices: { $in: normalizedDeviceIds },
-  });
+  }).select("cartonSerial").lean();
   return session ? query.session(session) : query;
 };
 
@@ -1565,7 +1566,7 @@ module.exports = {
         cartons = rows;
         meta = { page, limit, total: totalRows[0]?.total || 0 };
       } else {
-        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+        cartons = await cartonModel.aggregate([...matchPipeline, { $limit: 1000 }, ...enrichPipeline]);
       }
 
       if (!cartons || cartons.length === 0) {
@@ -1693,7 +1694,7 @@ module.exports = {
         cartons = rows;
         meta = { page, limit, total: totalRows[0]?.total || 0 };
       } else {
-        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+        cartons = await cartonModel.aggregate([...matchPipeline, { $limit: 1000 }, ...enrichPipeline]);
       }
 
       if (!cartons || cartons.length === 0) {
@@ -2705,7 +2706,7 @@ module.exports = {
       const unverifiedCartons = await cartonModel.find({
         cartonSerial: { $in: cartonArray },
         isStickerVerified: { $ne: true },
-      });
+      }).select("cartonSerial").lean();
 
       if (unverifiedCartons.length > 0) {
         const unverifiedSerials = unverifiedCartons.map((c) => c.cartonSerial);
@@ -2926,7 +2927,7 @@ module.exports = {
     try {
       const processes = await ProcessModel.find({
         status: { $in: ["active", "complete"] },
-      }).lean();
+      }).limit(1000).lean();
 
       const orderConfirmationModelMap = await buildOrderConfirmationModelMap(
         processes.map((process) => process.orderConfirmationNo)
@@ -3101,7 +3102,7 @@ module.exports = {
       }
 
       // 2. Fetch all devices in that carton
-      const devices = await deviceModel.find({ _id: { $in: carton.devices } });
+      const devices = await deviceModel.find({ _id: { $in: carton.devices } }).lean();
       if (!devices || devices.length === 0) {
         return res
           .status(404)
@@ -3249,7 +3250,8 @@ module.exports = {
             .sort({ _id: -1 })
             .skip(skip)
             .limit(limit)
-            .populate({ path: "processId", select: "name processID" }),
+            .populate({ path: "processId", select: "name processID" })
+            .lean(),
           cartonModel.countDocuments(filter),
         ]);
         cartons = rows;
@@ -3258,7 +3260,9 @@ module.exports = {
         cartons = await cartonModel
           .find(filter)
           .sort({ _id: -1 })
-          .populate({ path: "processId", select: "name processID" });
+          .populate({ path: "processId", select: "name processID" })
+          .limit(2000)
+          .lean();
       }
 
       return res.status(200).json({
@@ -3497,7 +3501,7 @@ module.exports = {
         cartons = rows;
         meta = { page, limit, total: totalRows[0]?.total || 0 };
       } else {
-        cartons = await cartonModel.aggregate([...matchPipeline, ...enrichPipeline]);
+        cartons = await cartonModel.aggregate([...matchPipeline, { $limit: 1000 }, ...enrichPipeline]);
       }
 
       const enrichedCartons = await attachModelNamesToCartons(
