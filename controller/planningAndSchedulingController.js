@@ -453,7 +453,7 @@ module.exports = {
           const month = parts[1];
           const yearAndTime = parts[2];
           const [year, time] = yearAndTime.split(" ");
-          
+
           if (time) {
             const [hours, minutes, seconds] = time.split(":");
             const d = new Date(`20${year.slice(-2)}`, month - 1, day, hours || 0, minutes || 0, seconds || 0);
@@ -514,7 +514,7 @@ module.exports = {
         },
         { new: true }
       );
-      
+
       return res.status(200).json({
         status: 200,
         message: "Planing And Scheduling Created Successfully!!",
@@ -538,7 +538,7 @@ module.exports = {
           const month = parts[1];
           const yearAndTime = parts[2];
           const [year, time] = yearAndTime.split(" ");
-          
+
           if (time) {
             const [hours, minutes, seconds] = time.split(":");
             const d = new Date(`20${year.slice(-2)}`, month - 1, day, hours || 0, minutes || 0, seconds || 0);
@@ -1284,6 +1284,9 @@ module.exports = {
         issuedKits: ka?.issuedKits || 0,
         dateFrom: String(req.query.from || req.query.dateFrom || "").trim(),
         dateTo: String(req.query.to || req.query.dateTo || "").trim(),
+        processStatus: process?.status || "",
+        processIssuedKits: Number(process?.issuedKits || 0),
+        processConsumedKits: Number(process?.consumedKits || 0),
       });
 
       const seatKey = String(req.query.seatKey || req.query.seatNumber || "").trim();
@@ -1310,6 +1313,14 @@ module.exports = {
           dateFrom: String(req.query.from || req.query.dateFrom || "").trim(),
           dateTo: String(req.query.to || req.query.dateTo || "").trim(),
         });
+      }
+
+      if (ka) {
+        insights.allocatedKits = Number(ka.issuedKits || 0);
+        insights.seatDetails = ka.seatDetails || [];
+      } else {
+        insights.allocatedKits = 0;
+        insights.seatDetails = [];
       }
 
       const response = {
@@ -1374,10 +1385,10 @@ module.exports = {
       const records =
         from || to
           ? await DeviceTestRecordModel.find(match)
-              .populate("operatorId", "name employeeCode")
-              .sort({ createdAt: -1 })
-              .limit(ANALYTICS_SCAN_LIMIT)
-              .lean()
+            .populate("operatorId", "name employeeCode")
+            .sort({ createdAt: -1 })
+            .limit(ANALYTICS_SCAN_LIMIT)
+            .lean()
           : attemptContextRecords;
 
       const stageDef = [...(process?.stages || []), ...(process?.commonStages || [])].find(
@@ -1890,6 +1901,9 @@ module.exports = {
         commonStages: process.commonStages || [],
         selectedProduct: process.productType,
         quantity: Number(process.quantity || 0),
+        processStatus: process.status || "",
+        processIssuedKits: Number(process.issuedKits || 0),
+        processConsumedKits: Number(process.consumedKits || 0),
       });
 
       return res.status(200).json({
