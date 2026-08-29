@@ -355,6 +355,7 @@ router.get('/inventory/process/get', authController.authenticateToken, authContr
 router.get('/inventory/dashboard', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"read"), inventoryController.dashboard);
 router.get('/inventory/getProcessByProduct/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"read"), inventoryController.getProcessByProductID);
 router.put('/inventory/process/updateIssueKit', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"update"), inventoryController.updateIssueKit);
+router.get('/inventory/process/:processId/allocations', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY, MODULE_KEYS.VIEW_PROCESS],"read"), inventoryController.getKitAllocationTransactions);
 router.put('/inventory/process/updateIssueCarton', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"update"), inventoryController.updateCarton);
 router.get('/analytics/inventory/stock-trends', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"read"), inventoryController.getInventoryTrends);
 router.get('/production-manger/process/get', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PROCESS, "read"), productionManagerController.getProcesses);
@@ -384,6 +385,7 @@ router.post('/operators/unassign', authController.authenticateToken, authControl
 router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "update"), jigController.updateJigStatus);
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateIssuedKitsToLine);
+router.put("/process/confirmKitsToLineWithoutSeat", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.confirmKitsToLineWithoutSeat);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
 router.get("/devices/retry-logs/:id", authController.authenticateToken, deviceController.getDeviceRetryLogsByProcessId);

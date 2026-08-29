@@ -332,6 +332,26 @@ const isActiveWipDeviceStatus = (status) => {
   return !normalized || normalized === "active";
 };
 
+// Serial Generator inserts Device docs the moment serials are created — well
+// before Store issues kits, the Production Manager approves/allocates them,
+// and the floor operator confirms receipt. Untested devices should not read
+// as WIP until that chain has actually completed for the owning process.
+// Matches the Process.status enum (models/process.js) verbatim, lowercased —
+// normalizeKey collapses whitespace but does not touch underscores.
+const PRE_KIT_CONFIRMATION_PROCESS_STATUSES = new Set([
+  "waiting_schedule",
+  "waiting_kits_allocation",
+  "waiting_kits_approval",
+  "waiting_for_line_feeding",
+  "waiting_for_kits_confirmation",
+]);
+
+const isKitConfirmedProcessStatus = (processStatus) => {
+  const normalized = normalizeKey(processStatus);
+  if (!normalized) return false;
+  return !PRE_KIT_CONFIRMATION_PROCESS_STATUSES.has(normalized);
+};
+
 const isDeviceTerminalNg = (device = {}) => {
   const status = normalizeKey(device?.status);
   const stage = normalizeKey(device?.currentStage);
@@ -679,6 +699,13 @@ const computePlanInsightsUncached = async ({
   issuedKits = 0,
   dateFrom = "",
   dateTo = "",
+  processStatus = "",
+  // Process.issuedKits/consumedKits (Store's own figures) — distinct from
+  // `issuedKits` above, which is the seat-allocation ("Kits to Allocate")
+  // total used for the lineIssueKits/kitsShortage totals below. Used only to
+  // cap untested-device WIP to what's actually been issued to the floor.
+  processIssuedKits = 0,
+  processConsumedKits = 0,
 }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) {
     return {
@@ -755,23 +782,23 @@ const computePlanInsightsUncached = async ({
 
   const latestByDeviceStage = new Map();
   const latestBySerial = new Map();
-  
+
   (Array.isArray(scopedLatestRecords) ? scopedLatestRecords : []).forEach((record) => {
     const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
     const stageKey = normalizeKey(record?.stageName || record?.currentStage || "");
     if (!deviceId || !stageKey) return;
-    
+
     // 1. DEDUPE: Only keep the LATEST record per device PER STAGE
     // Since latestRecords is sorted by createdAt DESC, the first one we find is the newest.
     const dsKey = `${deviceId}:${stageKey}`;
     if (!latestByDeviceStage.has(dsKey)) {
       latestByDeviceStage.set(dsKey, record);
     }
-    
+
     // 2. Latest per device overall (for process-wide totals)
     const serial = normalizeValue(record?.serialNo || deviceId);
     if (!latestBySerial.has(serial)) {
-       latestBySerial.set(serial, record);
+      latestBySerial.set(serial, record);
     }
   });
 
@@ -786,9 +813,9 @@ const computePlanInsightsUncached = async ({
 
   const flowVersionDevices = planSerialsEarly.length > 0
     ? await deviceModel
-        .find(deviceFlowMatch)
-        .select("_id serialNo status currentStage flowVersion")
-        .lean()
+      .find(deviceFlowMatch)
+      .select("_id serialNo status currentStage flowVersion")
+      .lean()
     : [];
 
   const deviceFlowVersions = buildDeviceFlowVersionMap(flowVersionDevices);
@@ -831,7 +858,7 @@ const computePlanInsightsUncached = async ({
     ) {
       return;
     }
-    
+
     if (isCountable) {
       const stageRow = upsertStage(stageName);
       if (stageRow) {
@@ -863,34 +890,34 @@ const computePlanInsightsUncached = async ({
 
     // Handle Stage Transition: Pass -> Next Stage WIP
     if (isPassStatus(status)) {
-       const nextStageName = normalizeValue(record?.nextLogicalStage || "");
-       if (nextStageName) {
-          const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
-          const nextStageKey = normalizeKey(nextStageName);
-          const dsKey = `${deviceId}:${nextStageKey}`;
+      const nextStageName = normalizeValue(record?.nextLogicalStage || "");
+      if (nextStageName) {
+        const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
+        const nextStageKey = normalizeKey(nextStageName);
+        const dsKey = `${deviceId}:${nextStageKey}`;
 
-          // Only count as WIP for the next stage if the device hasn't started that stage yet
-          if (deviceId && !latestByDeviceStage.has(dsKey)) {
-            const nextStageRow = upsertStage(nextStageName);
-            if (nextStageRow) nextStageRow.wip += 1;
+        // Only count as WIP for the next stage if the device hasn't started that stage yet
+        if (deviceId && !latestByDeviceStage.has(dsKey)) {
+          const nextStageRow = upsertStage(nextStageName);
+          if (nextStageRow) nextStageRow.wip += 1;
 
-            const nextSeatKey = getDeviceSeatKeyForStage({
-              latestRecord: record,
-              stageName: nextStageName,
-              stageSeatFallbackMap,
-            });
-            if (nextSeatKey) {
-              const nextSeatStageRow = upsertSeatStage(nextSeatKey, nextStageName);
-              if (nextSeatStageRow) nextSeatStageRow.wip += 1;
-            }
+          const nextSeatKey = getDeviceSeatKeyForStage({
+            latestRecord: record,
+            stageName: nextStageName,
+            stageSeatFallbackMap,
+          });
+          if (nextSeatKey) {
+            const nextSeatStageRow = upsertSeatStage(nextSeatKey, nextStageName);
+            if (nextSeatStageRow) nextSeatStageRow.wip += 1;
           }
-       }
+        }
+      }
     }
   });
 
   const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
   const planSerials = Array.from(latestBySerial.keys());
-  
+
   const deviceMatch = { serialNo: { $in: planSerials } };
   if (processId && mongoose.Types.ObjectId.isValid(String(processId))) {
     deviceMatch.processID = new mongoose.Types.ObjectId(String(processId));
@@ -900,8 +927,8 @@ const computePlanInsightsUncached = async ({
     ? flowVersionDevices
     : planSerials.length > 0
       ? await deviceModel.find(deviceMatch)
-          .select("_id serialNo status currentStage processID imei imeiNo ccid flowVersion")
-          .lean()
+        .select("_id serialNo status currentStage processID imei imeiNo ccid flowVersion")
+        .lean()
       : [];
 
   if (!deviceFlowVersions.size && deviceSnapshots.length > 0) {
@@ -949,40 +976,67 @@ const computePlanInsightsUncached = async ({
 
   const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
     ? await deviceModel
-        .find({
-          productType: selectedProduct,
-          processID: new mongoose.Types.ObjectId(String(processId)),
-          _id: { $nin: excludedIds }
-        })
-        .select("_id serialNo status currentStage processID imei imeiNo ccid flowVersion")
-        .lean()
+      .find({
+        productType: selectedProduct,
+        processID: new mongoose.Types.ObjectId(String(processId)),
+        _id: { $nin: excludedIds }
+      })
+      .select("_id serialNo status currentStage processID imei imeiNo ccid flowVersion")
+      .lean()
     : [];
 
   buildDeviceFlowVersionMap(wipDevices).forEach((value, key) => {
     if (!deviceFlowVersions.has(key)) deviceFlowVersions.set(key, value);
   });
 
-  // Count active WIP (those without any test in this process yet)
+  // Count active WIP (those without any test in this process yet).
+  // `issuedKits` here is the Production Manager's line allocation
+  // (AssignKitsToLine.issuedKits), not Store's process-level issuedKits —
+  // devices shouldn't read as WIP on a seat/line until the PM has actually
+  // confirmed and allocated kits to it, even if the process itself is past
+  // the pre-kit-confirmation statuses. No line allocation yet = 0 capacity,
+  // not a fallback to how many Store issued to the process as a whole.
+  const effectiveAllocatedKits = Number(issuedKits || 0);
+  let remainingUntestedWipCapacity = isKitConfirmedProcessStatus(processStatus)
+    ? Math.max(effectiveAllocatedKits - Number(processConsumedKits || 0), 0)
+    : 0;
   (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
-     const deviceId = String(device?._id || "");
-     if (processedDeviceIds.has(deviceId)) return;
+    const deviceId = String(device?._id || "");
+    if (processedDeviceIds.has(deviceId)) return;
 
-     const stageName = normalizeValue(device?.currentStage || firstProcessStage);
-     if (!stageName) return;
+    const stageName = normalizeValue(device?.currentStage || firstProcessStage);
+    if (!stageName) return;
 
-     const stageRow = upsertStage(stageName);
-     if (!stageRow) return;
+    const stageRow = upsertStage(stageName);
+    if (!stageRow) return;
 
-      if (isDeviceTerminalNg(device)) {
-        stageRow.tested += 1;
-        stageRow.ng += 1;
-      } else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched") {
-        stageRow.tested += 1;
-        stageRow.pass += 1;
-      } else {
-         stageRow.wip += 1;
-      }
+    if (isDeviceTerminalNg(device)) {
+      stageRow.tested += 1;
+      stageRow.ng += 1;
+    } else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched") {
+      stageRow.tested += 1;
+      stageRow.pass += 1;
+    } else if (remainingUntestedWipCapacity > 0) {
+      stageRow.wip += 1;
+      remainingUntestedWipCapacity -= 1;
+    }
   });
+
+  // Only pad the first stage's WIP with leftover capacity if Serial Generator
+  // has actually created at least one Device doc for this process — otherwise
+  // there's nothing behind the number: the drill-down list (built from real
+  // Device docs) would always be empty while the count claims units exist.
+  if (
+    firstProcessStage &&
+    isKitConfirmedProcessStatus(processStatus) &&
+    remainingUntestedWipCapacity > 0 &&
+    (Array.isArray(wipDevices) ? wipDevices.length : 0) > 0
+  ) {
+    const firstStageRow = upsertStage(firstProcessStage);
+    if (firstStageRow) {
+      firstStageRow.wip += remainingUntestedWipCapacity;
+    }
+  }
 
   replicateStageWipToParallelSeats({
     byStageMap,
@@ -1125,7 +1179,15 @@ const computePlanInsights = async (params) => {
     return computePlanInsightsUncached(params);
   }
 
-  const cacheKey = [planId, processId, params.dateFrom || "", params.dateTo || ""].join("|");
+  const cacheKey = [
+    planId,
+    processId,
+    params.dateFrom || "",
+    params.dateTo || "",
+    params.processStatus || "",
+    params.processIssuedKits || 0,
+    params.processConsumedKits || 0,
+  ].join("|");
   const now = Date.now();
   const cached = sharedPlanInsightsCache.get(cacheKey);
 
@@ -1163,6 +1225,9 @@ const computeProcessInsights = async ({
   commonStages = [],
   selectedProduct = "",
   quantity = 0,
+  processStatus = "",
+  processIssuedKits = 0,
+  processConsumedKits = 0,
 }) => {
   if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) {
     return {
@@ -1218,13 +1283,13 @@ const computeProcessInsights = async ({
 
   const wipDevices = selectedProduct && processId && mongoose.Types.ObjectId.isValid(String(processId))
     ? await deviceModel
-        .find({
-          productType: selectedProduct,
-          processID: new mongoose.Types.ObjectId(String(processId)),
-          _id: { $nin: excludedIds }
-        })
-        .select("_id serialNo status currentStage processID imei imeiNo ccid")
-        .lean()
+      .find({
+        productType: selectedProduct,
+        processID: new mongoose.Types.ObjectId(String(processId)),
+        _id: { $nin: excludedIds }
+      })
+      .select("_id serialNo status currentStage processID imei imeiNo ccid")
+      .lean()
     : [];
 
   const bySeatStageMap = new Map();
@@ -1244,12 +1309,12 @@ const computeProcessInsights = async ({
   // Use a Map to keep track of the LATEST record per device PER STAGE
   // This ensures we match the history modal's logic exactly.
   const latestByDeviceStage = new Map();
-  
+
   (Array.isArray(latestRecords) ? latestRecords : []).forEach((record) => {
     const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
     const stageKey = normalizeKey(record?.stageName || record?.currentStage || "");
     if (!deviceId || !stageKey) return;
-    
+
     // DEDUPE: Only keep the LATEST record per device PER STAGE
     const key = `${deviceId}:${stageKey}`;
     if (!latestByDeviceStage.has(key)) {
@@ -1267,7 +1332,7 @@ const computeProcessInsights = async ({
     .select("_id serialNo status currentStage flowVersion")
     .lean();
   const deviceFlowVersions = buildDeviceFlowVersionMap(processFlowDevices);
-  
+
   // 1. Process all test records (Pass/NG/QC/TRC)
   dedupedRecords.forEach((record) => {
     if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
@@ -1310,7 +1375,13 @@ const computeProcessInsights = async ({
     }
   });
 
-  // 2. Process all other active devices (those without test records yet)
+  // 2. Process all other active devices (those without test records yet).
+  // Cap untested WIP to (issuedKits - already produced), same reasoning as
+  // computePlanInsightsUncached above.
+  const effectiveAllocatedKits = Number(issuedKits || 0) > 0 ? Number(issuedKits) : Number(processIssuedKits || 0);
+  let remainingUntestedWipCapacity = isKitConfirmedProcessStatus(processStatus)
+    ? Math.max(effectiveAllocatedKits - Number(processConsumedKits || 0), 0)
+    : 0;
   (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
     const deviceId = String(device?._id || "");
     if (processedDeviceIds.has(deviceId)) return;
@@ -1322,15 +1393,32 @@ const computeProcessInsights = async ({
     if (!stageRow) return;
 
     if (isDeviceTerminalNg(device)) {
-       stageRow.tested += 1;
-       stageRow.ng += 1;
+      stageRow.tested += 1;
+      stageRow.ng += 1;
     } else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched" || normalizeKey(device?.status) === "pass") {
-       stageRow.tested += 1;
-       stageRow.pass += 1;
-    } else {
+      stageRow.tested += 1;
+      stageRow.pass += 1;
+    } else if (remainingUntestedWipCapacity > 0) {
       stageRow.wip += 1;
+      remainingUntestedWipCapacity -= 1;
     }
   });
+
+  // Only pad the first stage's WIP with leftover capacity if Serial Generator
+  // has actually created at least one Device doc for this process — otherwise
+  // there's nothing behind the number: the drill-down list (built from real
+  // Device docs) would always be empty while the count claims units exist.
+  if (
+    firstProcessStage &&
+    isKitConfirmedProcessStatus(processStatus) &&
+    remainingUntestedWipCapacity > 0 &&
+    (Array.isArray(wipDevices) ? wipDevices.length : 0) > 0
+  ) {
+    const firstStageRow = upsertStage(firstProcessStage);
+    if (firstStageRow) {
+      firstStageRow.wip += remainingUntestedWipCapacity;
+    }
+  }
 
   // Totals: pass/ng from latest row per device-stage combo; wip = sum of stage-level wip buckets
   const uniqueProcessTotals = {
@@ -1564,31 +1652,31 @@ const computeOperatorActivityTimestamps = async ({
   return {
     stageAssignmentStart: taskStartEvent?.occurredAt
       ? {
-          at: toIsoOrNull(taskStartEvent.occurredAt),
-          ...taskStartOperator,
-          stageType: normalizeValue(stageAssignment?.stageType) || null,
-          seatKey: stageAssignment?.seatDetails
-            ? `${normalizeValue(stageAssignment.seatDetails.rowNumber)}-${normalizeValue(stageAssignment.seatDetails.seatNumber)}`.replace(
-                /^-$/,
-                "",
-              ) || null
-            : null,
-        }
+        at: toIsoOrNull(taskStartEvent.occurredAt),
+        ...taskStartOperator,
+        stageType: normalizeValue(stageAssignment?.stageType) || null,
+        seatKey: stageAssignment?.seatDetails
+          ? `${normalizeValue(stageAssignment.seatDetails.rowNumber)}-${normalizeValue(stageAssignment.seatDetails.seatNumber)}`.replace(
+            /^-$/,
+            "",
+          ) || null
+          : null,
+      }
       : null,
     operatorLogin: operatorLogin?.startedAt
       ? {
-          at: toIsoOrNull(operatorLogin.startedAt),
-          ...loginOperator,
-          planId: operatorLogin?.planId ? String(operatorLogin.planId) : null,
-        }
+        at: toIsoOrNull(operatorLogin.startedAt),
+        ...loginOperator,
+        planId: operatorLogin?.planId ? String(operatorLogin.planId) : null,
+      }
       : null,
     firstDeviceStart: firstDevice?.effectiveStart
       ? {
-          at: toIsoOrNull(firstDevice.effectiveStart),
-          serialNo: normalizeValue(firstDevice?.serialNo) || null,
-          stageName: normalizeValue(firstDevice?.stageName) || null,
-          ...deviceOperator,
-        }
+        at: toIsoOrNull(firstDevice.effectiveStart),
+        serialNo: normalizeValue(firstDevice?.serialNo) || null,
+        stageName: normalizeValue(firstDevice?.stageName) || null,
+        ...deviceOperator,
+      }
       : null,
   };
 };
@@ -1606,6 +1694,7 @@ module.exports = {
   isResolvedStatus,
   isDeviceTerminalNg,
   isActiveWipDeviceStatus,
+  isKitConfirmedProcessStatus,
   getResolvedReturnStage,
   getRecordSeatKey,
   computePlanInsights,

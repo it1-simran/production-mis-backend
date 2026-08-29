@@ -28,6 +28,14 @@ const deviceTestSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: "products" },
   planId: { type: mongoose.Schema.Types.ObjectId, ref: "PlaningAndScheduling" },
   assignedDeviceTo: { type: String, required: false },
+  // Stage-routing snapshot captured at Pass time so planInsightsService can
+  // credit the passed device as WIP at its NEXT stage. Without these fields
+  // declared here, Mongoose's strict mode silently drops them on save and
+  // the device disappears from WIP counts until it's actually tested again.
+  nextLogicalStage: { type: String, required: false, default: "" },
+  assignedSeatKey: { type: String, required: false, default: "" },
+  assignedStageInstanceId: { type: String, required: false, default: "" },
+  assignedParallelGroupKey: { type: String, required: false, default: "" },
   // Free-form operator-provided description captured at NG time.
   ngDescription: { type: String, required: false, default: "" },
   // Captured failure reason (e.g. from jig validation)

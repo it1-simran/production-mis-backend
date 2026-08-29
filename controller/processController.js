@@ -1354,6 +1354,92 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+  // Fallback confirm path for processes that have a Planning & Scheduling plan but no
+  // seat/stage assignments yet — records the confirmed quantity against a synthetic
+  // "unassigned" seat entry instead of a real row/seat, so it doesn't fabricate seat data.
+  confirmKitsToLineWithoutSeat: async (req, res) => {
+    try {
+      const { processId, quantity, iapNo } = req.body;
+      if (!processId) {
+        return res.status(400).json({ status: 400, message: "processId is required" });
+      }
+
+      const process = await ProcessModel.findById(processId).lean();
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+
+      // Process documents don't store planId directly — the plan references the process via
+      // its own selectedProcess field, same join used by the process listing aggregation.
+      const plan = await PlaningAndSchedulingModel.findOne({ selectedProcess: processId }).lean();
+      if (!plan) {
+        return res.status(400).json({ status: 400, message: "This process has no Planning & Scheduling plan yet." });
+      }
+
+      const qty = parseInt(quantity) || 0;
+      if (qty <= 0) {
+        return res.status(400).json({ status: 400, message: "Quantity must be greater than zero" });
+      }
+
+      const processIssuedKits = parseInt(process.issuedKits) || 0;
+      const condition = { planId: plan._id, processId };
+      const existingEntry = await AssignKitsToLineModel.findOne(condition).lean();
+      const existingSeats = existingEntry?.seatDetails || [];
+
+      const isUnassignedSeat = (seat) => seat?.rowNumber === "unassigned" && seat?.seatNumber === "unassigned";
+      const otherSeats = existingSeats.filter((seat) => !isUnassignedSeat(seat));
+      const existingUnassignedQty = existingSeats
+        .filter(isUnassignedSeat)
+        .reduce((sum, seat) => sum + (parseInt(seat?.issuedKits) || 0), 0);
+
+      const newUnassignedQty = existingUnassignedQty + qty;
+      const mergedSeats = [...otherSeats, { rowNumber: "unassigned", seatNumber: "unassigned", issuedKits: newUnassignedQty }];
+      const seatAllocatedTotal = mergedSeats.reduce((sum, seat) => sum + (parseInt(seat?.issuedKits) || 0), 0);
+
+      if (seatAllocatedTotal > processIssuedKits) {
+        return res.status(400).json({
+          status: 400,
+          message: `Cannot confirm more than the process's issued kits (${processIssuedKits}).`,
+        });
+      }
+
+      const effectiveIapNo = iapNo || existingEntry?.iapNo || process?.iapNo;
+      const issuedKitsStatus =
+        seatAllocatedTotal >= processIssuedKits && processIssuedKits > 0
+          ? "ISSUED"
+          : seatAllocatedTotal > 0
+            ? "PARTIALLY_ISSUED"
+            : "NOT_ISSUED";
+
+      await AssignKitsToLineModel.findOneAndUpdate(
+        condition,
+        {
+          planId: plan._id,
+          processId,
+          issuedKits: seatAllocatedTotal,
+          seatDetails: mergedSeats,
+          issuedKitsStatus,
+          status: "ASSIGN_TO_OPERATOR",
+          iapNo: effectiveIapNo,
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      );
+
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(
+        processId,
+        { status: "waiting_for_kits_confirmation", iapNo: effectiveIapNo },
+        { new: true, runValidators: true },
+      );
+
+      return res.status(200).json({
+        status: 200,
+        message: "Kits confirmed successfully!",
+        updatedProcess,
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
   generateIapNo: async (req, res) => {
     try {
       const Sequence = require("../models/Sequence");

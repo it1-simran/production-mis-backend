@@ -928,12 +928,14 @@ module.exports = {
       const { processId } = req.params;
       const limitRaw = req.query.limit;
       const pageRaw = req.query.page;
-      const deviceLimit = Math.min(Math.max(parseInt(limitRaw) || 500, 1), 2000);
+      const defaultLimit = limitRaw === "all" || limitRaw === "0" ? 50000 : 50000;
+      const deviceLimit = Math.min(Math.max(parseInt(limitRaw) || defaultLimit, 1), 50000);
       const deviceSkip = Math.max((parseInt(pageRaw) || 1) - 1, 0) * deviceLimit;
 
       const [devices, totalDevices] = await Promise.all([
         deviceModel
           .find({ processID: processId }, null, { sort: { createdAt: -1 } })
+          .select("_id serialNo imei imeiNo ccid currentStage status cartonSerial modelName createdAt updatedAt")
           .skip(deviceSkip)
           .limit(deviceLimit)
           .lean(),
@@ -1806,19 +1808,42 @@ module.exports = {
               ngDevice: 0,
             });
           }
-        } else if (nextSeatRouting.assignedSeatKey && rawAssignedStages[nextSeatRouting.assignedSeatKey]) {
-          const targetSeatStages = toStageArray(rawAssignedStages[nextSeatRouting.assignedSeatKey]);
-          const targetSeatStageIdx = targetSeatStages.findIndex(
-            (stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(nextSeatRouting.nextLogicalStage),
-          );
-          if (targetSeatStageIdx >= 0) {
-            targetSeatStages[targetSeatStageIdx].totalUPHA = Number(targetSeatStages[targetSeatStageIdx]?.totalUPHA || 0) + 1;
-            rawAssignedStages[nextSeatRouting.assignedSeatKey] = targetSeatStages;
+        } else if (nextSeatRouting.nextLogicalStage) {
+          let foundTargetSeat = false;
+          const targetKey = normalizeKey(nextSeatRouting.nextLogicalStage);
+
+          if (nextSeatRouting.assignedSeatKey && rawAssignedStages[nextSeatRouting.assignedSeatKey]) {
+            const targetSeatStages = toStageArray(rawAssignedStages[nextSeatRouting.assignedSeatKey]);
+            const targetSeatStageIdx = targetSeatStages.findIndex(
+              (stage) => normalizeKey(getStageLabel(stage)) === targetKey,
+            );
+            if (targetSeatStageIdx >= 0) {
+              targetSeatStages[targetSeatStageIdx].totalUPHA = Number(targetSeatStages[targetSeatStageIdx]?.totalUPHA || 0) + 1;
+              rawAssignedStages[nextSeatRouting.assignedSeatKey] = targetSeatStages;
+              foundTargetSeat = true;
+            }
           }
-        } else if (nextIndex && rawAssignedStages[nextIndex] && toStageArray(rawAssignedStages[nextIndex])[0]) {
-          const nextSeatStages = toStageArray(rawAssignedStages[nextIndex]);
-          nextSeatStages[0].totalUPHA = Number(nextSeatStages[0]?.totalUPHA || 0) + 1;
-          rawAssignedStages[nextIndex] = nextSeatStages;
+
+          if (!foundTargetSeat) {
+            for (const sKey of Object.keys(rawAssignedStages)) {
+              const targetSeatStages = toStageArray(rawAssignedStages[sKey]);
+              const targetSeatStageIdx = targetSeatStages.findIndex(
+                (stage) => normalizeKey(getStageLabel(stage)) === targetKey,
+              );
+              if (targetSeatStageIdx >= 0) {
+                targetSeatStages[targetSeatStageIdx].totalUPHA = Number(targetSeatStages[targetSeatStageIdx]?.totalUPHA || 0) + 1;
+                rawAssignedStages[sKey] = targetSeatStages;
+                foundTargetSeat = true;
+                break;
+              }
+            }
+          }
+
+          if (!foundTargetSeat && nextIndex && rawAssignedStages[nextIndex] && toStageArray(rawAssignedStages[nextIndex])[0]) {
+            const nextSeatStages = toStageArray(rawAssignedStages[nextIndex]);
+            nextSeatStages[0].totalUPHA = Number(nextSeatStages[0]?.totalUPHA || 0) + 1;
+            rawAssignedStages[nextIndex] = nextSeatStages;
+          }
         }
       } else {
         if (Number(currentSeatStageEntry?.totalUPHA || 0) > 0) {

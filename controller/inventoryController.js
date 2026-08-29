@@ -3,6 +3,7 @@ const { getUnscopedAuthorizedReadListFilter } = require("../utils/accessControl"
 const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
+const KitAllocationTransactionModel = require("../models/kitAllocationTransaction");
 
 const toPositiveInt = (value) => Math.max(parseInt(value, 10) || 0, 0);
 
@@ -441,6 +442,14 @@ module.exports = {
             message: `IAP Number '${inputIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique IAP Number.`
           });
         }
+
+        const duplicateTransaction = await KitAllocationTransactionModel.findOne({ iapNo: inputIapNo }).lean();
+        if (duplicateTransaction) {
+          return res.status(400).json({
+            status: 400,
+            message: `IAP Number '${inputIapNo}' has already been used for a previous allocation. Please enter a unique IAP Number.`
+          });
+        }
       }
 
       const packagingData = await getPackagingDataByProductId(process.selectedProduct);
@@ -474,11 +483,39 @@ module.exports = {
         new: true,
         runValidators: true,
       });
+
+      const transaction = await KitAllocationTransactionModel.create({
+        processId: id,
+        inventoryId: Inventory._id,
+        iapNo: effectiveIapNo,
+        quantity: kitQty,
+        cartonQuantity: deriveCartonsFromQuantity(kitQty, maxCapacity),
+        allocatedBy: req.user?.id || null,
+      });
+
       return res.status(200).json({
         status: 200,
         status_msg: "Updated Process Sucessfully!!",
         updatedProcess,
+        transaction,
       });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getKitAllocationTransactions: async (req, res) => {
+    try {
+      const processId = req.params.processId;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process id" });
+      }
+
+      const transactions = await KitAllocationTransactionModel.find({ processId })
+        .sort({ createdAt: -1 })
+        .populate("allocatedBy", "name employeeCode")
+        .lean();
+
+      return res.status(200).json({ status: 200, transactions });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }

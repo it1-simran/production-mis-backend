@@ -1518,6 +1518,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     quantity: process?.quantity || 0,
     shift,
     issuedKits: seatIssuedKits,
+    processStatus: process?.status || "",
+    processIssuedKits: Number(process?.issuedKits || 0),
+    processConsumedKits: Number(process?.consumedKits || 0),
   });
 
   const deviceQueue = seatKey && currentAssignedStageName && process
@@ -1627,10 +1630,18 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const insightStageWip = stageInsight ? Number(stageInsight.wip || 0) : 0;
 
   const lineIssueKitsCount = isFirstStage && seatIssuedKits > 0 ? seatIssuedKits : 0;
-  const wipKitsCount =
+  const rawWipKitsCount =
     lineIssueKitsCount > 0 && !(insightSeatWip > 0 || insightStageWip > 0)
       ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg)
       : Math.max(Number(deviceQueue.length || 0), insightSeatWip, insightStageWip, seatScopedResolvedWip);
+  // Serial Generator can pre-create more Device docs than were actually
+  // assigned to this seat (lineIssueKitsCount), so the raw queue/device-count
+  // sources above can overshoot what the seat was ever given. Never report
+  // more WIP than the seat's own remaining capacity.
+  const wipKitsCount =
+    lineIssueKitsCount > 0
+      ? Math.min(rawWipKitsCount, Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg))
+      : rawWipKitsCount;
   const kitsShortageCount =
     lineIssueKitsCount > 0
       ? Math.max(0, lineIssueKitsCount - seatScopedPass - seatScopedNg - wipKitsCount)
