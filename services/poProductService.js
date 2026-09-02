@@ -1,7 +1,6 @@
 const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
-const SlugMapping = require("../models/slugMapping");
-const { resolveTestingPlan } = require("./slugResolver");
+const { nextProductCode } = require("./productCodeService");
 
 // eSIM provider -> single-letter code for the product name (Airtel→A, BSNL→B, Vi→V).
 const PROVIDER_LETTER = { airtel: "A", bsnl: "B", vi: "V", vodafone: "V", jio: "J" };
@@ -68,17 +67,34 @@ async function createProductFromPO(po, user = {}) {
 
   if (!name) throw new Error("Cannot build product name from PO (missing model/eSIM/category).");
 
-  // Resolve the category testing plan with this PO's own slug values.
-  let stages = [];
-  if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
-    const slugMaps = await SlugMapping.find({ isActive: true }).lean();
-    const poObj = typeof po.toObject === "function" ? po.toObject() : po;
-    stages = resolveTestingPlan(cat.testingPlan, poObj, slugMaps);
-  }
+  // NEW: Store the category testing plan RAW (with ${slug} tokens intact)
+  // instead of resolving+freezing it here. Baking slug values in at creation
+  // time meant a later fix in Slug Management (e.g. correcting which PO field
+  // a slug points at) could never reach already-created products - resolution
+  // now happens live at read time (see productController.getProductByID's
+  // resolveSlugs option) against whatever SlugMapping docs are active *now*.
+  const stages = cat && Array.isArray(cat.testingPlan) ? cat.testingPlan : [];
 
+  // NEW: Same PDI/FG to Store defaults as the product editor's
+  // COMMON_STAGE_DEFAULTS (components/product/edit/page.tsx) - a product
+  // created here (the automated PO path) never passes through that UI, so it
+  // needs the same seed applied directly, or it's created with commonStages: []
+  // and both the product editor and any auto-created Process silently inherit
+  // that empty array. Dispatch/Delivery intentionally left unset (not in
+  // active use yet), matching the frontend.
+  const commonStages = [
+    { stageName: "PDI", managedBy: "QC", requiredSkill: "PDI" },
+    { stageName: "FG to Store", managedBy: "Store", requiredSkill: "FG to Store" },
+    { stageName: "Dispatch", managedBy: "", requiredSkill: "" },
+    { stageName: "Delivery", managedBy: "", requiredSkill: "" },
+  ];
+
+  const productCode = await nextProductCode();
   const product = await new Product({
     name,
+    productCode,
     stages,
+    commonStages,
     status: "draft", // Engineering approval activates it (and creates inventory).
     createdBy: user.id || null,
     department: user.department || "",

@@ -9,20 +9,27 @@ const SlugMapping = require("../models/slugMapping");
 const { createProductFromPO, resolveProductCategory } = require("../services/poProductService");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { createInventoryForProduct } = require("../services/inventoryService");
+const ProcessModel = require("../models/process");
 
 /**
- * The testing plan to apply for a PO: the product's own stages if it already has
- * them, else the mapped category's testing plan resolved against the PO (${slug}).
+ * The testing plan to preview/apply for a PO, with ${slug} tokens resolved
+ * against this PO's own data using whatever SlugMapping docs are active RIGHT
+ * NOW (not frozen at product-creation time - see poProductService.js). Prefers
+ * the product's own stages (its category's plan at creation), falling back to
+ * re-resolving the category's current plan if the product has none yet.
  */
 async function resolvedPlanForPo(po, product) {
-  if (product && Array.isArray(product.stages) && product.stages.length) return product.stages;
-  const cat = await resolveProductCategory(po);
-  if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
-    const slugMaps = await SlugMapping.find({ isActive: true }).lean();
-    const poObj = typeof po.toObject === "function" ? po.toObject() : po;
-    return resolveTestingPlan(cat.testingPlan, poObj, slugMaps);
+  let rawStages = product && Array.isArray(product.stages) && product.stages.length ? product.stages : null;
+  if (!rawStages) {
+    const cat = await resolveProductCategory(po);
+    if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
+      rawStages = cat.testingPlan;
+    }
   }
-  return [];
+  if (!rawStages || !rawStages.length) return [];
+  const slugMaps = await SlugMapping.find({ isActive: true }).lean();
+  const poObj = typeof po.toObject === "function" ? po.toObject() : po;
+  return resolveTestingPlan(rawStages, poObj, slugMaps);
 }
 
 const dispatchService = new DispatchService();
@@ -66,7 +73,88 @@ async function nextPoNumber() {
   return `PO-${year}-${String(seq.value).padStart(6, "0")}`;
 }
 
+/**
+ * Atomic, gap-free Process ID: PRC-YYYY-000123. processID is otherwise a
+ * free-typed field with no consistent format across existing records (see
+ * process.js) - this generator is only used for POs auto-creating their
+ * Process on Engineering approval, so it's a clean new namespace that can't
+ * collide with any manually-typed processID.
+ */
+async function nextProcessId() {
+  const year = new Date().getFullYear();
+  const seq = await Sequence.findOneAndUpdate(
+    { name: "auto_process_id" },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true }
+  );
+  return `PRC-${year}-${String(seq.value).padStart(6, "0")}`;
+}
+
+/**
+ * Auto-create the Process for a just-activated product, copying its stages/
+ * commonStages/autoNgEnabled verbatim (same data a human would copy manually
+ * via the Add Process form). Returns the saved Process, or null if one
+ * couldn't be created (caller decides how to handle that without blocking the
+ * approval itself).
+ */
+async function createProcessForApprovedPo(po, product, user = {}) {
+  const processID = await nextProcessId();
+  const name = `${product.name} - ${po.poNumber}`.trim();
+  const process = await new ProcessModel({
+    name,
+    selectedProduct: product._id,
+    orderConfirmationNo: po.ocNumber || po.poNumber || "",
+    processID,
+    quantity: String(po.requiredQuantity ?? ""),
+    stages: product.stages || [],
+    commonStages: product.commonStages || [],
+    autoNgEnabled: !!product.autoNgEnabled,
+    createdBy: user.id || user._id || null,
+    department: user.department || "",
+  }).save();
+  return process;
+}
+
 const VALID_RECHARGE = ["1_year", "2_year"];
+const VALID_LOGISTICS_PARTY = ["us", "customer"];
+
+/**
+ * Validate + normalize the logistics block CPanel sends. Returns
+ * { logistics, error } — error is a user-facing message when invalid.
+ */
+function buildLogistics(input) {
+  const l = input && typeof input === "object" ? input : {};
+  const managedBy = VALID_LOGISTICS_PARTY.includes(l.managedBy) ? l.managedBy : "us";
+  const ewayBillBy = VALID_LOGISTICS_PARTY.includes(l.ewayBillBy) ? l.ewayBillBy : "us";
+
+  const logistics = {
+    managedBy,
+    deliveryAddress: String(l.deliveryAddress || "").trim(),
+    contactName: String(l.contactName || "").trim(),
+    contactPhone: String(l.contactPhone || "").trim(),
+    deliveryMode: String(l.deliveryMode || "").trim(),
+    insuranceRequired: !!l.insuranceRequired,
+    transporterName: String(l.transporterName || "").trim(),
+    transporterContact: String(l.transporterContact || "").trim(),
+    vehicleNumber: String(l.vehicleNumber || "").trim(),
+    pickupDateTime: l.pickupDateTime ? new Date(l.pickupDateTime) : null,
+    pickupPersonName: String(l.pickupPersonName || "").trim(),
+    ewayBillBy,
+    specialInstructions: String(l.specialInstructions || "").trim(),
+  };
+
+  if (managedBy === "us") {
+    if (!logistics.deliveryAddress || !logistics.contactName || !logistics.contactPhone) {
+      return { logistics: null, error: "Delivery address, contact name and contact phone are required when we manage logistics." };
+    }
+  } else {
+    if (!logistics.transporterName || !logistics.transporterContact || !logistics.vehicleNumber || !logistics.pickupDateTime) {
+      return { logistics: null, error: "Transporter name, transporter contact, vehicle number and pickup date/time are required when the customer manages logistics." };
+    }
+  }
+
+  return { logistics, error: null };
+}
 
 /** GET from GPSCPANEL's MES-integration API using the shared key. */
 async function cpanelGet(path, params) {
@@ -94,12 +182,23 @@ module.exports = {
       const requiredQuantity = parseInt(b.requiredQuantity, 10);
       const esimRechargePeriod = String(b.esimRechargePeriod || "").trim();
 
+      // Defense-in-depth: CPanel already gates PO creation on KYC approval,
+      // but MES re-checks so the integration endpoint can't be used to bypass it.
+      if (b.kycApproved !== true) {
+        return res.status(403).json({ status: 403, message: "Customer KYC is not approved. Cannot raise a Purchase Order." });
+      }
+
       // modelName is optional — a PO can be raised without a configured model.
       if (!VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
       if (!Number.isInteger(requiredQuantity) || requiredQuantity < 1) {
         return res.status(400).json({ status: 400, message: "requiredQuantity must be a positive integer." });
+      }
+
+      const { logistics, error: logisticsError } = buildLogistics(b.logistics);
+      if (logisticsError) {
+        return res.status(400).json({ status: 400, message: logisticsError });
       }
 
       const poNumber = await nextPoNumber();
@@ -128,6 +227,7 @@ module.exports = {
         configuration: b.configuration && typeof b.configuration === "object" ? b.configuration : {},
         expectedDeliveryDate: b.expectedDeliveryDate ? new Date(b.expectedDeliveryDate) : null,
         requiredQuantity,
+        logistics,
         status: "Pending",
         statusHistory: [
           {
@@ -281,6 +381,46 @@ module.exports = {
       return res.status(200).json({ status: 200, makes, profiles: flatProfiles });
     } catch (error) {
       console.error("esimOptions error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * Dynamic "PO Field (source)" suggestions for Slug Management, derived from
+   * the actual configuration.schema snapshots already stored on Purchase Orders
+   * - each device category defines its own custom fields in GPSCPANEL (frozen
+   * onto the PO at creation time as configuration.schema/configuration.values),
+   * so there's no single fixed schema MES owns to hardcode; this aggregates the
+   * distinct field keys that have genuinely appeared across real POs instead.
+   */
+  configurationFieldHints: async (req, res) => {
+    try {
+      const docs = await PurchaseOrder.find({ "configuration.schema.0": { $exists: true } })
+        .select("configuration.schema")
+        .lean();
+
+      const normalizeKey = (key) =>
+        String(key || "")
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, "_");
+
+      const byValue = new Map();
+      docs.forEach((po) => {
+        (po.configuration?.schema || []).forEach((field) => {
+          const norm = normalizeKey(field?.key);
+          if (!norm) return;
+          const value = `configuration.values.${norm}.value`;
+          if (!byValue.has(value)) {
+            byValue.set(value, { label: `Config: ${field.key}`, value });
+          }
+        });
+      });
+
+      const hints = Array.from(byValue.values()).sort((a, b) => a.label.localeCompare(b.label));
+      return res.status(200).json({ status: 200, hints });
+    } catch (error) {
+      console.error("configurationFieldHints error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
   },
@@ -554,6 +694,86 @@ module.exports = {
     }
   },
 
+  /**
+   * Production Manager queue: POs whose Process was auto-created on Engineering
+   * approval and is waiting to be planned/scheduled. fulfilment.processId/
+   * processName/productName are already denormalized onto the PO (see
+   * engineeringApprove), so this list needs no extra joins.
+   */
+  productionQueueList: async (req, res) => {
+    try {
+      const { search } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+      const filter = { "fulfilment.state": "production_pending" };
+      if (search) {
+        const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [
+          { poNumber: rx },
+          { modelName: rx },
+          { "fulfilment.productName": rx },
+          { "fulfilment.processName": rx },
+          { "raisedBy.name": rx },
+        ];
+      }
+
+      const total = await PurchaseOrder.countDocuments(filter);
+      const data = await PurchaseOrder.find(filter)
+        .sort({ "fulfilment.decidedAt": -1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: "fulfilment.processId", select: "processID name quantity status" })
+        .lean();
+
+      return res.status(200).json({ status: 200, data, total, page, limit });
+    } catch (error) {
+      console.error("productionQueueList error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * Production Manager sets the real PID (Process ID) on the auto-created
+   * Process before it can be planned/scheduled. The Process is auto-created
+   * with a system-generated placeholder (PRC-YYYY-NNNNNN, see nextProcessId)
+   * so it satisfies the schema's required processID immediately - this lets
+   * Production Manager overwrite it with their own real identifier.
+   */
+  productionQueueSetPid: async (req, res) => {
+    try {
+      const processID = String(req.body?.processID || "").trim();
+      if (!processID) {
+        return res.status(400).json({ status: 400, message: "PID is required." });
+      }
+      const po = await PurchaseOrder.findById(req.params.id).lean();
+      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      const processId = po.fulfilment?.processId;
+      if (!processId) {
+        return res.status(409).json({ status: 409, message: "No Process linked to this PO." });
+      }
+
+      const duplicate = await ProcessModel.findOne({ processID, _id: { $ne: processId } }).select("_id").lean();
+      if (duplicate) {
+        return res.status(409).json({ status: 409, message: `PID "${processID}" is already used by another process.` });
+      }
+
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(
+        processId,
+        { processID },
+        { new: true, runValidators: true }
+      ).lean();
+      if (!updatedProcess) {
+        return res.status(404).json({ status: 404, message: "Linked process not found." });
+      }
+
+      return res.status(200).json({ status: 200, message: "PID updated.", data: { process: updatedProcess } });
+    } catch (error) {
+      console.error("productionQueueSetPid error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
   /** Full detail for the engineering queue: the PO + its auto-created product. */
   engineeringDetail: async (req, res) => {
     try {
@@ -563,11 +783,15 @@ module.exports = {
       if (po.fulfilment?.productId) {
         product = await Product.findById(po.fulfilment.productId).lean();
       }
-      // Show the effective plan: product's own, else the category plan resolved
-      // against the PO (so a plan added after product creation is previewed).
+      // Show the effective plan, always LIVE-resolved against current
+      // SlugMapping docs (product.stages stores the raw ${slug} template, not a
+      // frozen snapshot - see poProductService.js) so this preview reflects any
+      // slug correction made after the product was created, not just at
+      // creation time. Falls back to the category's plan if the product has
+      // none yet (e.g. category plan was added after product creation).
       const productHadPlan = !!(product && Array.isArray(product.stages) && product.stages.length);
       const plan = await resolvedPlanForPo(po, product);
-      if (product && !productHadPlan) product = { ...product, stages: plan };
+      if (product) product = { ...product, stages: plan };
       return res.status(200).json({ status: 200, data: { po, product, planFromCategory: !productHadPlan && plan.length > 0 } });
     } catch (error) {
       console.error("engineeringDetail error:", error);
@@ -590,10 +814,16 @@ module.exports = {
       if (!product) return res.status(404).json({ status: 404, message: "Linked product not found." });
 
       // If the product has no testing plan (e.g. the category plan was added after
-      // the product was auto-created), apply the resolved category plan now.
+      // the product was auto-created), backfill it with the category's RAW plan -
+      // NOT the resolved one. This is a save path: persisting resolvedPlanForPo's
+      // output here would bake ${slug} tokens into literal values and freeze this
+      // product exactly like the old behavior, defeating live resolution for it
+      // going forward. Raw ${slug} tokens are harmless if a category has none.
       if (!Array.isArray(product.stages) || !product.stages.length) {
-        const plan = await resolvedPlanForPo(po, product);
-        if (plan.length) product.stages = plan;
+        const backfillCat = await resolveProductCategory(po);
+        if (backfillCat && Array.isArray(backfillCat.testingPlan) && backfillCat.testingPlan.length) {
+          product.stages = backfillCat.testingPlan;
+        }
       }
       // Refuse to activate a product with zero testing stages - that would put a
       // device into production with nothing to validate it against. Engineering
@@ -622,7 +852,26 @@ module.exports = {
       // Reuse the existing product→inventory logic.
       await createInventoryForProduct(product, req.user || {});
 
-      po.fulfilment.state = "engineering_approved";
+      // NEW: Auto-create the Process from the now-active product and route the
+      // PO on to Production Manager, instead of stopping at engineering_approved.
+      // Process creation failure must NOT block the approval itself (the
+      // product is already activated with inventory by this point) - it just
+      // falls back to the old resting state so nothing is lost, and the
+      // remark makes the gap visible for a manual Process creation instead.
+      let createdProcess = null;
+      let processCreationError = "";
+      try {
+        createdProcess = await createProcessForApprovedPo(po, product, req.user || {});
+      } catch (procErr) {
+        console.error("createProcessForApprovedPo error:", procErr);
+        processCreationError = procErr.message || String(procErr);
+      }
+
+      if (createdProcess) {
+        po.fulfilment.processId = createdProcess._id;
+        po.fulfilment.processName = createdProcess.name;
+      }
+      po.fulfilment.state = createdProcess ? "production_pending" : "engineering_approved";
       po.statusHistory.push({
         fromStatus: po.status,
         toStatus: po.status,
@@ -631,12 +880,22 @@ module.exports = {
         changedByName: req.user?.name || req.user?.email || "",
         remarks: `Engineering approved product "${product.name}"${categoryName ? ` under category "${categoryName}"` : ""} — activated with inventory${
           !product.stages?.length ? " (approved with 0 testing stages, forced)" : ""
+        }${
+          createdProcess
+            ? `. Process "${createdProcess.processID}" auto-created — routed to Production Manager for planning/scheduling.`
+            : `. Process auto-creation failed (${processCreationError || "unknown error"}) — create it manually.`
         }`,
         changedAt: new Date(),
       });
       await po.save();
 
-      return res.status(200).json({ status: 200, message: "Product approved and activated with inventory.", data: { po, product } });
+      return res.status(200).json({
+        status: 200,
+        message: createdProcess
+          ? "Product approved, activated with inventory, and Process created — routed to Production Manager."
+          : "Product approved and activated with inventory. Process auto-creation failed - create it manually.",
+        data: { po, product, process: createdProcess },
+      });
     } catch (error) {
       console.error("engineeringApprove error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });

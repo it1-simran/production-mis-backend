@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  // NEW: Auto-allotted, atomic sequence code (see services/productCodeService.js)
+  // - not required so existing products created before this feature stay valid
+  // without a migration; sparse so the unique index only applies to docs that
+  // actually have one (never colliding on missing/undefined for old records).
+  productCode: { type: String, unique: true, sparse: true, index: true },
   status: { type: String, enum: ["draft", "active"], default: "active" },
   autoNgEnabled: { type: Boolean, default: false },
   stages: [
@@ -151,7 +156,12 @@ const productSchema = new mongoose.Schema({
     {
       stageName: { type: String, required: true },
       managedBy: { type: String, required: false },
-      requiredSkill: { type: String, required: true },
+      // NEW: Not unconditionally required - Dispatch/Delivery common stages
+      // aren't in active use yet (reserved for a future rollout) and are
+      // intentionally saved without a skill/owner assigned. The frontend still
+      // enforces this for the stages that ARE active (PDI, FG to Store) - see
+      // COMMON_STAGE_DEFAULTS in product/edit/page.tsx.
+      requiredSkill: { type: String, required: false },
     },
   ],
   createdAt: { type: Date, default: Date.now },

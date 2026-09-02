@@ -37,6 +37,8 @@ const MODULE_KEYS = {
   ACCOUNTS_PO: "accounts_po_management",
   SLUG_MANAGEMENT: "slug_management",
   ENGINEERING_APPROVALS: "engineering_approvals",
+  PRODUCTION_QUEUE: "production_queue",
+  NPD_SKU_REQUESTS: "npd__sku_requests",
 
   PURCHASE_ORDER: "purchase_order_management",
 

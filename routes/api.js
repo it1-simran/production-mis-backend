@@ -47,6 +47,7 @@ const { submitDeduplicationMiddleware } = require('../middleware/requestDeduplic
 const { createRequestTimeoutMiddleware } = require('../middleware/requestTimeout');
 const serviceKeyAuth = require('../middleware/serviceKeyAuth');
 const purchaseOrderController = require('../controller/purchaseOrderController');
+const skuRequestController = require('../controller/skuRequestController');
 connectDB();
 
 /** Parses multipart/form-data for API routes that receive FormData from the frontend. */
@@ -427,6 +428,20 @@ router.put('/purchase-orders/:id', authController.authenticateToken, authControl
 router.put('/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.approve);
 router.put('/purchase-orders/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.reject);
 
+// ================================= SKUs =================================
+// Integration API — GPS CPanel (machine-to-machine via shared x-api-key).
+router.post('/integrations/cpanel/skus', serviceKeyAuth, skuRequestController.createFromCpanel);
+router.get('/integrations/cpanel/skus', serviceKeyAuth, skuRequestController.listForCpanel);
+router.get('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.getForCpanel);
+router.put('/integrations/cpanel/skus/:id/resubmit', serviceKeyAuth, skuRequestController.resubmitFromCpanel);
+router.put('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.updateFromCpanel);
+router.delete('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.deleteFromCpanel);
+// Internal NPD review UI — user JWT + NPD_SKU_REQUESTS module.
+router.get('/npd/skus', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.list);
+router.get('/npd/skus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.getOne);
+router.put('/npd/skus/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.approve);
+router.put('/npd/skus/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.reject);
+
 // Accounts Portal — read-only view of approved (and post-approval cancelled) POs.
 router.get('/accounts/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.listForAccounts);
 router.get('/accounts/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.getOne);
@@ -536,11 +551,14 @@ router.get('/engineering/purchase-orders/:id', authController.authenticateToken,
 router.put('/engineering/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringApprove);
 router.put('/engineering/purchase-orders/:id/hold', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringHold);
 router.put('/engineering/purchase-orders/:id/resume', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringResumeFromHold);
+router.get('/production-queue/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCTION_QUEUE, "read"), purchaseOrderController.productionQueueList);
+router.put('/production-queue/purchase-orders/:id/set-pid', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCTION_QUEUE, "update"), purchaseOrderController.productionQueueSetPid);
 
 // Slug Management — maps ${slug} tokens in testing plans to PO fields.
 router.get('/slug-mapping/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), slugMappingController.view);
 router.post('/slug-mapping/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "create"), slugMappingController.create);
 router.delete('/slug-mapping/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "delete"), slugMappingController.delete);
+router.get('/slug-mapping/configuration-field-hints', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), purchaseOrderController.configurationFieldHints);
 
 router.post('/esim-profile/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "create"), esimProfileController.create);
 // Also hit by the operator portal's jig ESIM Settings Validation flow (viewEsimProfiles()),

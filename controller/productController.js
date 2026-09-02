@@ -7,6 +7,10 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProductCategory = require("../models/productCategory");
 const Carton = require('../models/cartonManagement');
 const { createInventoryForProduct } = require("../services/inventoryService");
+const PurchaseOrder = require("../models/PurchaseOrder");
+const SlugMapping = require("../models/slugMapping");
+const { resolveTestingPlan } = require("../services/slugResolver");
+const { nextProductCode } = require("../services/productCodeService");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -45,8 +49,10 @@ module.exports = {
         }
       }
 
+        const productCode = await nextProductCode();
         const newProduct = new Product({
           name,
+          productCode,
           stages,
           commonStages,
           status: isDraft ? "draft" : "active",
@@ -198,6 +204,23 @@ module.exports = {
         }
 
         let inventory = await InventoryModel.findOne({ productType: product._id }).lean();
+
+        // NEW: product.stages stores the RAW ${slug} template (see
+        // poProductService.js) - resolved live here, opt-in only, so slug
+        // corrections made in Slug Management reach already-created products
+        // immediately. Opt-in (not the default) because the product EDIT form
+        // round-trips this same response through update(), which persists
+        // whatever `stages` it's given verbatim; resolving by default would
+        // bake literal values back over the template on the next save and
+        // permanently defeat live resolution for that product.
+        if (String(req.query.resolveSlugs) === "1" && Array.isArray(product.stages) && product.stages.length) {
+          const sourcePo = await PurchaseOrder.findOne({ "fulfilment.productId": product._id }).lean();
+          if (sourcePo) {
+            const slugMaps = await SlugMapping.find({ isActive: true }).lean();
+            product.stages = resolveTestingPlan(product.stages, sourcePo, slugMaps);
+          }
+        }
+
         return res.status(200).json({product,inventory});
       }
     } catch (error) {

@@ -55,6 +55,26 @@ const purchaseOrderSchema = new mongoose.Schema({
   // { categoryId, firmwareId, snapshotAt, hash, values:{key:{id,value}}, schema:[...] }
   configuration: { type: mongoose.Schema.Types.Mixed, default: {} },
 
+  // Who arranges delivery for this PO, and the details relevant to that choice.
+  logistics: {
+    managedBy: { type: String, enum: ["us", "customer"], default: "us" },
+    // "us" branch — we deliver to the customer.
+    deliveryAddress: { type: String, default: "" },
+    contactName: { type: String, default: "" },
+    contactPhone: { type: String, default: "" },
+    deliveryMode: { type: String, default: "" }, // Road / Air / Rail / Courier
+    insuranceRequired: { type: Boolean, default: false },
+    // "customer" branch — customer arranges their own pickup.
+    transporterName: { type: String, default: "" },
+    transporterContact: { type: String, default: "" },
+    vehicleNumber: { type: String, default: "" },
+    pickupDateTime: { type: Date, default: null },
+    pickupPersonName: { type: String, default: "" },
+    // Common to both.
+    ewayBillBy: { type: String, enum: ["us", "customer"], default: "us" },
+    specialInstructions: { type: String, default: "" },
+  },
+
   status: {
     type: String,
     enum: ["Pending", "Approved", "Rejected"],
@@ -71,7 +91,10 @@ const purchaseOrderSchema = new mongoose.Schema({
   fulfilment: {
     state: {
       type: String,
-      enum: ["awaiting", "oc_raised", "engineering_pending", "engineering_hold", "engineering_approved", "invoiced", "dispatched"],
+      // NEW: "production_pending" - engineering_approved now auto-creates a
+      // Process and routes here for Production Manager to plan/schedule it,
+      // instead of stopping at engineering_approved.
+      enum: ["awaiting", "oc_raised", "engineering_pending", "engineering_hold", "engineering_approved", "production_pending", "invoiced", "dispatched"],
       default: "awaiting",
     },
     availableAtCheck: { type: Number, default: null }, // stock seen at last decision
@@ -82,6 +105,9 @@ const purchaseOrderSchema = new mongoose.Schema({
     // Product auto-created from this PO (Engineering approval activates it).
     productId: { type: mongoose.Schema.Types.ObjectId, ref: "products", default: null },
     productName: { type: String, default: "" },
+    // NEW: Process auto-created from this PO's product on Engineering approval.
+    processId: { type: mongoose.Schema.Types.ObjectId, ref: "process", default: null },
+    processName: { type: String, default: "" },
   },
   approvedBy: {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
