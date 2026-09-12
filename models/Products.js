@@ -9,6 +9,10 @@ const productSchema = new mongoose.Schema({
   productCode: { type: String, unique: true, sparse: true, index: true },
   status: { type: String, enum: ["draft", "active"], default: "active" },
   autoNgEnabled: { type: Boolean, default: false },
+  // eSIM provider whose default APN/switch-profile config is used when a step's
+  // actionType is "ESIM Settings" (see config/esimProviders.js). Enum will grow
+  // as customer-specific providers are added.
+  esimProvider: { type: String, enum: ["jsd"], default: "jsd" },
   stages: [
     {
       stageName: { type: String, required: true },

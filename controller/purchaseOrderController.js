@@ -1,4 +1,22 @@
 const PurchaseOrder = require("../models/PurchaseOrder");
+const SkuRequest = require("../models/SkuRequest");
+
+/**
+ * Customer identity (name/email/mobile) is Sales & Accounts information — PPC
+ * only needs to know a PO exists and its dispatch-relevant details, not who
+ * raised it. Redact in place for PPC's views; role and cpanelUserId are kept.
+ */
+function redactCustomer(rows) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  list.forEach((row) => {
+    if (row && row.raisedBy) {
+      row.raisedBy.name = "";
+      row.raisedBy.email = "";
+      row.raisedBy.mobile = "";
+    }
+  });
+  return rows;
+}
 const Sequence = require("../models/Sequence");
 const EsimMake = require("../models/EsimMake");
 const EsimProfile = require("../models/EsimProfile");
@@ -169,6 +187,50 @@ async function cpanelGet(path, params) {
   return r.json();
 }
 
+/**
+ * POs raised before skuCode/serialNumberFormat/cartonType/stickerFormat/
+ * fgBomNumber/tranzactId were captured at PO-creation time have none of them
+ * stored. Best-effort fill for DISPLAY ONLY (mutates the given lean objects,
+ * never persisted) by matching each one back to the approved SKU it was
+ * almost certainly raised against — one batched query for the whole list.
+ */
+async function fillMissingSkuSnapshot(pos) {
+  const missing = (pos || []).filter((po) => !po.skuCode && !po.fgBomNumber && !po.serialNumberFormat);
+  if (!missing.length) return;
+
+  const orClauses = missing
+    .filter((po) => po.raisedBy?.cpanelUserId && po.deviceCategory?.id && po.firmware?.id)
+    .map((po) => ({
+      "raisedBy.cpanelUserId": po.raisedBy.cpanelUserId,
+      "deviceCategory.id": po.deviceCategory.id,
+      "firmware.id": po.firmware.id,
+      modelName: po.modelName || "",
+      vendorId: po.vendorId || "",
+      status: "Completed",
+    }));
+  if (!orClauses.length) return;
+
+  const skus = await SkuRequest.find({ $or: orClauses })
+    .select("raisedBy.cpanelUserId deviceCategory.id firmware.id modelName vendorId skuCode serialNumberFormat cartonType stickerFormat fgBomNumber tranzactId createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const keyOf = (o) => [o.raisedBy?.cpanelUserId, o.deviceCategory?.id, o.firmware?.id, o.modelName || "", o.vendorId || ""].join("|");
+  const byKey = {};
+  skus.forEach((s) => { const k = keyOf(s); if (!byKey[k]) byKey[k] = s; }); // first = most recent (sorted desc)
+
+  missing.forEach((po) => {
+    const sku = byKey[keyOf(po)];
+    if (!sku) return;
+    po.skuCode = sku.skuCode || "";
+    po.serialNumberFormat = sku.serialNumberFormat || "";
+    po.cartonType = sku.cartonType || "";
+    po.stickerFormat = sku.stickerFormat || { id: null, name: "" };
+    po.fgBomNumber = sku.fgBomNumber || "";
+    po.tranzactId = sku.tranzactId || "";
+  });
+}
+
 module.exports = {
   /**
    * POST /integrations/cpanel/purchase-orders  (service-key auth)
@@ -224,6 +286,12 @@ module.exports = {
         firmware: { id: b.firmware?.id ?? null, name: b.firmware?.name || "" },
         modelName,
         vendorId: b.vendorId || "",
+        skuCode: b.skuCode || "",
+        serialNumberFormat: b.serialNumberFormat || "",
+        cartonType: b.cartonType || "",
+        stickerFormat: { id: b.stickerFormat?.id ?? null, name: b.stickerFormat?.name || "" },
+        fgBomNumber: b.fgBomNumber || "",
+        tranzactId: b.tranzactId || "",
         configuration: b.configuration && typeof b.configuration === "object" ? b.configuration : {},
         expectedDeliveryDate: b.expectedDeliveryDate ? new Date(b.expectedDeliveryDate) : null,
         requiredQuantity,
@@ -288,6 +356,7 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+      await fillMissingSkuSnapshot(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -304,6 +373,7 @@ module.exports = {
     try {
       const po = await PurchaseOrder.findById(req.params.id).lean();
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      await fillMissingSkuSnapshot([po]);
       return res.status(200).json({ status: 200, data: po });
     } catch (error) {
       console.error("getForCpanel error:", error);
@@ -676,8 +746,10 @@ module.exports = {
 
       const filter = { "fulfilment.state": view };
       if (search) {
+        // No customer-name search — Engineering shouldn't be able to search
+        // by (or infer) customer identity, which is Sales & Accounts information.
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ poNumber: rx }, { modelName: rx }, { "fulfilment.productName": rx }, { "raisedBy.name": rx }];
+        filter.$or = [{ poNumber: rx }, { modelName: rx }, { "fulfilment.productName": rx }];
       }
 
       const total = await PurchaseOrder.countDocuments(filter);
@@ -686,6 +758,8 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+      await fillMissingSkuSnapshot(data);
+      redactCustomer(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -708,13 +782,15 @@ module.exports = {
 
       const filter = { "fulfilment.state": "production_pending" };
       if (search) {
+        // No customer-name search — Production Manager shouldn't be able to
+        // search by (or infer) customer identity, which is Sales & Accounts
+        // information.
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [
           { poNumber: rx },
           { modelName: rx },
           { "fulfilment.productName": rx },
           { "fulfilment.processName": rx },
-          { "raisedBy.name": rx },
         ];
       }
 
@@ -725,6 +801,7 @@ module.exports = {
         .limit(limit)
         .populate({ path: "fulfilment.processId", select: "processID name quantity status" })
         .lean();
+      redactCustomer(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -779,6 +856,8 @@ module.exports = {
     try {
       const po = await PurchaseOrder.findById(req.params.id).lean();
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      await fillMissingSkuSnapshot([po]);
+      redactCustomer(po);
       let product = null;
       if (po.fulfilment?.productId) {
         product = await Product.findById(po.fulfilment.productId).lean();
@@ -968,8 +1047,16 @@ module.exports = {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
+      // Sales's "Pending" tab covers both gates it acts on: the initial
+      // approval (Pending) and the final dispatch-date confirmation
+      // (PendingSalesConfirm) — PendingPpc (with PPC) also surfaces here,
+      // read-only, so Sales can see where each PO currently sits.
       const filter = {};
-      if (status) filter.status = status;
+      if (status === "Pending") {
+        filter.status = { $in: ["Pending", "PendingPpc", "PendingSalesConfirm"] };
+      } else if (status) {
+        filter.status = status;
+      }
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }];
@@ -981,6 +1068,8 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+
+      await fillMissingSkuSnapshot(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -999,6 +1088,9 @@ module.exports = {
       if (!po) {
         return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       }
+
+      await fillMissingSkuSnapshot([po]);
+
       return res.status(200).json({ status: 200, data: po });
     } catch (error) {
       console.error("purchaseOrder getOne error:", error);
@@ -1065,9 +1157,11 @@ module.exports = {
 
   /**
    * PUT /purchase-orders/:id/approve  (JWT + PURCHASE_ORDER update)
+   * Sales's first-gate approval — sends the PO to PPC for a dispatch date,
+   * not straight to Approved.
    */
   approve: async (req, res) => {
-    return transition(req, res, "Approved");
+    return transition(req, res, "PendingPpc");
   },
 
   /**
@@ -1080,6 +1174,124 @@ module.exports = {
     }
     // Cancellation stays available even after approval (PO may already be with Accounts).
     return transition(req, res, "Rejected", ["Pending", "Approved"]);
+  },
+
+  /**
+   * PUT /purchase-orders/:id/confirm-dispatch  (JWT + PURCHASE_ORDER update)
+   * Sales's second gate: confirms the dispatch date PPC set and finalizes
+   * the PO — same terminal "Approved" state Accounts already watches.
+   */
+  confirmDispatch: async (req, res) => {
+    return transition(req, res, "Approved", ["PendingSalesConfirm"]);
+  },
+
+  // ============================== PPC stage ===============================
+
+  /**
+   * GET /ppc/purchase-orders  (JWT + PPC_PURCHASE_ORDERS read)
+   * `view=pending` (default) -> awaiting a dispatch date; `view=done` -> PPC
+   * has already set one (regardless of what Sales/Accounts did since).
+   */
+  ppcList: async (req, res) => {
+    try {
+      const { search, view } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+      const filter = view === "done" ? { ppcReviewedAt: { $ne: null } } : { status: "PendingPpc" };
+      if (search) {
+        // No customer-name search here — PPC shouldn't be able to search by
+        // (or infer) customer identity, which is Sales & Accounts information.
+        const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }];
+      }
+
+      const total = await PurchaseOrder.countDocuments(filter);
+      const data = await PurchaseOrder.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean();
+      redactCustomer(data);
+
+      return res.status(200).json({ status: 200, data, total, page, limit });
+    } catch (error) {
+      console.error("purchaseOrder ppcList error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * GET /ppc/purchase-orders/:id  (JWT + PPC_PURCHASE_ORDERS read)
+   */
+  ppcGetOne: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id).lean();
+      if (!po) {
+        return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      }
+      redactCustomer(po);
+      return res.status(200).json({ status: 200, data: po });
+    } catch (error) {
+      console.error("purchaseOrder ppcGetOne error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * PUT /ppc/purchase-orders/:id/set-dispatch-date  (JWT + PPC_PURCHASE_ORDERS update)
+   * Body: { dispatchDate }. PPC never rejects — this is the only action it
+   * can take, and it always hands the PO back to Sales for final confirmation.
+   */
+  ppcSetDispatchDate: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id);
+      if (!po) {
+        return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      }
+      if (po.status !== "PendingPpc") {
+        return res.status(409).json({ status: 409, message: `PO is ${po.status}; this action is not allowed.` });
+      }
+
+      // Parse as calendar-date components (not `new Date(string)`, which
+      // treats a bare "YYYY-MM-DD" as UTC midnight) and compare against
+      // "today" built the same way — both sides now live in the SAME frame
+      // (the server's local calendar), so no UTC-vs-local mismatch can make
+      // a genuinely upcoming date look like today/yesterday or vice versa.
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(req.body?.dispatchDate || ""));
+      if (!m) {
+        return res.status(400).json({ status: 400, message: "A valid dispatchDate (YYYY-MM-DD) is required." });
+      }
+      const dispatchDate = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (Number.isNaN(dispatchDate.getTime())) {
+        return res.status(400).json({ status: 400, message: "A valid dispatchDate is required." });
+      }
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      if (dispatchDate.getTime() <= startOfToday.getTime()) {
+        return res.status(400).json({ status: 400, message: "Dispatch date must be an upcoming date." });
+      }
+
+      po.ppcDispatchDate = dispatchDate;
+      po.ppcReviewedBy = { userId: req.user?._id || null, name: req.user?.name || req.user?.email || "" };
+      po.ppcReviewedAt = new Date();
+      po.status = "PendingSalesConfirm";
+      po.statusHistory.push({
+        fromStatus: "PendingPpc",
+        toStatus: "PendingSalesConfirm",
+        actorType: "mes",
+        changedBy: req.user?._id || null,
+        changedByName: req.user?.name || req.user?.email || "",
+        remarks: `Estimated dispatch date set: ${m[1]}-${m[2]}-${m[3]}`,
+        changedAt: new Date(),
+      });
+
+      const saved = await po.save();
+      return res.status(200).json({ status: 200, message: "Dispatch date set and sent back to Sales.", data: saved });
+    } catch (error) {
+      console.error("purchaseOrder ppcSetDispatchDate error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
   },
 };
 

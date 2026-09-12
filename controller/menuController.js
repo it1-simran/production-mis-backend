@@ -610,7 +610,9 @@ module.exports = {
           { label: "Engineering Approvals", route: "/engineering/view", moduleKey: "engineering_approvals", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="#ffffff" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="#ffffff" stroke-width="2"/></svg>` },
           { label: "Slug Management", route: "/slug-management/view", moduleKey: "slug_management", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
           { label: "Production Queue", route: "/production-queue/view", moduleKey: "production_queue", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/></svg>` },
-          { label: "NPD SKU Requests", route: "/npd/sku-requests", moduleKey: "npd__sku_requests", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` }
+          { label: "NPD SKU Requests", route: "/npd/sku-requests", moduleKey: "npd__sku_requests", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "Sales SKU Requests", route: "/sales/sku-requests", moduleKey: "sales__sku_requests", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1V23M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "PPC Purchase Orders", route: "/ppc/purchase-orders", moduleKey: "ppc__purchase_orders", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="18" rx="2" stroke="#ffffff" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>` }
         ];
 
         // A moduleKey can already exist either as a top-level item or nested
@@ -829,6 +831,43 @@ module.exports = {
             });
             changed = true;
             console.log("Auto-migrated: Added ESIM Master Data menu group.");
+          }
+        }
+
+        // Auto-migration: Add "RS232 Command Master" — master data mapping
+        // Customer + Device Type + Model Name + Vendor ID to the RS232
+        // command used to read that model.
+        {
+          const rs232MasterExists = doc.menus.some((m) => m?.moduleKey === "rs232_master_data");
+          if (!rs232MasterExists) {
+            doc.menus.push({
+              icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="7" width="20" height="10" rx="2" stroke="#ffffff" stroke-width="1.5"/><path d="M6 12h.01M10 12h4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+              label: "RS232 Command Master",
+              route: "#",
+              moduleKey: "rs232_master_data",
+              children: [
+                { label: "Manage RS232 Commands", route: "/rs232-command-master", moduleKey: "rs232_master_data__manage" },
+              ],
+            });
+            changed = true;
+            console.log("Auto-migrated: Added RS232 Command Master menu group.");
+          }
+        }
+
+        // Auto-migration: Add "KYC Requests" for the Accounts team — customer
+        // KYC (organization/GSTIN/PAN) submitted from GPS CPanel is now
+        // reviewed here instead of in CPanel itself.
+        {
+          const kycExists = doc.menus.some((m) => m?.moduleKey === "accounts_kyc_management");
+          if (!kycExists) {
+            doc.menus.push({
+              icon: `<svg width="18" height="19" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 12l2 2 4-4" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.5 12a8.5 8.5 0 1 1-8.5-8.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>`,
+              label: "KYC Requests",
+              route: "/accounts-portal/kyc-requests",
+              moduleKey: "accounts_kyc_management",
+            });
+            changed = true;
+            console.log("Auto-migrated: Added KYC Requests menu item.");
           }
         }
 

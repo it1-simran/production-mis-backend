@@ -23,6 +23,18 @@ const purchaseOrderSchema = new mongoose.Schema({
   poNumber: { type: String, unique: true, sparse: true },
   source: { type: String, default: "gpscpanel" },
 
+  // The approved SKU this PO was raised against — frozen snapshot fields
+  // (not re-derived per PO, same as configuration/esim below).
+  skuCode: { type: String, default: "" },
+  serialNumberFormat: { type: String, default: "" },
+  cartonType: { type: String, enum: ["direct_master_carton", "unit_packaging", ""], default: "" },
+  stickerFormat: {
+    id: { type: String, default: null },
+    name: { type: String, default: "" },
+  },
+  fgBomNumber: { type: String, default: "" },
+  tranzactId: { type: String, default: "" },
+
   raisedBy: {
     cpanelUserId: { type: Number, default: null },
     name: { type: String, default: "" },
@@ -75,15 +87,27 @@ const purchaseOrderSchema = new mongoose.Schema({
     specialInstructions: { type: String, default: "" },
   },
 
+  // Pending (Sales) -> PendingPpc (PPC sets dispatch date) -> PendingSalesConfirm
+  // (Sales confirms the date) -> Approved. Rejected only happens at the Sales
+  // gates (Pending or, per existing behaviour, even after Approved) — PPC
+  // itself never rejects, only sets a dispatch date and hands it back.
   status: {
     type: String,
-    enum: ["Pending", "Approved", "Rejected"],
+    enum: ["Pending", "PendingPpc", "PendingSalesConfirm", "Approved", "Rejected"],
     default: "Pending",
     index: true,
   },
   salesRemarks: { type: String, default: "" },
   // Sales decision (set when Rejected): may the customer edit & resubmit?
   resubmissionAllowed: { type: Boolean, default: false },
+  // PPC's estimated dispatch date for this PO (must be a future date at the
+  // time it's set) and who/when set it.
+  ppcDispatchDate: { type: Date, default: null },
+  ppcReviewedBy: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    name: { type: String, default: "" },
+  },
+  ppcReviewedAt: { type: Date, default: null },
   // Order Confirmation number created by Accounts from this PO (link back).
   ocNumber: { type: String, default: "" },
   // Accounts fulfilment lifecycle (separate from Sales `status` so Sales tabs

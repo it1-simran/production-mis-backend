@@ -11,6 +11,7 @@ const PurchaseOrder = require("../models/PurchaseOrder");
 const SlugMapping = require("../models/slugMapping");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { nextProductCode } = require("../services/productCodeService");
+const { ESIM_PROVIDERS } = require("../config/esimProviders");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -19,11 +20,19 @@ module.exports = {
       const commonStages = JSON.parse(req.body.commonStages || "[]");
       const bodyStatus = String(req.body.status || req.body.productStatus || "").toLowerCase();
       const isDraft = String(req.body.isDraft || "").toLowerCase() === "true" || bodyStatus === "draft";
+      const esimProvider = req.body.esimProvider || "jsd";
 
       if (!name || (!isDraft && (!stages || !stages.length))) {
         return res.status(400).json({
           status: 400,
           message: "Product Name and Products are required",
+        });
+      }
+
+      if (!ESIM_PROVIDERS[esimProvider]) {
+        return res.status(400).json({
+          status: 400,
+          message: `Invalid esimProvider: ${esimProvider}`,
         });
       }
 
@@ -59,6 +68,7 @@ module.exports = {
           createdBy: req.user?.id,
           department: req.user?.department || "",
           autoNgEnabled: !!req.body.autoNgEnabled,
+          esimProvider,
         });
 
       const productCategory = req.body.productCategory || req.body.category;
@@ -234,6 +244,7 @@ module.exports = {
       const stages = JSON.parse(req.body.stages);
       const commonStages = JSON.parse(req.body.commonStages);
       const autoNgEnabled = req.body.autoNgEnabled === "true" || req.body.autoNgEnabled === true;
+      const esimProvider = req.body.esimProvider || "jsd";
       const productCategory = req.body.productCategory || req.body.category || "";
       if (productCategory) {
         const catDoc = await ProductCategory.findById(productCategory);
@@ -245,7 +256,14 @@ module.exports = {
         }
       }
 
-      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled };
+      if (!ESIM_PROVIDERS[esimProvider]) {
+        return res.status(400).json({
+          status: 400,
+          message: `Invalid esimProvider: ${esimProvider}`,
+        });
+      }
+
+      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,

@@ -219,6 +219,22 @@ module.exports = {
             preserveNullAndEmptyArrays: true,
           },
         },
+        // Process has no direct PO reference — the PurchaseOrder is the owner
+        // of the link (po.fulfilment.processId), so look it up in reverse.
+        {
+          $lookup: {
+            from: "purchaseorders",
+            localField: "_id",
+            foreignField: "fulfilment.processId",
+            as: "poDetails",
+          },
+        },
+        {
+          $unwind: {
+            path: "$poDetails",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
         {
           $project: {
             _id: 1,
@@ -241,6 +257,9 @@ module.exports = {
             stages: 1,
             commonStages: 1,
             productName: "$productDetails.name",
+            productCode: "$productDetails.productCode",
+            poId: "$poDetails._id",
+            poNumber: "$poDetails.poNumber",
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
         },
