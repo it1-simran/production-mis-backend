@@ -539,17 +539,26 @@ module.exports = {
   listForAccounts: async (req, res) => {
     try {
       const { search } = req.query;
-      const view = req.query.view === "cancelled" ? "cancelled" : "approved";
+      const view = req.query.view === "ocCreated" ? "ocCreated" : "pendingOc";
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
-      const filter = view === "cancelled"
-        ? { status: "Rejected", "statusHistory.toStatus": "Approved" }
-        : { status: "Approved" };
+      // Both tabs are Approved POs — the split is purely on whether an OC
+      // number has been linked yet, not on PO status. Cancelled (Rejected)
+      // POs are no longer surfaced here at all.
+      // A handful of legacy POs predate the ocNumber field entirely (missing,
+      // not just empty) — treat "missing" the same as "" on both sides.
+      const filter = { status: "Approved" };
+      const andClauses = [
+        view === "ocCreated"
+          ? { ocNumber: { $exists: true, $ne: "" } }
+          : { $or: [{ ocNumber: { $exists: false } }, { ocNumber: "" }] },
+      ];
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }];
+        andClauses.push({ $or: [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }] });
       }
+      filter.$and = andClauses;
 
       const total = await PurchaseOrder.countDocuments(filter);
       const data = await PurchaseOrder.find(filter)
@@ -559,7 +568,7 @@ module.exports = {
         .lean();
 
       // Attach available finished-goods stock per model (one carton fetch for the page).
-      if (view === "approved" && data.length) {
+      if (view === "pendingOc" && data.length) {
         try {
           const readyCartons = await dispatchService.getReadyCartons();
           const stockByModel = new Map();
@@ -601,41 +610,52 @@ module.exports = {
       if (po.status !== "Approved") {
         return res.status(409).json({ status: 409, message: `An OC number can only be linked to an Approved PO (this one is ${po.status}).` });
       }
+
+      // A PO already carrying an OC number (i.e. this is Accounts correcting a
+      // typo, not the initial link) must NOT re-run product auto-creation —
+      // doing so would spawn a second Product/Process and orphan the first,
+      // regardless of how far fulfilment has already progressed.
+      const isRename = !!po.ocNumber;
+
       po.ocNumber = oc;
       po.fulfilment = po.fulfilment || {};
-      po.fulfilment.decidedAt = new Date();
+      if (!isRename) {
+        po.fulfilment.decidedAt = new Date();
+      }
       po.statusHistory.push({
         fromStatus: po.status,
         toStatus: po.status,
         actorType: "mes",
         changedBy: req.user?._id || null,
         changedByName: req.user?.name || req.user?.email || "",
-        remarks: `OC number ${oc} linked by Accounts`,
+        remarks: isRename ? `OC number corrected to ${oc}` : `OC number ${oc} linked by Accounts`,
         changedAt: new Date(),
       });
 
       // OC raised → auto-create the Product from the PO and move to Engineering.
       // Product creation must not break OC linking, so fall back to oc_raised on error.
       let productNote = "";
-      try {
-        const product = await createProductFromPO(po, req.user || {});
-        productNote = ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
-        po.statusHistory.push({
-          fromStatus: po.status,
-          toStatus: po.status,
-          actorType: "mes",
-          changedByName: req.user?.name || req.user?.email || "system",
-          remarks: `Auto-created product "${product.name}" from PO → Engineering pending approval`,
-          changedAt: new Date(),
-        });
-      } catch (prodErr) {
-        console.error("createProductFromPO failed:", prodErr.message);
-        po.fulfilment.state = "oc_raised";
-        productNote = " (product auto-creation skipped: " + prodErr.message + ")";
+      if (!isRename) {
+        try {
+          const product = await createProductFromPO(po, req.user || {});
+          productNote = ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
+          po.statusHistory.push({
+            fromStatus: po.status,
+            toStatus: po.status,
+            actorType: "mes",
+            changedByName: req.user?.name || req.user?.email || "system",
+            remarks: `Auto-created product "${product.name}" from PO → Engineering pending approval`,
+            changedAt: new Date(),
+          });
+        } catch (prodErr) {
+          console.error("createProductFromPO failed:", prodErr.message);
+          po.fulfilment.state = "oc_raised";
+          productNote = " (product auto-creation skipped: " + prodErr.message + ")";
+        }
       }
 
       const saved = await po.save();
-      return res.status(200).json({ status: 200, message: "OC number linked to Purchase Order." + productNote, data: saved });
+      return res.status(200).json({ status: 200, message: isRename ? "OC number updated." : "OC number linked to Purchase Order." + productNote, data: saved });
     } catch (error) {
       console.error("purchaseOrder setOcNumber error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
@@ -967,6 +987,7 @@ module.exports = {
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
       return res.status(200).json({
         status: 200,
@@ -1005,6 +1026,7 @@ module.exports = {
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
       return res.status(200).json({ status: 200, message: "PO put on hold.", data: { po } });
     } catch (error) {
@@ -1033,6 +1055,7 @@ module.exports = {
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
       return res.status(200).json({ status: 200, message: "PO moved back to pending.", data: { po } });
     } catch (error) {
@@ -1172,8 +1195,10 @@ module.exports = {
     if (!String(req.body?.remarks || "").trim()) {
       return res.status(400).json({ status: 400, message: "Remarks are required when rejecting a PO." });
     }
-    // Cancellation stays available even after approval (PO may already be with Accounts).
-    return transition(req, res, "Rejected", ["Pending", "Approved"]);
+    // Cancellation stays available even after approval (PO may already be with
+    // Accounts) AND while it's mid-flight between Sales and PPC — otherwise a
+    // PO with PPC or awaiting Sales' final confirm has no way out at all.
+    return transition(req, res, "Rejected", ["Pending", "PendingPpc", "PendingSalesConfirm", "Approved"]);
   },
 
   /**
@@ -1287,6 +1312,7 @@ module.exports = {
       });
 
       const saved = await po.save();
+      redactCustomer(saved);
       return res.status(200).json({ status: 200, message: "Dispatch date set and sent back to Sales.", data: saved });
     } catch (error) {
       console.error("purchaseOrder ppcSetDispatchDate error:", error);
@@ -1294,6 +1320,18 @@ module.exports = {
     }
   },
 };
+
+// Once fulfilment has reached any of these, a Product and/or Process may
+// already exist (or inventory/invoicing may be underway) — cancelling the PO
+// at this point would orphan that work rather than undo it, so it's blocked.
+const FULFILMENT_LOCKED_STATES = [
+  "engineering_pending",
+  "engineering_hold",
+  "engineering_approved",
+  "production_pending",
+  "invoiced",
+  "dispatched",
+];
 
 /**
  * Shared approve/reject transition with history append.
@@ -1308,12 +1346,23 @@ async function transition(req, res, toStatus, allowedFrom = ["Pending"]) {
     if (!allowedFrom.includes(po.status)) {
       return res.status(409).json({ status: 409, message: `PO is ${po.status}; this action is not allowed.` });
     }
+    if (toStatus === "Rejected" && FULFILMENT_LOCKED_STATES.includes(po.fulfilment?.state)) {
+      return res.status(409).json({
+        status: 409,
+        message: `This PO's fulfilment has already progressed (${po.fulfilment.state}) — it can no longer be cancelled here. Manage it through Accounts/Engineering instead.`,
+      });
+    }
 
     const remarks = String(req.body?.remarks || "").trim();
     const fromStatus = po.status;
 
     po.status = toStatus;
-    po.salesRemarks = remarks;
+    // Only overwrite salesRemarks when new remarks were actually given — an
+    // approval/confirm with a blank remarks field shouldn't erase a prior
+    // rejection reason that's otherwise only visible in statusHistory.
+    if (remarks) {
+      po.salesRemarks = remarks;
+    }
     // On rejection, capture whether the customer may edit & resubmit.
     if (toStatus === "Rejected") {
       po.resubmissionAllowed = !!req.body?.resubmissionAllowed;
