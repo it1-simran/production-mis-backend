@@ -1169,7 +1169,19 @@ const computePlanInsightsUncached = async ({
 // plan/process within a short window, so we collapse concurrent/near-concurrent
 // calls into a single computation and only recompute the cheap per-operator
 // fields (operatorToday, lineIssueKits, kitsShortage) on every call.
-const SHARED_PLAN_INSIGHTS_CACHE_TTL_MS = 12000;
+//
+// This TTL must comfortably exceed the worst-case computation time, or it
+// defeats its own purpose: the cache entry (holding the in-flight promise) is
+// stored with expiresAt = now + TTL at the *start* of the computation, so if
+// the computation itself outlives the TTL, every operator polling the same
+// plan while it's still running sees an "expired" entry and kicks off their
+// own redundant recompute instead of awaiting the one already in flight.
+// Live data on the app's largest plans showed computePlanInsightsUncached
+// taking 13-20s — well past the old 12s TTL — which was observed as repeated
+// concurrent SLOW recomputes stacking up for the same planId. 30s gives
+// headroom above that without staleness mattering much, since operator tabs
+// already poll on a ~30s cycle of their own.
+const SHARED_PLAN_INSIGHTS_CACHE_TTL_MS = 30000;
 const sharedPlanInsightsCache = new Map();
 
 const computePlanInsights = async (params) => {
