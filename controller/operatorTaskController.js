@@ -1462,7 +1462,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     : planId;
   const processObjectId = process?._id;
 
-  const [latestRecords, rawDevices, allProcessDevices, kitAssignment, operatorSummary] = await Promise.all([
+  const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
@@ -1484,20 +1484,6 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
               .lean(),
         )
       : Promise.resolve([]),
-    // Every device ever created for this process, unbounded — the single most
-    // expensive query in this endpoint on a mature/long-running process (can be
-    // tens of thousands of docs). Cached the same way the plan/process/product
-    // lookups already are: every open operator tab on this process polls this
-    // endpoint every ~30s, so collapsing repeat/concurrent calls within a short
-    // window is a large win even before considering a real result-set bound.
-    process?._id
-      ? cachedCompute(`operatorTaskAllProcessDevices:${process._id}`, 10000, () =>
-          deviceModel
-            .find({ processID: process._id })
-            .select("_id serialNo flowVersion")
-            .lean(),
-        )
-      : Promise.resolve([]),
     processObjectId
       ? assignKitsToLineModel
         .findOne({ planId: planObjectId, processId: processObjectId })
@@ -1506,6 +1492,39 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : Promise.resolve(null),
     getOperatorStats(operatorId, includeHistory),
   ]);
+
+  // deviceFlowVersions/activeWipDeviceKeys (built below) are only ever looked
+  // up by recordPassesSeatStageGates using a key derived from latestRecords
+  // (record.deviceId || record.serialNo) — never any other device. So instead
+  // of fetching every device ever created for this process (unbounded, the
+  // single most expensive query in this endpoint on a mature process — up to
+  // tens of thousands of docs, confirmed as the 22s+ live bottleneck), we only
+  // need the devices actually referenced by latestRecords.
+  const referencedDeviceIds = [];
+  const referencedSerialNos = [];
+  latestRecords.forEach((record) => {
+    const deviceId = String(record?.deviceId || "").trim();
+    const serialNo = String(record?.serialNo || "").trim();
+    if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) referencedDeviceIds.push(deviceId);
+    else if (serialNo) referencedSerialNos.push(serialNo);
+  });
+  const allProcessDevices = process?._id && (referencedDeviceIds.length > 0 || referencedSerialNos.length > 0)
+    ? await cachedCompute(
+        `operatorTaskAllProcessDevices:${process._id}:${planId}:${stageNames.join(",")}`,
+        10000,
+        () =>
+          deviceModel
+            .find({
+              processID: process._id,
+              $or: [
+                ...(referencedDeviceIds.length > 0 ? [{ _id: { $in: referencedDeviceIds } }] : []),
+                ...(referencedSerialNos.length > 0 ? [{ serialNo: { $in: referencedSerialNos } }] : []),
+              ],
+            })
+            .select("_id serialNo flowVersion")
+            .lean(),
+      )
+    : [];
 
   const mergedStagesForSeatFilter = [
     ...(process?.stages || []),
