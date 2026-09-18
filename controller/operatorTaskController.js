@@ -1291,13 +1291,31 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
   };
 };
 
+const SUMMARY_SLOW_TIMING_THRESHOLD_MS = 5000;
+const logOperatorTaskSummaryTimings = (timings, meta) => {
+  if (Number(timings.totalMs) < SUMMARY_SLOW_TIMING_THRESHOLD_MS) return;
+  try {
+    console.warn("[operator-task-summary-timing][SLOW]", JSON.stringify({ ...meta, ...timings }));
+  } catch (error) {
+    console.warn("[operator-task-summary-timing][SLOW]", { ...meta, ...timings });
+  }
+};
+
 const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = false }) => {
+  const summaryStartedAt = Date.now();
+  const timings = {};
+  const markTiming = (key, startedAt) => {
+    timings[key] = Date.now() - startedAt;
+  };
+
   // plan/process/product/shift are identical for every operator working the
   // same plan — every open operator tab polls this every ~30s, so collapse
   // concurrent/repeat lookups the same way getLatestDeviceTests already does
   // below, instead of each operator re-fetching the same four documents.
+  const planStart = Date.now();
   const plan = await cachedCompute(`operatorTaskPlan:${planId}`, 10000, () =>
     planningAndSchedulingModel.findById(planId).lean());
+  markTiming("planLoadMs", planStart);
   if (!plan) {
     const error = new Error("Planning not found");
     error.status = 404;
@@ -1311,6 +1329,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   // local state to whichever device's Start/Break/Stop action actually won,
   // instead of silently going stale or spinning up a duplicate session.
   let workSessionSnapshot = null;
+  const workSessionStart = Date.now();
   if (
     mongoose.Types.ObjectId.isValid(String(operatorId || "")) &&
     mongoose.Types.ObjectId.isValid(String(plan?.selectedProcess || ""))
@@ -1331,7 +1350,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       };
     }
   }
+  markTiming("workSessionMs", workSessionStart);
 
+  const assignedTaskDetailsStart = Date.now();
   const assignedTaskDetails =
     (await assignedOperatorsToPlanModel
       .findOne({ userId: operatorId, processId: plan?.selectedProcess })
@@ -1341,7 +1362,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       .findOne({ userId: operatorId })
       .sort({ updatedAt: -1 })
       .lean());
+  markTiming("assignedTaskDetailsMs", assignedTaskDetailsStart);
 
+  const processProductShiftStart = Date.now();
   const process = plan?.selectedProcess
     ? await cachedCompute(`operatorTaskProcess:${plan.selectedProcess}`, 10000, () =>
         processModel.findById(plan.selectedProcess).lean())
@@ -1356,6 +1379,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
           shiftModel.findById(plan.selectedShift).lean())
       : Promise.resolve(null),
   ]);
+  markTiming("processProductShiftMs", processProductShiftStart);
 
   const isCommon = assignedTaskDetails?.stageType === "common";
 
@@ -1462,6 +1486,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     : planId;
   const processObjectId = process?._id;
 
+  const parallelFetchStart = Date.now();
   const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
@@ -1492,6 +1517,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : Promise.resolve(null),
     getOperatorStats(operatorId, includeHistory),
   ]);
+  markTiming("parallelFetchMs", parallelFetchStart);
 
   // deviceFlowVersions/activeWipDeviceKeys (built below) are only ever looked
   // up by recordPassesSeatStageGates using a key derived from latestRecords
@@ -1508,6 +1534,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) referencedDeviceIds.push(deviceId);
     else if (serialNo) referencedSerialNos.push(serialNo);
   });
+  const allProcessDevicesStart = Date.now();
   const allProcessDevices = process?._id && (referencedDeviceIds.length > 0 || referencedSerialNos.length > 0)
     ? await cachedCompute(
         `operatorTaskAllProcessDevices:${process._id}:${planId}:${stageNames.join(",")}`,
@@ -1525,6 +1552,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
             .lean(),
       )
     : [];
+  markTiming("allProcessDevicesMs", allProcessDevicesStart);
 
   const mergedStagesForSeatFilter = [
     ...(process?.stages || []),
@@ -1539,6 +1567,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     }
   }
 
+  const insightsStart = Date.now();
   const canonicalInsights = await computePlanInsights({
     planId,
     processId: process?._id || "",
@@ -1554,6 +1583,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     processIssuedKits: Number(process?.issuedKits || 0),
     processConsumedKits: Number(process?.consumedKits || 0),
   });
+  markTiming("insightsMs", insightsStart);
 
   const deviceQueue = seatKey && currentAssignedStageName && process
     ? filterDevicesForSeat({
@@ -1698,6 +1728,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const downTimeEnabled =
     currentStatus === "down_time_hold" &&
     (downTimeEnd == null || Number.isNaN(downTimeEnd) || downTimeEnd > Date.now());
+
+  timings.totalMs = Date.now() - summaryStartedAt;
+  logOperatorTaskSummaryTimings(timings, { planId, operatorId, includeHistory });
 
   return {
     plan,
