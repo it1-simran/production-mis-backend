@@ -1392,6 +1392,12 @@ module.exports = {
   createDeviceTestEntry: async (req, res) => {
     const requestStartedAt = Date.now();
     const timings = {};
+    // Exposed so requestTimeout middleware can snapshot whatever phases have
+    // completed so far if the 15s budget is hit before this handler finishes —
+    // otherwise a hard-timeout leaves us with zero visibility into which phase
+    // was still in flight (the completion-time logging below never runs).
+    req.timings = timings;
+    req.timingsStartedAt = requestStartedAt;
     const markTiming = (key, startedAt) => {
       timings[key] = Date.now() - startedAt;
     };
