@@ -9,6 +9,28 @@ const OperatorWorkEvent = require("../models/operatorWorkEvent");
 const normalizeValue = (value) => String(value || "").trim();
 const normalizeKey = (value) => normalizeValue(value).toLowerCase().replace(/\s+/g, " ");
 
+// Live incident (2026-09-18): a plan with a large device-test history caused
+// computePlanInsightsUncached's record loops to run for 100+ seconds straight.
+// Node is single-threaded, so that blocked the event loop for the ENTIRE
+// backend process — every other request, for every other plan/operator,
+// froze for the same 100+ seconds, not just this one. Caching (elsewhere in
+// this file) only reduces how OFTEN this runs; it does nothing once a run is
+// actually in progress. This yields control back to the event loop every
+// CHUNK_YIELD_SIZE iterations so a single huge plan's computation can no
+// longer starve every other concurrent request — it still takes a while for
+// that one request, but it stops taking the whole server down with it.
+const CHUNK_YIELD_SIZE = 500;
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+const forEachChunked = async (items, fn) => {
+  const list = Array.isArray(items) ? items : [];
+  for (let i = 0; i < list.length; i++) {
+    fn(list[i], i, list);
+    if (i > 0 && i % CHUNK_YIELD_SIZE === 0) {
+      await yieldToEventLoop();
+    }
+  }
+};
+
 // Date-range boundaries must be interpreted in the plant's timezone, not the
 // server's. On a UTC server, server-local parsing shifts "today" by 5.5 hours
 // for IST operators, so records from the first hours of the shift fall outside
@@ -783,7 +805,7 @@ const computePlanInsightsUncached = async ({
   const latestByDeviceStage = new Map();
   const latestBySerial = new Map();
 
-  (Array.isArray(scopedLatestRecords) ? scopedLatestRecords : []).forEach((record) => {
+  await forEachChunked(scopedLatestRecords, (record) => {
     const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
     const stageKey = normalizeKey(record?.stageName || record?.currentStage || "");
     if (!deviceId || !stageKey) return;
@@ -821,7 +843,7 @@ const computePlanInsightsUncached = async ({
   const deviceFlowVersions = buildDeviceFlowVersionMap(flowVersionDevices);
 
   const resolvedReturnByDevice = new Map();
-  dedupedRecords.forEach((record) => {
+  await forEachChunked(dedupedRecords, (record) => {
     if (!isResolvedStatus(record?.status)) return;
     const deviceKey = getRecordDeviceKey(record);
     if (!deviceKey) return;
@@ -836,7 +858,7 @@ const computePlanInsightsUncached = async ({
     }
   });
 
-  dedupedRecords.forEach((record) => {
+  await forEachChunked(dedupedRecords, (record) => {
     if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
 
     const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
