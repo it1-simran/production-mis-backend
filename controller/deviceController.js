@@ -159,12 +159,17 @@ const safeParseJson = (value, fallback) => {
   }
 };
 const shouldLogOperatorPassTimings = String(process.env.LOG_OPERATOR_PASS_TIMINGS || "").toLowerCase() === "true";
+// Requests that come close to the 15s requestTimeout middleware budget are logged
+// unconditionally (not just when LOG_OPERATOR_PASS_TIMINGS is set) so the per-phase
+// breakdown is available whenever a SLOW_REQUEST/timeout fires, without a redeploy.
+const SLOW_TIMING_THRESHOLD_MS = 5000;
 const logOperatorPassTimings = (timings = {}, meta = {}) => {
-  if (!shouldLogOperatorPassTimings) return;
+  const isSlow = Number(timings.totalMs) >= SLOW_TIMING_THRESHOLD_MS;
+  if (!shouldLogOperatorPassTimings && !isSlow) return;
   try {
-    console.info("[operator-pass-timing]", JSON.stringify({ ...meta, ...timings }));
+    console.info(isSlow ? "[operator-pass-timing][SLOW]" : "[operator-pass-timing]", JSON.stringify({ ...meta, ...timings }));
   } catch (error) {
-    console.info("[operator-pass-timing]", { ...meta, ...timings });
+    console.info(isSlow ? "[operator-pass-timing][SLOW]" : "[operator-pass-timing]", { ...meta, ...timings });
   }
 };
 const resolveOperatorSeatKey = async (processId, operatorId) => {
