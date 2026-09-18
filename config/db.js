@@ -25,7 +25,13 @@ const connectDB = async () => {
         ensureDnsResolvers();
         await mongoose.connect(process.env.MONGODB_URI, {
             autoIndex: false,  // We manage indexes manually (see fix-final.js)
-            maxPoolSize: 50,
+            // Raised from 50: this is a per-process client-side cap, independent of
+            // Atlas's own connection limit. Live cluster stats (2026-09-18) showed
+            // only 130/~3000 connections in use with 0 rejected - the Atlas cluster
+            // itself had ample headroom while requests (including transaction starts)
+            // were still queueing/stalling for 13+ seconds waiting on THIS process's
+            // own pool, which was the actual bottleneck, not the database.
+            maxPoolSize: 150,
             minPoolSize: 5,
             maxIdleTimeMS: 30000,
             socketTimeoutMS: 45000,
