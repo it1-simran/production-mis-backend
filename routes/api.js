@@ -571,6 +571,8 @@ router.get('/esim-make/view', authController.authenticateToken, authController.a
 router.put('/esim-make/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "update"), esimMakeController.update);
 router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "delete"), esimMakeController.delete);
 
+// Also used by the ESIM Make add/edit form's Manufacturer select.
+router.get('/rs232-command-master/manufacturers', authController.authenticateToken, authController.authorize([MODULE_KEYS.RS232_MASTER_MANAGE, MODULE_KEYS.ESIM_MASTER_MAKES], "read"), rs232CommandMasterController.listManufacturers);
 router.post('/rs232-command-master/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "create"), rs232CommandMasterController.create);
 router.get('/rs232-command-master/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "read"), rs232CommandMasterController.view);
 router.put('/rs232-command-master/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "update"), rs232CommandMasterController.update);

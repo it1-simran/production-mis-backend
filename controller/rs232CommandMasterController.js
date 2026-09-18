@@ -12,21 +12,51 @@ module.exports = {
             .select("customer modelName vendorId")
             .lean();
 
+        // Dedup by (customer, model, vendor) — not just (model, vendor) — so
+        // Sales can see WHICH customer's master record each option comes
+        // from, instead of silently collapsing multiple customers that
+        // happen to share the same model/vendor combo into one anonymous entry.
         const seen = new Set();
         const matching = [];
         const others = [];
         const customerRx = customer ? new RegExp(`^${String(customer).trim()}$`, "i") : null;
 
         records.forEach((r) => {
-            const key = `${r.modelName}|||${r.vendorId}`;
+            const key = `${r.customer}|||${r.modelName}|||${r.vendorId}`;
             if (seen.has(key)) return;
             seen.add(key);
-            const opt = { model_name: r.modelName, vendor_id: r.vendorId };
+            const opt = { model_name: r.modelName, vendor_id: r.vendorId, customer: r.customer || "" };
             if (customerRx && customerRx.test(r.customer || "")) matching.push(opt);
             else others.push(opt);
         });
 
         return [...matching, ...others];
+    },
+    /**
+     * Distinct, active manufacturer (customer) names from the RS232 Command
+     * Master — powers the Manufacturer select on ESIM Make add/edit.
+     */
+    listManufacturers: async (req, res) => {
+        try {
+            const names = await Rs232CommandMaster.find({ activeStatus: true })
+                .select("customer")
+                .lean();
+            const distinct = [...new Set(names.map((r) => (r.customer || "").trim()).filter(Boolean))].sort((a, b) =>
+                a.localeCompare(b)
+            );
+            return res.status(200).json({
+                status: 200,
+                message: "Manufacturers fetched successfully",
+                data: distinct,
+            });
+        } catch (error) {
+            console.error("Error in RS232 Command Master listManufacturers:", error);
+            return res.status(500).json({
+                status: 500,
+                message: "Server error",
+                error: error.message,
+            });
+        }
     },
     create: async (req, res) => {
         try {

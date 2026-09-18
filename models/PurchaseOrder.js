@@ -53,7 +53,9 @@ const purchaseOrderSchema = new mongoose.Schema({
     profile1: { type: String, default: "" },
     profile2: { type: String, default: "" },
   },
-  esimRechargePeriod: { type: String, enum: ["1_year", "2_year"], required: true },
+  // Blank when the PO's Device Category has no eSIM at all (inherited from
+  // its SKU) — otherwise 1_year/2_year for a JSD-managed eSIM.
+  esimRechargePeriod: { type: String, enum: ["1_year", "2_year", ""], default: "" },
   firmware: {
     id: { type: Number, default: null },
     name: { type: String, default: "" },

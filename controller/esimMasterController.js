@@ -3,7 +3,7 @@ const EsimMake = require("../models/EsimMake");
 const EsimProfile = require("../models/EsimProfile");
 const EsimApn = require("../models/EsimApn");
 
-const ESIM_MASTER_SELECT = "ccid esimMake profile1 profile2 apnProfile1 apnProfile2 remarks isEditable createdAt updatedAt";
+const ESIM_MASTER_SELECT = "ccid esimMake manufacturer profile1 profile2 apnProfile1 apnProfile2 remarks isEditable createdAt updatedAt";
 
 const shouldLogEsimCcidTimings = String(process.env.LOG_ESIM_CCID_TIMINGS || "").toLowerCase() === "true";
 const logEsimCcidTimings = (timings = {}, meta = {}) => {
@@ -170,8 +170,8 @@ module.exports = {
 
   create: async (req, res) => {
     try {
-      const { ccid, esimMake, profile1, profile2, apnProfile1, apnProfile2, remarks } = req.body;
-      const newEntry = new EsimMaster({ ccid, esimMake, profile1, profile2, apnProfile1, apnProfile2, remarks });
+      const { ccid, esimMake, manufacturer, profile1, profile2, apnProfile1, apnProfile2, remarks } = req.body;
+      const newEntry = new EsimMaster({ ccid, esimMake, manufacturer, profile1, profile2, apnProfile1, apnProfile2, remarks });
       await newEntry.save();
       return res.status(201).json({
         status: 201,
@@ -379,7 +379,24 @@ module.exports = {
   getAPNByMakeAndProfile: async (req, res) => {
     try {
       const { esimMake, profile1 } = req.params;
-      const result = await EsimApn.findOne({ esimMake: esimMake.trim(), esimProfile1: profile1.trim() }).lean();
+      const make = esimMake.trim();
+      const profile = profile1.trim();
+
+      let result = await EsimApn.findOne({ esimMake: make, esimProfile1: profile }).lean();
+
+      if (!result) {
+        // Profile variants like "BSNL" / "BSNL Mobile" / "BSNL P" share one
+        // EsimProfile.name array (same device family, different manufacturer
+        // quirks), but an APN may only have been captured under a sibling
+        // variant's exact name for this make — fall back to those before
+        // reporting not-found.
+        const profileDoc = await EsimProfile.findOne({ name: profile }).select("name").lean();
+        const siblings = (profileDoc?.name || []).filter((n) => n !== profile);
+        if (siblings.length > 0) {
+          result = await EsimApn.findOne({ esimMake: make, esimProfile1: { $in: siblings } }).lean();
+        }
+      }
+
       if (!result) {
         return res.status(404).json({ status: 404, message: "ESIM Master APN not found for this make and profile" });
       }

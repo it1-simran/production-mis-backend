@@ -250,8 +250,18 @@ module.exports = {
         return res.status(403).json({ status: 403, message: "Customer KYC is not approved. Cannot raise a Purchase Order." });
       }
 
+      // A PO inherits its eSIM fields straight from the SKU it's raised
+      // against — a Device Category with no eSIM at all has none of them set
+      // (make/profile1/profile2/rechargePeriod all blank), so a recharge
+      // period is only required when there's actually eSIM data to go with it.
+      const hasEsimData = Boolean(
+        String(b.esim?.make || "").trim() ||
+        String(b.esim?.profile1 || "").trim() ||
+        String(b.esim?.profile2 || "").trim() ||
+        esimRechargePeriod
+      );
       // modelName is optional — a PO can be raised without a configured model.
-      if (!VALID_RECHARGE.includes(esimRechargePeriod)) {
+      if (hasEsimData && !VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
       if (!Number.isInteger(requiredQuantity) || requiredQuantity < 1) {

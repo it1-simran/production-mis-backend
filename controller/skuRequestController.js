@@ -57,13 +57,16 @@ module.exports = {
       const b = req.body || {};
 
       // Recharge period only applies to JSD-managed eSIMs; a customer-supplied
-      // eSIM isn't recharged through JSD, so it's optional in that case.
-      const esimProviderIn = b.esim?.provider === "customer" ? "customer" : "jsd";
+      // eSIM isn't recharged through JSD, and a Device Category with no eSIM
+      // at all sends no provider whatsoever — both are optional in that case.
+      const esimProviderRaw = String(b.esim?.provider || "").trim();
+      const hasEsim = esimProviderRaw === "jsd" || esimProviderRaw === "customer";
+      const esimProviderIn = esimProviderRaw === "customer" ? "customer" : "jsd";
       const esimRechargePeriod = String(b.esimRechargePeriod || "").trim();
-      if (esimProviderIn === "jsd" && !VALID_RECHARGE.includes(esimRechargePeriod)) {
+      if (hasEsim && esimProviderIn === "jsd" && !VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
-      if (esimProviderIn === "customer" && esimRechargePeriod && !VALID_RECHARGE.includes(esimRechargePeriod)) {
+      if (hasEsim && esimProviderIn === "customer" && esimRechargePeriod && !VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
 

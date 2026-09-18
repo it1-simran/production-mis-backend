@@ -260,6 +260,7 @@ module.exports = {
             productCode: "$productDetails.productCode",
             poId: "$poDetails._id",
             poNumber: "$poDetails.poNumber",
+            skuCode: "$poDetails.skuCode",
             planing: { $ifNull: ["$planingandScheduling", {}] },
           },
         },

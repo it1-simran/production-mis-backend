@@ -834,23 +834,37 @@ module.exports = {
           }
         }
 
-        // Auto-migration: Add "RS232 Command Master" — master data mapping
+        // Auto-migration: Add "Manage RS232 Commands" — master data mapping
         // Customer + Device Type + Model Name + Vendor ID to the RS232
-        // command used to read that model.
+        // command used to read that model. Single page, so it's a flat item
+        // (no parent/child pair repeating the same label).
         {
-          const rs232MasterExists = doc.menus.some((m) => m?.moduleKey === "rs232_master_data");
-          if (!rs232MasterExists) {
+          const rs232Icon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="7" width="20" height="10" rx="2" stroke="#ffffff" stroke-width="1.5"/><path d="M6 12h.01M10 12h4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+          const rs232MasterIndex = doc.menus.findIndex(
+            (m) => m?.moduleKey === "rs232_master_data" || m?.moduleKey === "rs232_master_data__manage"
+          );
+          if (rs232MasterIndex === -1) {
             doc.menus.push({
-              icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="7" width="20" height="10" rx="2" stroke="#ffffff" stroke-width="1.5"/><path d="M6 12h.01M10 12h4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-              label: "RS232 Command Master",
-              route: "#",
-              moduleKey: "rs232_master_data",
-              children: [
-                { label: "Manage RS232 Commands", route: "/rs232-command-master", moduleKey: "rs232_master_data__manage" },
-              ],
+              icon: rs232Icon,
+              label: "Manage Manufacturer",
+              route: "/rs232-command-master",
+              moduleKey: "rs232_master_data__manage",
             });
             changed = true;
-            console.log("Auto-migrated: Added RS232 Command Master menu group.");
+            console.log("Auto-migrated: Added Manage Manufacturer menu item.");
+          } else {
+            const existing = doc.menus[rs232MasterIndex];
+            const isNestedGroup = existing.route === "#" || (Array.isArray(existing.children) && existing.children.length > 0);
+            if (isNestedGroup || existing.label !== "Manage Manufacturer") {
+              doc.menus[rs232MasterIndex] = {
+                icon: existing.icon || rs232Icon,
+                label: "Manage Manufacturer",
+                route: "/rs232-command-master",
+                moduleKey: "rs232_master_data__manage",
+              };
+              changed = true;
+              console.log("Auto-migrated: Renamed to Manage Manufacturer menu item.");
+            }
           }
         }
 
