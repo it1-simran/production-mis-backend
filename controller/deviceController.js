@@ -1458,6 +1458,17 @@ module.exports = {
       let [planing, products, deviceSnapshot] = await Promise.all([planPromise, processPromise, devicePromise]);
       if (res.headersSent) return;
 
+      // Snapshot the plan's pre-mutation values so the write below can skip
+      // entirely when this submission didn't actually change anything on the
+      // plan document. assignedStages/assignedCustomStagesOp are large
+      // JSON-string blobs covering every seat/stage on the plan — every pass
+      // rewrites the whole thing today, so skipping a no-op write removes one
+      // full transactional round trip on the (rare but real) requests that
+      // don't touch plan-level state.
+      const planOriginalAssignedStages = planing?.assignedStages;
+      const planOriginalAssignedCustomStagesOp = planing?.assignedCustomStagesOp;
+      const planOriginalConsumedKit = planing?.consumedKit;
+
       const resolvedProcessId = normalizeText(planing?.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
       if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
         const fallbackProcessStart = Date.now();
@@ -2001,44 +2012,53 @@ module.exports = {
       // 4. Strict Uniqueness Validation for IMEI and CCID (handled in parallel pre-check above)
 
       let savedDeviceTestRecord = null;
+      const planChanged =
+        planing.assignedStages !== planOriginalAssignedStages ||
+        planing.assignedCustomStagesOp !== planOriginalAssignedCustomStagesOp ||
+        planing.consumedKit !== planOriginalConsumedKit;
+
+      // The plan update used to run INSIDE this transaction. It rewrites the
+      // whole plan's assignedStages/consumedKit/assignedCustomStagesOp on
+      // every submission, and two operators on the same plan submitting close
+      // together both touch that one document — MongoDB flags that as a
+      // write-write conflict, and Mongoose's withTransaction auto-retries the
+      // ENTIRE transaction (device update + record save included) from
+      // scratch. That's what produced "sometimes stuck" rather than just
+      // slow: an ordinary submission occasionally getting caught in someone
+      // else's retry storm on a document it didn't even need atomicity with.
+      //
+      // The device update + record save (+ NG save) are what actually
+      // represent "this test happened" and must stay atomic. The plan's
+      // UPHA/passed-device counters are derived bookkeeping, not the source
+      // of truth, so they no longer need to commit in the same transaction —
+      // moved to a separate write AFTER the transaction commits, so plan-
+      // document contention can no longer stall or retry a device's own
+      // pass/NG submission.
       const writeSession = await mongoose.startSession();
       try {
         await writeSession.withTransaction(async () => {
-          const planUpdateStart = Date.now();
-          const updateResult = await planingAndScheduling.updateOne(
-            { _id: data.planId },
-            {
-              $set: {
-                assignedStages: planing.assignedStages,
-                consumedKit: planing.consumedKit,
-                assignedCustomStagesOp: planing.assignedCustomStagesOp,
-              },
-            },
-            { session: writeSession },
-          );
-          markTiming("planUpdateMs", planUpdateStart);
-          if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
-            throw new Error("Error updating planing data.");
-          }
-
+          // Device update and record save write independent documents — no
+          // ordering dependency between them, so run them concurrently instead
+          // of paying two sequential round trips inside the transaction.
           const deviceUpdateStart = Date.now();
-          if (shouldUpdateDevice) {
-            const deviceUpdateResult = await deviceModel.updateOne(
-              { _id: deviceSnapshot._id },
-              { $set: deviceUpdatePayload },
-              { session: writeSession },
-            );
-            markTiming("deviceUpdateMs", deviceUpdateStart);
-            if (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount) {
-              throw new Error("Error updating device stage.");
-            }
-          } else {
-            markTiming("deviceUpdateMs", deviceUpdateStart);
-          }
-
           const recordSaveStart = Date.now();
-          savedDeviceTestRecord = await new deviceTestRecords(data).save({ session: writeSession });
+          const [deviceUpdateResult] = await Promise.all([
+            shouldUpdateDevice
+              ? deviceModel.updateOne(
+                  { _id: deviceSnapshot._id },
+                  { $set: deviceUpdatePayload },
+                  { session: writeSession },
+                )
+              : Promise.resolve(null),
+            new deviceTestRecords(data).save({ session: writeSession }).then((saved) => {
+              savedDeviceTestRecord = saved;
+            }),
+          ]);
+          markTiming("deviceUpdateMs", deviceUpdateStart);
           markTiming("recordSaveMs", recordSaveStart);
+          if (shouldUpdateDevice && (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount)) {
+            throw new Error("Error updating device stage.");
+          }
 
           if (
             pendingNgPayload &&
@@ -2055,6 +2075,42 @@ module.exports = {
         await writeSession.endSession();
       }
       if (res.headersSent) return;
+
+      // Plan-counter write, outside the transaction (see comment above). The
+      // test record and device state are already durably committed at this
+      // point regardless of what happens here.
+      const planUpdateStart = Date.now();
+      if (planChanged) {
+        try {
+          const updateResult = await planingAndScheduling.updateOne(
+            { _id: data.planId },
+            {
+              $set: {
+                assignedStages: planing.assignedStages,
+                consumedKit: planing.consumedKit,
+                assignedCustomStagesOp: planing.assignedCustomStagesOp,
+              },
+            },
+          );
+          markTiming("planUpdateMs", planUpdateStart);
+          if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
+            console.error(
+              `[PLAN-UPDATE] Plan ${data.planId} not matched/acknowledged after device ${data.serialNo} submission — counters may be stale.`,
+            );
+          }
+        } catch (planUpdateError) {
+          markTiming("planUpdateMs", planUpdateStart);
+          // Non-fatal: the device's test result is already committed above.
+          // The plan's UPHA/passed-device counters are derived bookkeeping —
+          // log and continue rather than fail an already-recorded submission.
+          console.error(
+            `[PLAN-UPDATE] Failed to update plan ${data.planId} after device ${data.serialNo} submission:`,
+            planUpdateError.message,
+          );
+        }
+      } else {
+        markTiming("planUpdateMs", planUpdateStart);
+      }
 
       if (actionMeta.actionStatus === "NG" && assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
         const attemptFilter = { deviceId: deviceSnapshot._id };
