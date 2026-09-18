@@ -1467,23 +1467,36 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
     process?._id
-      ? deviceModel
-        .find({
-          processID: process._id,
-          status: { $nin: ["NG"] },
-          ...(buildProductTypeMatch(process?.selectedProduct)
-            ? { productType: buildProductTypeMatch(process?.selectedProduct) }
-            : {}),
-          ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
-        })
-        .select(DEVICE_LOOKUP_SELECT_FIELDS)
-        .lean()
+      ? cachedCompute(
+          `operatorTaskRawDevices:${process._id}:${stageAwareCurrentStage ?? ""}:${process?.selectedProduct || ""}`,
+          10000,
+          () =>
+            deviceModel
+              .find({
+                processID: process._id,
+                status: { $nin: ["NG"] },
+                ...(buildProductTypeMatch(process?.selectedProduct)
+                  ? { productType: buildProductTypeMatch(process?.selectedProduct) }
+                  : {}),
+                ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
+              })
+              .select(DEVICE_LOOKUP_SELECT_FIELDS)
+              .lean(),
+        )
       : Promise.resolve([]),
+    // Every device ever created for this process, unbounded — the single most
+    // expensive query in this endpoint on a mature/long-running process (can be
+    // tens of thousands of docs). Cached the same way the plan/process/product
+    // lookups already are: every open operator tab on this process polls this
+    // endpoint every ~30s, so collapsing repeat/concurrent calls within a short
+    // window is a large win even before considering a real result-set bound.
     process?._id
-      ? deviceModel
-        .find({ processID: process._id })
-        .select("_id serialNo flowVersion")
-        .lean()
+      ? cachedCompute(`operatorTaskAllProcessDevices:${process._id}`, 10000, () =>
+          deviceModel
+            .find({ processID: process._id })
+            .select("_id serialNo flowVersion")
+            .lean(),
+        )
       : Promise.resolve([]),
     processObjectId
       ? assignKitsToLineModel
