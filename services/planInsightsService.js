@@ -1222,14 +1222,22 @@ const computePlanInsights = async (params) => {
     return computePlanInsightsUncached(params);
   }
 
+  // processIssuedKits/processConsumedKits are deliberately left out of this
+  // key. processIssuedKits isn't even read inside computePlanInsightsUncached.
+  // processConsumedKits IS read there (caps remainingUntestedWipCapacity),
+  // but it increments on nearly every device pass, so keying on it made a
+  // busy plan generate a near-unique key on almost every call - the cache
+  // never actually absorbed repeat calls, leaving computePlanInsightsUncached
+  // (5-11s on large plans) running on almost every request and pegging CPU.
+  // Dropping it means the WIP-shortage number can lag reality by up to the
+  // TTL below, which is fine: operator tabs already poll on their own ~30s
+  // cycle, so this adds no visible staleness beyond what they already tolerate.
   const cacheKey = [
     planId,
     processId,
     params.dateFrom || "",
     params.dateTo || "",
     params.processStatus || "",
-    params.processIssuedKits || 0,
-    params.processConsumedKits || 0,
   ].join("|");
   const now = Date.now();
   const cached = sharedPlanInsightsCache.get(cacheKey);
@@ -1238,14 +1246,9 @@ const computePlanInsights = async (params) => {
   if (cached && cached.expiresAt > now) {
     basePromise = cached.promise;
   } else {
-    // Confirmed live memory leak (2026-09-19): this cache key includes
-    // processIssuedKits/processConsumedKits, which change on nearly every
-    // device pass - so a busy plan generates a near-unique key on almost
-    // every call, and with no eviction of expired entries this Map grew
-    // without bound, each entry holding a full computePlanInsightsUncached
-    // result. Sweep expired entries opportunistically once the map gets
-    // large enough that a full pass is worth it, same pattern already used
-    // (correctly) by operatorTodayStatsCache below.
+    // Sweep expired entries opportunistically once the map gets large enough
+    // that a full pass is worth it, same pattern already used (correctly) by
+    // operatorTodayStatsCache below.
     if (sharedPlanInsightsCache.size > 200) {
       sharedPlanInsightsCache.forEach((entry, entryKey) => {
         if (entry.expiresAt <= now) sharedPlanInsightsCache.delete(entryKey);
