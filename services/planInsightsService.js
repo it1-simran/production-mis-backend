@@ -1229,6 +1229,19 @@ const computePlanInsights = async (params) => {
   if (cached && cached.expiresAt > now) {
     basePromise = cached.promise;
   } else {
+    // Confirmed live memory leak (2026-09-19): this cache key includes
+    // processIssuedKits/processConsumedKits, which change on nearly every
+    // device pass - so a busy plan generates a near-unique key on almost
+    // every call, and with no eviction of expired entries this Map grew
+    // without bound, each entry holding a full computePlanInsightsUncached
+    // result. Sweep expired entries opportunistically once the map gets
+    // large enough that a full pass is worth it, same pattern already used
+    // (correctly) by operatorTodayStatsCache below.
+    if (sharedPlanInsightsCache.size > 200) {
+      sharedPlanInsightsCache.forEach((entry, entryKey) => {
+        if (entry.expiresAt <= now) sharedPlanInsightsCache.delete(entryKey);
+      });
+    }
     basePromise = computePlanInsightsUncached(params);
     basePromise.catch(() => sharedPlanInsightsCache.delete(cacheKey));
     sharedPlanInsightsCache.set(cacheKey, { expiresAt: now + SHARED_PLAN_INSIGHTS_CACHE_TTL_MS, promise: basePromise });
