@@ -2736,9 +2736,20 @@ module.exports = {
 
       let deviceTestRecord;
       let meta;
+      // Exclude-only projection (found live, 2026-09-19): this had NO field
+      // selection at all (null projection = every field), so every call
+      // fetched up to 2000 full records - including any 50-100KB
+      // terminalLogs payload per record - for a response that only ever
+      // uses stageName/status/assignedDeviceTo/timeConsumed/deviceInfo
+      // (verified via grep across both frontend callers: viewTask's history
+      // tab and OperatorDashboard's recent-activity widget). Confirmed via
+      // live pm2 logs as one of the most frequently-hit endpoints on the
+      // server - a real, previously-missed contributor to memory/CPU load,
+      // not just a diagnosed-but-unconfirmed one.
       const baseQuery = () =>
         deviceTestRecords
           .find(query, null, { sort: { createdAt: -1 } })
+          .select("-logs")
           .populate("deviceId")
           .populate("operatorId", "name employeeCode")
           .populate("productId", "name")
