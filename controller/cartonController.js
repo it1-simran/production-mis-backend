@@ -840,6 +840,25 @@ const buildLatestRecordMapByDeviceIds = async (deviceIds = []) => {
         deviceId: { $in: normalizedDeviceIds },
       },
     },
+    // Phase 1 log-payload cleanup (2026-09-19): drop the heavy terminalLogs
+    // payload immediately after the match, before it flows through
+    // $sort/$group below - the final $project further down already never
+    // included it, so this was pure wasted memory/CPU with zero effect on
+    // the output. Keep exactly the fields the rest of this pipeline and the
+    // final $project actually use.
+    {
+      $project: {
+        _id: 1,
+        deviceId: 1,
+        serialNo: 1,
+        stageName: 1,
+        currentLogicalStage: 1,
+        currentStage: 1,
+        status: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
     {
       $addFields: {
         normalizedStatus: {
