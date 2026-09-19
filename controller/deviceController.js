@@ -516,28 +516,6 @@ const resolvePreviousStageEligibility = async ({
   return { isEligible: true, message: "", previousStageRecord };
 };
 
-const getRoutedStageName = (record = {}) => normalizeKey(
-  record?.nextLogicalStage ||
-  record?.currentLogicalStage ||
-  record?.currentStage ||
-  record?.stageName,
-);
-
-const getClaimedSeatKey = (record = {}, currentStageName = "") => {
-  const normalizedCurrentStage = normalizeKey(currentStageName);
-  const directStage = normalizeKey(record?.currentLogicalStage || record?.currentStage || record?.stageName);
-  if (directStage === normalizedCurrentStage && normalizeText(record?.currentSeatKey)) {
-    return normalizeText(record.currentSeatKey);
-  }
-
-  const routedStage = getRoutedStageName(record);
-  if (routedStage === normalizedCurrentStage && normalizeText(record?.assignedSeatKey)) {
-    return normalizeText(record.assignedSeatKey);
-  }
-
-  return "";
-};
-
 const buildActionResponseMeta = (status) => {
   const normalizedStatus = normalizeKey(status);
   if (normalizedStatus === "ng") {
@@ -1652,7 +1630,6 @@ module.exports = {
       const targetStageIdx = resolvedSeatContext.targetStageIdx >= 0 && resolvedSeatContext.targetStageIdx < rawSeatStages.length
         ? resolvedSeatContext.targetStageIdx
         : Math.max(rawSeatStages.findIndex((stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(currentStageName)), 0);
-      const currentSeatStage = getSeatStageEntry(normalizedAssignedStages, currentSeatKey);
       const productStages = (products?.stages || []).map((stage) => normalizeText(stage?.stageName || stage?.name));
       const commonStages = (products?.commonStages || []).map((stage) => normalizeText(stage?.stageName || stage?.name || stage?.stage));
       const mergedStages = [...productStages, ...commonStages];
@@ -1664,13 +1641,15 @@ module.exports = {
       data.currentLogicalStage = currentStageName;
       data.currentSeatKey = currentSeatKey;
 
-      const parallelSeats = getParallelSeatEntries({
-        assignedStages: normalizedAssignedStages,
-        stageName: currentStageName,
-        lineIndex: currentSeatStage?.lineIndex,
-        parallelGroupKey: currentSeatStage?.parallelGroupKey,
-      });
-
+      // Stage-specific, not seat-specific: any seat handling this stage can
+      // submit this device. There is no per-seat lock/conflict check here
+      // anymore - chooseNextStageSeatAssignment's assignedSeatKey is
+      // informational (UPHA-distribution bookkeeping) only. The old check
+      // rejected a device whenever it had been routed to a DIFFERENT parallel
+      // seat than the one submitting, even when both seats were equally valid
+      // to handle it - the queue itself couldn't tell operators apart either,
+      // so a device could be picked up at the "wrong" seat and then rejected
+      // on every resubmit attempt with no way to recover.
       const preTransactionStart = Date.now();
       const eligibilityPromise = resolvePreviousStageEligibility({
         processStages: [...(products?.stages || []), ...(products?.commonStages || [])],
@@ -1680,24 +1659,6 @@ module.exports = {
         planId: data.planId,
         processId: resolvedProcessId,
       });
-
-      const seatConflictPromise = parallelSeats.length > 1
-        ? (() => {
-            const latestRecordQuery = { serialNo: data.serialNo };
-            if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
-              latestRecordQuery.planId = new mongoose.Types.ObjectId(data.planId);
-            }
-            if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
-              latestRecordQuery.processId = new mongoose.Types.ObjectId(resolvedProcessId);
-            }
-            return deviceTestRecords
-              .findOne(latestRecordQuery)
-              .sort({ createdAt: -1 })
-              .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
-              .lean()
-              .lean();
-          })()
-        : Promise.resolve(null);
 
       const duplicatePromise = shouldUpdateDevice && (deviceUpdatePayload.imeiNo || deviceUpdatePayload.ccid)
         ? (() => {
@@ -1711,34 +1672,19 @@ module.exports = {
           })()
         : Promise.resolve(null);
 
-      const [eligibility, latestSeatRecord, duplicate] = await Promise.all([
+      const [eligibility, duplicate] = await Promise.all([
         eligibilityPromise,
-        seatConflictPromise,
         duplicatePromise,
       ]);
       if (res.headersSent) return;
       markTiming("preTransactionReadsMs", preTransactionStart);
       markTiming("eligibilityMs", preTransactionStart);
-      if (parallelSeats.length > 1) {
-        markTiming("seatConflictMs", preTransactionStart);
-      }
 
       if (!eligibility.isEligible) {
         return res.status(409).json({
           status: 409,
           message: eligibility.message || "Previous stage must be passed before testing this device.",
         });
-      }
-
-      if (parallelSeats.length > 1) {
-        const claimedSeatKey = getClaimedSeatKey(latestSeatRecord, currentStageName);
-        if (claimedSeatKey && claimedSeatKey !== currentSeatKey) {
-          return res.status(409).json({
-            status: 409,
-            message: `This device is assigned to seat ${claimedSeatKey} for ${currentStageName}.`,
-            conflictSeatKey: claimedSeatKey,
-          });
-        }
       }
 
       if (duplicate) {
