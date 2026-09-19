@@ -145,7 +145,19 @@ const findLatestNgContextForDevice = async ({ deviceId, serialNo, processId }) =
     status: { $regex: /^(ng|fail)$/i },
     $or: [{ deviceId }, { serialNo }],
   };
-  return deviceTestRecords.findOne(match).sort({ createdAt: -1 }).lean();
+  // Explicit include-projection (Phase 1 log-payload cleanup, 2026-09-19):
+  // every caller only ever reads stageName/seatNumber/assignedSeatKey/planId/
+  // operatorId from this result (verified via grep across the codebase) -
+  // never .logs. This document can carry a 50-100KB terminalLogs payload
+  // that was being loaded into memory on every NG-resolve lookup for no
+  // reason. Explicit include-list (not exclude) so a future field addition
+  // to this function's callers fails loudly (undefined) instead of silently
+  // pulling logs back in.
+  return deviceTestRecords
+    .findOne(match)
+    .select("stageName seatNumber assignedSeatKey planId operatorId status createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
 };
 const getStageLabel = (stage) => normalizeText(stage?.name || stage?.stageName || stage?.stage);
 const toStageArray = (value) => (Array.isArray(value) ? value : value ? [value] : []);
@@ -495,7 +507,12 @@ const resolvePreviousStageEligibility = async ({
     query.processId = new mongoose.Types.ObjectId(processId);
   }
 
-  const previousStageRecord = await deviceTestRecords.findOne(query).sort({ createdAt: -1 }).lean();
+  // Explicit include-projection (Phase 1 log-payload cleanup, 2026-09-19):
+  // only .status is ever read from this result (the caller never reads
+  // previousStageRecord itself, only isEligible/message) - verified via
+  // grep. Was loading a full test record, including any terminalLogs
+  // payload, on every single device-pass eligibility check.
+  const previousStageRecord = await deviceTestRecords.findOne(query).select("status createdAt").sort({ createdAt: -1 }).lean();
   if (!previousStageRecord) {
     return {
       isEligible: false,
@@ -1319,6 +1336,11 @@ module.exports = {
       const devices = await cachedCompute(`devicesByProduct:${id}`, 10000, async () => {
         const terminalDevicesInProcess = await deviceTestRecords.aggregate([
           { $match: { productId: new mongoose.Types.ObjectId(id) } },
+          // Phase 1 log-payload cleanup (2026-09-19): only deviceId/status/
+          // assignedDeviceTo/createdAt are used below - drop everything else
+          // (including any terminalLogs payload) before $sort/$limit/$group
+          // process the full documents in memory.
+          { $project: { deviceId: 1, status: 1, assignedDeviceTo: 1, createdAt: 1 } },
           { $sort: { createdAt: -1 } },
           { $limit: 1000 },
           {
@@ -1471,6 +1493,92 @@ module.exports = {
           status: 404,
           message: "Device not found",
         });
+      }
+
+      // Idempotency check (Phase 2, 2026-09-19): deviceId + stageName +
+      // startTime + endTime uniquely identifies one physical test run - the
+      // frontend sets startTime/endTime once per test, so two requests
+      // sharing all four only happen when the same submission is sent twice
+      // (client retry after a slow/timed-out response, accidental
+      // double-click, etc.), never from two genuinely different tests.
+      // Confirmed against 3 real duplicate FQC records found live: all three
+      // shared this exact combination. Checking this BEFORE any transaction
+      // work means a resend costs one cheap indexed read instead of a full
+      // write - and importantly, none of the UPHA/seat-routing side effects
+      // below get a chance to run a second time.
+      const idempotencyStageName = normalizeText(data.stageName || data.currentLogicalStage || "");
+      if (idempotencyStageName && data.startTime && data.endTime) {
+        const idempotencyCheckStart = Date.now();
+        const existingRecord = await deviceTestRecords
+          .findOne({
+            deviceId: deviceSnapshot._id,
+            stageName: idempotencyStageName,
+            startTime: new Date(data.startTime),
+            endTime: new Date(data.endTime),
+          })
+          .lean();
+        markTiming("idempotencyCheckMs", idempotencyCheckStart);
+        if (existingRecord) {
+          // Step-count cross-check: a matching natural key (same test run)
+          // doesn't guarantee the FIRST save actually captured every step -
+          // e.g. an earlier attempt that itself got cut short mid-write.
+          // Compare the incoming payload's log count against the stage's
+          // CONFIGURED step count (non-disabled subSteps). Common stages
+          // (commonStages) have no subSteps at all, so there's nothing to
+          // compare against there - default to trusting the existing record.
+          const stageConfig = (products?.stages || []).find(
+            (stage) => normalizeKey(stage?.stageName || stage?.name) === normalizeKey(idempotencyStageName),
+          );
+          const configuredStepCount = Array.isArray(stageConfig?.subSteps)
+            ? stageConfig.subSteps.filter((step) => !step?.disabled).length
+            : null;
+          const payloadStepCount = Array.isArray(data.logs) ? data.logs.length : 0;
+
+          const stepCountsMatch =
+            configuredStepCount === null || configuredStepCount === payloadStepCount;
+
+          if (stepCountsMatch) {
+            return res.status(200).json({
+              status: 200,
+              message: actionMeta.message,
+              actionStatus: actionMeta.actionStatus,
+              resultType: actionMeta.resultType,
+              alreadyRecorded: true,
+              data: {
+                ...buildCompactDeviceTestRecord(existingRecord),
+                actionStatus: actionMeta.actionStatus,
+                resultType: actionMeta.resultType,
+              },
+            });
+          }
+
+          // Step counts don't match the stage's configuration - the stored
+          // record may be incomplete (e.g. an earlier attempt was cut short
+          // mid-save). Overwrite it in place with this submission's logs
+          // rather than trusting a possibly-partial existing record, but
+          // keep the same _id/createdAt - this is a correction of the same
+          // test run, not a new one.
+          const overwriteStart = Date.now();
+          const updatedRecord = await deviceTestRecords.findOneAndUpdate(
+            { _id: existingRecord._id },
+            { $set: { logs: data.logs || [], status: data.status, updatedAt: new Date() } },
+            { new: true },
+          ).lean();
+          markTiming("idempotencyOverwriteMs", overwriteStart);
+          return res.status(200).json({
+            status: 200,
+            message: actionMeta.message,
+            actionStatus: actionMeta.actionStatus,
+            resultType: actionMeta.resultType,
+            alreadyRecorded: true,
+            logsOverwritten: true,
+            data: {
+              ...buildCompactDeviceTestRecord(updatedRecord),
+              actionStatus: actionMeta.actionStatus,
+              resultType: actionMeta.resultType,
+            },
+          });
+        }
       }
 
       data.deviceId = data.deviceId || String(deviceSnapshot._id || "");
@@ -2791,6 +2899,10 @@ module.exports = {
 
       const trend = await deviceTestRecords.aggregate([
         { $match: match },
+        // Phase 1 log-payload cleanup (2026-09-19): only createdAt/status
+        // feed the $group below - drop everything else (including any
+        // terminalLogs payload) before it.
+        { $project: { createdAt: 1, status: 1 } },
         {
           $group: {
             _id: {
@@ -3565,8 +3677,16 @@ module.exports = {
         query.createdAt = { $gte: start, $lte: end };
       }
 
+      // Exclude-only projection (Phase 1 log-payload cleanup, 2026-09-19):
+      // no frontend caller of this endpoint was found anywhere in src/
+      // despite being wired up in api.js - likely unused/legacy. Using
+      // exclude-only (not an explicit include list) since the full set of
+      // fields a hypothetical caller might need isn't confirmed here;
+      // this only drops the heavy terminalLogs payload, every other field
+      // stays exactly as before.
       const deviceTestRecord = await deviceTestRecords
         .find(query)
+        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")
