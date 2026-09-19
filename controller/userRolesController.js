@@ -40,7 +40,7 @@ module.exports = {
   },
   view: async (req, res) => {
     try {
-      const userRoles = await UserRoles.find().sort({ _id: -1 }).lean();
+      const userRoles = await UserRoles.find().sort({ _id: -1 }).limit(1000).lean();
       return res.status(200).json({
         status: 200,
         status_msg: "Users Roles Fetched Sucessfully!!",
