@@ -285,7 +285,7 @@ module.exports = {
         query.status = { $ne: 'Discarded' };
       }
 
-      let users = await User.find(query).select("-password").sort({ _id: -1 }).lean();
+      let users = await User.find(query).select("-password").sort({ _id: -1 }).limit(2000).lean();
       
       // Override the status field based on today's session activity
       users = users.map(u => {

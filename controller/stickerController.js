@@ -45,7 +45,7 @@ module.exports = {
   
   getStickerField: async (req, res) => {
     try {
-      let stickerFields = await stickerFieldModel.find().sort({ _id: -1 }).lean();
+      let stickerFields = await stickerFieldModel.find().sort({ _id: -1 }).limit(500).lean();
       return res.status(200).json({
         status: 200,
         message: "Sticker Fields Fetched Successfully!!",
