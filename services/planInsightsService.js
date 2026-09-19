@@ -617,6 +617,10 @@ const getOperatorTodayStats = async ({ operatorId = "", planId = "", processId =
 
   const statsRows = await deviceTestRecordModel.aggregate([
     { $match: match },
+    // Phase 1 log-payload cleanup (2026-09-19): only status feeds the
+    // $group below - drop everything else (including any terminalLogs
+    // payload) before it.
+    { $project: { status: 1 } },
     {
       $group: {
         _id: null,
@@ -975,6 +979,11 @@ const computePlanInsightsUncached = async ({
   // Identify terminal units to exclude from active WIP
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
+    // Phase 1 log-payload cleanup (2026-09-19): only deviceId/status/
+    // assignedDeviceTo/createdAt feed $sort/$group below - drop everything
+    // else (including any terminalLogs payload) before them. This is on the
+    // hot WIP-insights path, polled every ~30s per operator.
+    { $project: { deviceId: 1, status: 1, assignedDeviceTo: 1, createdAt: 1 } },
     { $sort: { createdAt: -1 } },
     { $limit: INSIGHTS_RECORD_SCAN_LIMIT },
     {
@@ -1307,6 +1316,11 @@ const computeProcessInsights = async ({
   // Identify terminal devices to exclude from WIP
   const terminalDevicesInProcess = await deviceTestRecordModel.aggregate([
     { $match: { processId: new mongoose.Types.ObjectId(String(processId)) } },
+    // Phase 1 log-payload cleanup (2026-09-19): only deviceId/status/
+    // assignedDeviceTo/createdAt feed $sort/$group below - drop everything
+    // else (including any terminalLogs payload) before them. This is on the
+    // hot WIP-insights path, polled every ~30s per operator.
+    { $project: { deviceId: 1, status: 1, assignedDeviceTo: 1, createdAt: 1 } },
     { $sort: { createdAt: -1 } },
     { $limit: INSIGHTS_RECORD_SCAN_LIMIT },
     {
