@@ -25,7 +25,7 @@ const {
 const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/customFieldsCcid");
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
-const { cachedCompute } = require("../utils/ttlCache");
+const { cachedCompute, invalidatePrefix } = require("../utils/ttlCache");
 const { compressStepLogsForStorage } = require("../utils/stepLogCompression");
 
 function sanitizeKeys(value) {
@@ -195,6 +195,17 @@ const resolveOperatorSeatKey = async (processId, operatorId) => {
   if (!assignment?.seatDetails?.rowNumber && !assignment?.seatDetails?.seatNumber) return "";
   return `${assignment.seatDetails.rowNumber || ""}-${assignment.seatDetails.seatNumber || ""}`;
 };
+// Busts operatorTaskController's per-process device-queue caches (the "which
+// devices are at this stage right now" lists) right when a device actually
+// moves, so those caches can run a much longer TTL safely - staleness is now
+// bounded by "since the last real change" instead of a fixed clock tick.
+const invalidateOperatorTaskDeviceCaches = (processId) => {
+  const id = String(processId || "").trim();
+  if (!id) return;
+  invalidatePrefix(`operatorTaskRawDevices:${id}`);
+  invalidatePrefix(`operatorTaskAllProcessDevices:${id}`);
+};
+
 const buildCompactDeviceTestRecord = (record = {}) => ({
   _id: record?._id || null,
   deviceId: record?.deviceId || null,
@@ -1721,6 +1732,7 @@ module.exports = {
           branch: "qc-trc-direct",
         });
         invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
+        invalidateOperatorTaskDeviceCaches(resolvedProcessId);
         return res.status(200).json({
           status: 200,
           message: actionMeta.message,
@@ -2212,6 +2224,7 @@ module.exports = {
       });
 
       invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
+      invalidateOperatorTaskDeviceCaches(resolvedProcessId);
 
       // This route runs behind a 15s request-timeout middleware. If the DB work
       // above outlasts that window, the timeout middleware already sent a 504 and
@@ -3643,6 +3656,7 @@ module.exports = {
         { $set: { status: "", currentStage: returnStage } },
         { new: true, runValidators: true },
       );
+      invalidateOperatorTaskDeviceCaches(device.processID);
 
       if (planId && seatKey && returnStage) {
         await applyPlanCountersOnResolve({
