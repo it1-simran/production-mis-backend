@@ -1379,7 +1379,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     process?._id
       ? cachedCompute(
           `operatorTaskRawDevices:${process._id}:${stageAwareCurrentStage ?? ""}:${process?.selectedProduct || ""}`,
-          10000,
+          // Was 10s. deviceController now invalidates this key by processId
+          // right when a device actually moves stage/status (pass/NG/resolve),
+          // so staleness is bounded by "since the last real change", not this
+          // clock - safe to raise well past the operator poll interval.
+          60000,
           () =>
             deviceModel
               .find({
@@ -1423,7 +1427,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const allProcessDevices = process?._id && (referencedDeviceIds.length > 0 || referencedSerialNos.length > 0)
     ? await cachedCompute(
         `operatorTaskAllProcessDevices:${process._id}:${planId}:${stageNames.join(",")}`,
-        10000,
+        // Same reasoning as operatorTaskRawDevices above - invalidated on
+        // real device moves, so this can be long-lived.
+        60000,
         () =>
           deviceModel
             .find({
