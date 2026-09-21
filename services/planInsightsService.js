@@ -1245,6 +1245,7 @@ const computePlanInsights = async (params) => {
   let basePromise;
   if (cached && cached.expiresAt > now) {
     basePromise = cached.promise;
+    cached.lastRequestedAt = now;
   } else {
     // Sweep expired entries opportunistically once the map gets large enough
     // that a full pass is worth it, same pattern already used (correctly) by
@@ -1256,7 +1257,12 @@ const computePlanInsights = async (params) => {
     }
     basePromise = computePlanInsightsUncached(params);
     basePromise.catch(() => sharedPlanInsightsCache.delete(cacheKey));
-    sharedPlanInsightsCache.set(cacheKey, { expiresAt: now + SHARED_PLAN_INSIGHTS_CACHE_TTL_MS, promise: basePromise });
+    sharedPlanInsightsCache.set(cacheKey, {
+      expiresAt: now + SHARED_PLAN_INSIGHTS_CACHE_TTL_MS,
+      promise: basePromise,
+      params,
+      lastRequestedAt: now,
+    });
   }
 
   const base = await basePromise;
@@ -1277,6 +1283,55 @@ const computePlanInsights = async (params) => {
     },
   };
 };
+
+// Background refresh: without this, the FIRST request to land after a cache
+// entry expires is the one that pays computePlanInsightsUncached's full
+// 5-30s cost, and while it's running it competes for the same event loop as
+// everything else (this is what was blocking deviceRecord/create). Sweeping
+// active entries just before they expire and recomputing them ahead of time
+// means real requests almost always just read an already-warm cache entry -
+// nobody's request triggers the live computation anymore. Only plans with
+// actual recent traffic are in the cache to begin with, so idle/abandoned
+// plans are never refreshed - this can't grow into background work for
+// plans nobody's looking at.
+const BACKGROUND_REFRESH_LEAD_MS = 8000;
+const BACKGROUND_REFRESH_SWEEP_MS = 5000;
+// A plan stops being proactively refreshed once nobody's actually requested
+// it for this long - otherwise every plan ever looked at would get refreshed
+// forever, turning "keep active plans warm" into unbounded background work
+// for plans everyone stopped viewing. 2x the TTL gives one full cache cycle
+// of grace (a request right at the edge of expiry still gets a warm read)
+// before a plan is treated as abandoned.
+const BACKGROUND_REFRESH_IDLE_CUTOFF_MS = SHARED_PLAN_INSIGHTS_CACHE_TTL_MS * 2;
+
+function refreshStalePlanInsightsEntries() {
+  const now = Date.now();
+  sharedPlanInsightsCache.forEach((entry, cacheKey) => {
+    if (entry.refreshing) return;
+    if (now - (entry.lastRequestedAt || 0) > BACKGROUND_REFRESH_IDLE_CUTOFF_MS) return;
+    if (entry.expiresAt - now > BACKGROUND_REFRESH_LEAD_MS) return;
+    entry.refreshing = true;
+    const refreshedPromise = computePlanInsightsUncached(entry.params);
+    refreshedPromise
+      .then(() => {
+        sharedPlanInsightsCache.set(cacheKey, {
+          expiresAt: Date.now() + SHARED_PLAN_INSIGHTS_CACHE_TTL_MS,
+          promise: refreshedPromise,
+          params: entry.params,
+          lastRequestedAt: entry.lastRequestedAt,
+        });
+      })
+      .catch((err) => {
+        // Leave the stale entry in place rather than delete it - a request
+        // that arrives before it fully expires still gets a (slightly
+        // stale) answer instead of triggering its own live computation.
+        console.error("[PLAN-INSIGHTS-REFRESH] Background refresh failed:", err.message);
+        entry.refreshing = false;
+      });
+  });
+}
+
+setInterval(refreshStalePlanInsightsEntries, BACKGROUND_REFRESH_SWEEP_MS);
 
 const computeProcessInsights = async ({
   processId = "",
