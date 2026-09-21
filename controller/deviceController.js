@@ -26,6 +26,7 @@ const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/cus
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
 const { cachedCompute } = require("../utils/ttlCache");
+const { compressStepLogsForStorage } = require("../utils/stepLogCompression");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -1404,6 +1405,16 @@ module.exports = {
 
     try {
       const data = req.body || {};
+      // The frontend sends logs pre-stringified (see createDeviceTestEntry
+      // in src/lib/api.js) since it can carry 50-100KB of nested jig output -
+      // parse it back to an array before anything below touches it.
+      if (typeof data.logs === "string" && data.logs) {
+        try {
+          data.logs = JSON.parse(data.logs);
+        } catch (err) {
+          return res.status(400).json({ status: 400, message: "Invalid logs payload: " + err.message });
+        }
+      }
       if (data && data.logs) {
         data.logs = sanitizeKeys(data.logs);
       }
@@ -1561,7 +1572,7 @@ module.exports = {
           const overwriteStart = Date.now();
           const updatedRecord = await deviceTestRecords.findOneAndUpdate(
             { _id: existingRecord._id },
-            { $set: { logs: data.logs || [], status: data.status, updatedAt: new Date() } },
+            { $set: { logs: compressStepLogsForStorage(data.logs || []), status: data.status, updatedAt: new Date() } },
             { new: true },
           ).lean();
           markTiming("idempotencyOverwriteMs", overwriteStart);
@@ -1690,6 +1701,7 @@ module.exports = {
             const recordSaveStart = Date.now();
             savedDeviceTestRecord = await new deviceTestRecords({
               ...data,
+              logs: Array.isArray(data.logs) ? compressStepLogsForStorage(data.logs) : data.logs,
               assignedDeviceTo,
             }).save({ session: writeSession });
             markTiming("recordSaveMs", recordSaveStart);
@@ -2088,6 +2100,13 @@ module.exports = {
       // moved to a separate write AFTER the transaction commits, so plan-
       // document contention can no longer stall or retry a device's own
       // pass/NG submission.
+      //
+      // Compressed here, right before save - every earlier read of
+      // data.logs (IMEI/CCID extraction, the CCID-reassignment log push)
+      // needs the raw object shape, so this has to be the last touch.
+      if (Array.isArray(data.logs)) {
+        data.logs = compressStepLogsForStorage(data.logs);
+      }
       const writeSession = await mongoose.startSession();
       try {
         await writeSession.withTransaction(async () => {
