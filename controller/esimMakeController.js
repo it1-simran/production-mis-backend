@@ -1,10 +1,21 @@
 const EsimMake = require("../models/EsimMake");
 
+const DUPLICATE_FIELD_LABELS = { simId: "SIM Make ID", name: "Name" };
+
+// Mongo duplicate-key error (E11000) — surface which field collided instead
+// of a generic 500, so the form can show a clear message.
+const duplicateFieldMessage = (error) => {
+    if (error?.code !== 11000) return null;
+    const field = Object.keys(error?.keyPattern || {})[0];
+    const label = DUPLICATE_FIELD_LABELS[field] || field || "value";
+    return `${label} already exists. Please use a different ${label}.`;
+};
+
 module.exports = {
     create: async (req, res) => {
         try {
-            const { simId, name, activeStatus, showInCpanel, remarks } = req.body;
-            const newMake = new EsimMake({ simId, name, activeStatus, showInCpanel: !!showInCpanel, remarks });
+            const { simId, name, manufacturer, activeStatus, showInCpanel, remarks } = req.body;
+            const newMake = new EsimMake({ simId, name, manufacturer: manufacturer || "", activeStatus, showInCpanel: !!showInCpanel, remarks });
             await newMake.save();
             return res.status(201).json({
                 status: 201,
@@ -12,6 +23,10 @@ module.exports = {
                 data: newMake,
             });
         } catch (error) {
+            const duplicateMessage = duplicateFieldMessage(error);
+            if (duplicateMessage) {
+                return res.status(409).json({ status: 409, message: duplicateMessage });
+            }
             console.error("Error in ESIM Make create:", error);
             return res.status(500).json({
                 status: 500,
@@ -23,7 +38,7 @@ module.exports = {
     view: async (req, res) => {
         try {
             const makes = await EsimMake.find()
-                .select("_id simId name activeStatus showInCpanel remarks createdAt updatedAt")
+                .select("_id simId name manufacturer activeStatus showInCpanel remarks createdAt updatedAt")
                 .sort({ _id: -1 })
                 .limit(1000)
                 .lean();
@@ -56,6 +71,10 @@ module.exports = {
                 data: updated,
             });
         } catch (error) {
+            const duplicateMessage = duplicateFieldMessage(error);
+            if (duplicateMessage) {
+                return res.status(409).json({ status: 409, message: duplicateMessage });
+            }
             console.error("Error in ESIM Make update:", error);
             return res.status(500).json({
                 status: 500,

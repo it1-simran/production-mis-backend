@@ -7,6 +7,11 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProductCategory = require("../models/productCategory");
 const Carton = require('../models/cartonManagement');
 const { createInventoryForProduct } = require("../services/inventoryService");
+const PurchaseOrder = require("../models/PurchaseOrder");
+const SlugMapping = require("../models/slugMapping");
+const { resolveTestingPlan } = require("../services/slugResolver");
+const { nextProductCode } = require("../services/productCodeService");
+const { ESIM_PROVIDERS } = require("../config/esimProviders");
 module.exports = {
   create: async (req, res) => {
     try {
@@ -15,11 +20,19 @@ module.exports = {
       const commonStages = JSON.parse(req.body.commonStages || "[]");
       const bodyStatus = String(req.body.status || req.body.productStatus || "").toLowerCase();
       const isDraft = String(req.body.isDraft || "").toLowerCase() === "true" || bodyStatus === "draft";
+      const esimProvider = req.body.esimProvider || "jsd";
 
       if (!name || (!isDraft && (!stages || !stages.length))) {
         return res.status(400).json({
           status: 400,
           message: "Product Name and Products are required",
+        });
+      }
+
+      if (!ESIM_PROVIDERS[esimProvider]) {
+        return res.status(400).json({
+          status: 400,
+          message: `Invalid esimProvider: ${esimProvider}`,
         });
       }
 
@@ -45,14 +58,17 @@ module.exports = {
         }
       }
 
+        const productCode = await nextProductCode();
         const newProduct = new Product({
           name,
+          productCode,
           stages,
           commonStages,
           status: isDraft ? "draft" : "active",
           createdBy: req.user?.id,
           department: req.user?.department || "",
           autoNgEnabled: !!req.body.autoNgEnabled,
+          esimProvider,
         });
 
       const productCategory = req.body.productCategory || req.body.category;
@@ -198,6 +214,23 @@ module.exports = {
         }
 
         let inventory = await InventoryModel.findOne({ productType: product._id }).lean();
+
+        // NEW: product.stages stores the RAW ${slug} template (see
+        // poProductService.js) - resolved live here, opt-in only, so slug
+        // corrections made in Slug Management reach already-created products
+        // immediately. Opt-in (not the default) because the product EDIT form
+        // round-trips this same response through update(), which persists
+        // whatever `stages` it's given verbatim; resolving by default would
+        // bake literal values back over the template on the next save and
+        // permanently defeat live resolution for that product.
+        if (String(req.query.resolveSlugs) === "1" && Array.isArray(product.stages) && product.stages.length) {
+          const sourcePo = await PurchaseOrder.findOne({ "fulfilment.productId": product._id }).lean();
+          if (sourcePo) {
+            const slugMaps = await SlugMapping.find({ isActive: true }).lean();
+            product.stages = resolveTestingPlan(product.stages, sourcePo, slugMaps);
+          }
+        }
+
         return res.status(200).json({product,inventory});
       }
     } catch (error) {
@@ -211,6 +244,7 @@ module.exports = {
       const stages = JSON.parse(req.body.stages);
       const commonStages = JSON.parse(req.body.commonStages);
       const autoNgEnabled = req.body.autoNgEnabled === "true" || req.body.autoNgEnabled === true;
+      const esimProvider = req.body.esimProvider || "jsd";
       const productCategory = req.body.productCategory || req.body.category || "";
       if (productCategory) {
         const catDoc = await ProductCategory.findById(productCategory);
@@ -222,7 +256,14 @@ module.exports = {
         }
       }
 
-      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled };
+      if (!ESIM_PROVIDERS[esimProvider]) {
+        return res.status(400).json({
+          status: 400,
+          message: `Invalid esimProvider: ${esimProvider}`,
+        });
+      }
+
+      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,

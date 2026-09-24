@@ -3,6 +3,9 @@ const mongoose = require("mongoose");
 const esimMasterSchema = new mongoose.Schema({
     ccid: { type: String, required: true, unique: true },
     esimMake: { type: String, required: false },
+    // Denormalized from EsimMake.manufacturer at the time esimMake was set —
+    // same pattern as apnProfile1/2 below.
+    manufacturer: { type: String, required: false },
     profile1: { type: String, required: false },
     profile2: { type: String, required: false },
     apnProfile1: { type: String, required: false },
