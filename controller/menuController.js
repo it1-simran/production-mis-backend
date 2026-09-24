@@ -185,6 +185,11 @@ module.exports = {
           children: [
             { label: "View User", route: "/operators/view", moduleKey: "user_role_management__view_user" },
             { label: "Add User", route: "/operators/add", moduleKey: "user_role_management__add_user" },
+            {
+              label: "Operator Deboarding Requests",
+              route: "/production-manager/operator-deboarding-requests",
+              moduleKey: "operator_deboarding__approvals",
+            },
           ],
         },
         {
@@ -350,6 +355,7 @@ module.exports = {
           "transfer requests": "kit_management__transfer_requests",
           "esim removal requests": "esim_removal__requests",
           "ccid transfer requests": "esim_removal__requests", // pre-rename label, same module as ESIM Removal Requests
+          "operator deboarding requests": "operator_deboarding__approvals",
           "ng issue master": "ng_devices__issue_master",
           "carton management": "carton_management",
           "dispatch management": "dispatch_management",
@@ -542,6 +548,54 @@ module.exports = {
             doc.markModified("menus");
             await doc.save();
             console.log("Auto-migrated: Added Product Category menu under Product Management.");
+            getMenu = [doc];
+          }
+        }
+
+        // Auto-migration: Ensure Operator Deboarding Requests lives under User Management
+        // (moved here from a flat top-level item so it groups with View User/Add User).
+        const userManagementMenuIndex = menus.findIndex(
+          (m) => String(m?.label || "").toLowerCase() === "user management",
+        );
+        if (userManagementMenuIndex !== -1) {
+          const userManagementMenu = menus[userManagementMenuIndex];
+          const userManagementChildren = Array.isArray(userManagementMenu.children) ? userManagementMenu.children : [];
+          const hasOperatorDeboardingRequests = userManagementChildren.some(
+            (c) => c.moduleKey === "operator_deboarding__approvals",
+          );
+          let userManagementChanged = false;
+          if (!hasOperatorDeboardingRequests) {
+            userManagementChildren.push({
+              label: "Operator Deboarding Requests",
+              route: "/production-manager/operator-deboarding-requests",
+              moduleKey: "operator_deboarding__approvals",
+            });
+            userManagementMenu.children = userManagementChildren;
+            userManagementChanged = true;
+          }
+
+          // Remove any stale flat top-level duplicate now that it's guaranteed to live
+          // nested here. NOT handled by the generic "flat item whose moduleKey is nested
+          // elsewhere" dedup further below: every menu item defaults `children` to `[]`
+          // even when never set, so that check's `!Array.isArray(m.children)` guard is
+          // always false and never actually matches any item.
+          let removedFlatDuplicate = false;
+          for (let idx = menus.length - 1; idx >= 0; idx--) {
+            if (menus[idx] === userManagementMenu) continue;
+            if (menus[idx]?.moduleKey === "operator_deboarding__approvals") {
+              menus.splice(idx, 1);
+              removedFlatDuplicate = true;
+            }
+          }
+
+          if (userManagementChanged || removedFlatDuplicate) {
+            doc.menus = menus;
+            doc.markModified("menus");
+            await doc.save();
+            console.log(
+              "Auto-migrated: Operator Deboarding Requests nested under User Management" +
+                (removedFlatDuplicate ? " (removed stale top-level duplicate)." : "."),
+            );
             getMenu = [doc];
           }
         }

@@ -420,6 +420,25 @@ module.exports = {
       const { reason } = req.body;
       const adminId = req.user ? req.user._id : null;
 
+      // Hard Deboard (force: bypasses the active-task safety check) is Admin-only. A standard
+      // deboard attempt (no force) is also allowed for HR, since HR can try it from the "Deboard
+      // Operator" tab of the Final Deboarding popup before falling back to a request.
+      const requesterRole = String(req.user?.userType || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+      const isRequesterAdmin = requesterRole === "admin" || requesterRole === "administrator";
+      const isRequesterHr = requesterRole === "hr" || requesterRole === "human_resource" || requesterRole === "humanresource";
+      const isForceDeboard = req.body.force === true;
+
+      if (isForceDeboard && !isRequesterAdmin) {
+        return res.status(403).json({
+          message: "Only Admin can perform a Hard Deboard.",
+        });
+      }
+      if (!isForceDeboard && !isRequesterAdmin && !isRequesterHr) {
+        return res.status(403).json({
+          message: "Only Admin or HR can deboard operators directly. Please use the Final Deboarding request instead.",
+        });
+      }
+
       const user = await User.findById(id);
       if (!user) {
         return res.status(404).json({ message: "Operator not found." });
@@ -427,12 +446,20 @@ module.exports = {
 
       const AssignOperatorToPlan = require("../models/assignOperatorToPlan");
       const activeAssignments = await AssignOperatorToPlan.find({ userId: id, status: "Occupied" });
-      
-      if (activeAssignments.length > 0 && req.body.force !== true) {
-        return res.status(400).json({ 
+
+      if (activeAssignments.length > 0 && !isForceDeboard) {
+        return res.status(400).json({
           error: "ACTIVE_TASKS",
-          message: "Cannot deboard operator with active unfinished production tasks. Please free their assignments first." 
+          message: "Cannot deboard operator with active unfinished production tasks. Please free their assignments first."
         });
+      }
+
+      if (activeAssignments.length > 0 && isForceDeboard) {
+        // Hard Deboard: bypass the active-task block, but still free the operator's seat/process
+        // assignments (same cleanup the approval-based deboarding flow uses) so no stale
+        // "Occupied" record is left pointing at a now-Discarded operator.
+        const { freeOperatorFromOtherProcesses } = require("./processController");
+        await freeOperatorFromOtherProcesses(user._id, null);
       }
 
       user.status = "Discarded";
@@ -445,6 +472,42 @@ module.exports = {
       return res.status(200).json({ message: "Operator successfully deboarded.", user });
     } catch (error) {
       console.error("Error deboarding operator:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  },
+  // Reverses a deboard: brings a previously-Discarded operator back to Active status with
+  // their existing profile, history, and employee code intact (nothing is deleted on deboard,
+  // so nothing needs to be recreated here — only the status flag flips back). Admin-only.
+  restoreOperator: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const restorerId = req.user ? req.user._id : null;
+
+      const requesterRole = String(req.user?.userType || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+      const isRequesterAdmin = requesterRole === "admin" || requesterRole === "administrator";
+      if (!isRequesterAdmin) {
+        return res.status(403).json({
+          message: "Only Admin can restore a deboarded operator.",
+        });
+      }
+
+      const user = await User.findById(id);
+      if (!user) {
+        return res.status(404).json({ message: "Operator not found." });
+      }
+      if (user.status !== "Discarded") {
+        return res.status(400).json({ message: "This operator is not deboarded." });
+      }
+
+      user.status = "Active";
+      user.restoredAt = new Date();
+      if (restorerId) user.restoredBy = restorerId;
+
+      await user.save();
+
+      return res.status(200).json({ message: "Operator successfully restored.", user });
+    } catch (error) {
+      console.error("Error restoring operator:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }
   },

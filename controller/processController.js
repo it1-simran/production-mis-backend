@@ -117,6 +117,9 @@ const freeEvictedOperatorsIfUnseated = async (processObjId, seatMap, seatKey, ev
 };
 
 module.exports = {
+  // Exported so other controllers (operatorDeboardingController's approval flow) can free every
+  // seat/process assignment for an operator without duplicating the seat-map cleanup logic.
+  freeOperatorFromOtherProcesses,
   create: async (req, res) => {
     try {
       const data = req?.body;
