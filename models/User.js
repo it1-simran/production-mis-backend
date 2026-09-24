@@ -21,7 +21,9 @@ const userSchema = new mongoose.Schema({
   status: { type: String, enum: ['Active', 'Inactive', 'Discarded'], default: 'Active' },
   deboardedAt: { type: Date, default: null },
   deboardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  deboardReason: { type: String, default: "" }
+  deboardReason: { type: String, default: "" },
+  restoredAt: { type: Date, default: null },
+  restoredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
 });
 
 // Ensure email/mobileNo are never stored as empty string — must be a real value or absent

@@ -94,6 +94,8 @@ const MODULE_KEYS = {
   ESIM_REMOVAL: "esim_removal__removal",
   ESIM_REMOVAL_REQUESTS: "esim_removal__requests",
 
+  OPERATOR_DEBOARDING_APPROVALS: "operator_deboarding__approvals",
+
   REPORTS: "reports",
   NG_DEVICES_REPORT: "reports__ng_devices",
   CCID_REASSIGNMENT_LOG: "reports__ccid_reassignment_log",
