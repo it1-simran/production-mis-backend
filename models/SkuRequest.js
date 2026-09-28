@@ -41,10 +41,17 @@ const skuRequestSchema = new mongoose.Schema({
   esim: {
     // Whose eSIM inventory this SKU uses: "jsd" (make/profile1/2 come from
     // MES's own eSIM catalog) or "customer" (customer-supplied, free text).
-    provider: { type: String, enum: ["jsd", "customer"], default: "jsd" },
+    // "" = the Device Category has no eSIM, so no eSIM details apply.
+    provider: { type: String, enum: ["jsd", "customer", ""], default: "jsd" },
     make: { type: String, default: "" },
     profile1: { type: String, default: "" },
     profile2: { type: String, default: "" },
+    // APNs for a typed-in ("Others") or customer-supplied eSIM. NPD may
+    // correct them; on final NPD approval services/esimMasterSync adds the
+    // make/profiles/APNs to the eSIM master so CCID uploads resolve them.
+    apnProfile1: { type: String, default: "" },
+    apnProfile2: { type: String, default: "" },
+    customEntry: { type: Boolean, default: false },
   },
   // Not required when esim.provider is "customer" — a customer-supplied eSIM
   // isn't recharged through JSD (enforced in skuRequestController, not here).

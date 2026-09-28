@@ -1,5 +1,6 @@
 const SkuRequest = require("../models/SkuRequest");
 const Sequence = require("../models/Sequence");
+const { planEsimMasterSync, applyEsimMasterSync } = require("../services/esimMasterSync");
 const { modelOptionsFor } = require("./rs232CommandMasterController");
 
 /**
@@ -22,6 +23,32 @@ function redactCustomer(rows) {
 }
 
 const VALID_RECHARGE = ["1_year", "2_year"];
+
+/**
+ * CPanel sends no eSIM provider at all when the SKU's Device Category has
+ * eSIM disabled. Store that as an empty provider (not "jsd") with every eSIM
+ * field blank, so reviewers see "not required" instead of a phantom JSD eSIM.
+ */
+function esimFromBody(esim) {
+  const provider = String(esim?.provider || "").trim();
+  if (provider !== "jsd" && provider !== "customer") {
+    return { provider: "", make: "", profile1: "", profile2: "", apnProfile1: "", apnProfile2: "", customEntry: false };
+  }
+  return {
+    provider,
+    make: esim.make || "",
+    profile1: esim.profile1 || "",
+    profile2: esim.profile2 || "",
+    apnProfile1: cleanApn(esim.apnProfile1),
+    apnProfile2: cleanApn(esim.apnProfile2),
+    customEntry: !!esim.customEntry,
+  };
+}
+
+// Same character rule as the CCID bulk upload's sanitizeApn (letters, digits, dots).
+function cleanApn(v) {
+  return String(v || "").replace(/[^a-zA-Z0-9.]/g, "").slice(0, 100);
+}
 
 /** Atomic, gap-free SKU code: SKU-YYYY-000123 */
 async function nextSkuCode() {
@@ -100,13 +127,8 @@ module.exports = {
           mobile: raisedBy.mobile || "",
         },
         deviceCategory: { id: b.deviceCategory?.id ?? null, name: b.deviceCategory?.name || "" },
-        esim: {
-          provider: b.esim?.provider === "customer" ? "customer" : "jsd",
-          make: b.esim?.make || "",
-          profile1: b.esim?.profile1 || "",
-          profile2: b.esim?.profile2 || "",
-        },
-        esimRechargePeriod,
+        esim: esimFromBody(b.esim),
+        esimRechargePeriod: hasEsim ? esimRechargePeriod : "",
         firmware: { id: b.firmware?.id ?? null, name: b.firmware?.name || "" },
         modelName: String(b.modelName || "").trim(),
         vendorId: b.vendorId || "",
@@ -216,8 +238,8 @@ module.exports = {
 
       const b = req.body || {};
       if (b.deviceCategory) skuRequest.deviceCategory = { id: b.deviceCategory.id ?? null, name: b.deviceCategory.name || "" };
-      if (b.esim) skuRequest.esim = { provider: b.esim.provider === "customer" ? "customer" : "jsd", make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
-      if (skuRequest.esim.provider === "customer") {
+      if (b.esim) skuRequest.esim = esimFromBody(b.esim);
+      if (skuRequest.esim.provider !== "jsd") {
         skuRequest.esimRechargePeriod = "";
       } else if (b.esimRechargePeriod && VALID_RECHARGE.includes(b.esimRechargePeriod)) {
         skuRequest.esimRechargePeriod = b.esimRechargePeriod;
@@ -278,8 +300,8 @@ module.exports = {
 
       const b = req.body || {};
       if (b.deviceCategory) skuRequest.deviceCategory = { id: b.deviceCategory.id ?? null, name: b.deviceCategory.name || "" };
-      if (b.esim) skuRequest.esim = { provider: b.esim.provider === "customer" ? "customer" : "jsd", make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
-      if (skuRequest.esim.provider === "customer") {
+      if (b.esim) skuRequest.esim = esimFromBody(b.esim);
+      if (skuRequest.esim.provider !== "jsd") {
         skuRequest.esimRechargePeriod = "";
       } else if (b.esimRechargePeriod && VALID_RECHARGE.includes(b.esimRechargePeriod)) {
         skuRequest.esimRechargePeriod = b.esimRechargePeriod;
@@ -644,7 +666,45 @@ module.exports = {
    * Final approval — the SKU is now Completed and can be used to raise a PO.
    */
   approve: async (req, res) => {
-    return transition(req, res, "Completed");
+    // A typed-in / customer-supplied eSIM goes into the eSIM master on final
+    // approval — anything already there (make, profile, APN) is reused, not
+    // recreated. Written BEFORE completing, so a Completed SKU never lacks the
+    // APNs its CCID uploads will need (the sync is idempotent).
+    let masterNote = "";
+    let extraSet = {};
+    try {
+      const sku = await SkuRequest.findById(req.params.id).lean();
+      if (sku && sku.status === "PendingNpd") {
+        const r = await applyEsimMasterSync(sku);
+        const notes = [];
+        if (r.created.length) notes.push(`Added to eSIM master: ${r.created.join(", ")}`);
+        if (r.reused.length) notes.push(`Used existing: ${r.reused.join(", ")}`);
+        masterNote = notes.join(". ");
+        // Align the SKU with the master's APN wherever one already existed.
+        if (r.apnProfile1 !== (sku.esim?.apnProfile1 || "")) extraSet["esim.apnProfile1"] = r.apnProfile1;
+        if (r.apnProfile2 !== (sku.esim?.apnProfile2 || "")) extraSet["esim.apnProfile2"] = r.apnProfile2;
+      }
+    } catch (e) {
+      console.error("skuRequest approve esimMasterSync error:", e);
+      return res.status(500).json({ status: 500, message: "Could not add this SKU's eSIM details to the eSIM master data.", error: e.message });
+    }
+    return transition(req, res, "Completed", masterNote, extraSet);
+  },
+
+  /**
+   * GET /npd/skus/:id/esim-master-preview  (JWT + NPD_SKU_REQUESTS read)
+   * What approving will do to the eSIM master: per make/profile/APN, whether
+   * it already exists (and will be reused) or will be added.
+   */
+  esimMasterPreview: async (req, res) => {
+    try {
+      const sku = await SkuRequest.findById(req.params.id).lean();
+      if (!sku) return res.status(404).json({ status: 404, message: "SKU request not found." });
+      return res.status(200).json({ status: 200, data: await planEsimMasterSync(sku) });
+    } catch (error) {
+      console.error("skuRequest esimMasterPreview error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
   },
 
   /**
@@ -680,8 +740,27 @@ module.exports = {
         skuRequest.tranzactId = req.body.tranzactId.trim();
         changed.push("tranzactId");
       }
+      // NPD may correct a typed-in APN before final approval — after that it
+      // has already been written to the eSIM master (edit it there instead).
+      for (const key of ["apnProfile1", "apnProfile2"]) {
+        if (typeof req.body?.[key] !== "string") continue;
+        if (skuRequest.status === "Completed") {
+          return res.status(409).json({ status: 409, message: "APNs can't be changed on a completed SKU — update them in eSIM master data instead." });
+        }
+        if (!skuRequest.esim?.provider) {
+          return res.status(409).json({ status: 409, message: "This SKU has no eSIM." });
+        }
+        const v = req.body[key].trim();
+        if (v && !/^[A-Za-z0-9.]{1,100}$/.test(v)) {
+          return res.status(400).json({ status: 400, message: `${key === "apnProfile1" ? "APN Profile 1" : "APN Profile 2"} may only contain letters, numbers and dots.` });
+        }
+        skuRequest.esim.apnProfile1 = key === "apnProfile1" ? v : skuRequest.esim.apnProfile1;
+        skuRequest.esim.apnProfile2 = key === "apnProfile2" ? v : skuRequest.esim.apnProfile2;
+        skuRequest.markModified("esim");
+        changed.push(key);
+      }
       if (changed.length === 0) {
-        return res.status(400).json({ status: 400, message: "Nothing to update — provide fgBomNumber and/or tranzactId." });
+        return res.status(400).json({ status: 400, message: "Nothing to update — provide fgBomNumber, tranzactId, apnProfile1 and/or apnProfile2." });
       }
 
       skuRequest.statusHistory.push({
@@ -707,12 +786,15 @@ module.exports = {
  * Shared NPD approve/reject transition with history append. Only valid from
  * PendingNpd (i.e. after Sales has confirmed/allotted the model).
  */
-async function transition(req, res, toStatus) {
+async function transition(req, res, toStatus, systemNote = "", extraSet = {}) {
   try {
-    const remarks = String(req.body?.remarks || "").trim();
+    const userRemarks = String(req.body?.remarks || "").trim();
+    // systemNote (e.g. what was added to the eSIM master) goes into history only.
+    const remarks = [userRemarks, systemNote].filter(Boolean).join(" — ");
     const fromStatus = "PendingNpd";
 
-    const set = { status: toStatus, npdRemarks: remarks };
+    // npdRemarks is what the customer sees — keep the system note out of it.
+    const set = { status: toStatus, npdRemarks: userRemarks, ...extraSet };
     if (toStatus === "Rejected") {
       set.rejectedAtStage = "npd";
       set.resubmissionAllowed = !!req.body?.resubmissionAllowed;

@@ -458,6 +458,7 @@ router.get('/npd/skus/:id', authController.authenticateToken, authController.aut
 router.put('/npd/skus/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.approve);
 router.put('/npd/skus/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.reject);
 router.put('/npd/skus/:id/config', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.updateNpdConfig);
+router.get('/npd/skus/:id/esim-master-preview', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.esimMasterPreview);
 
 // ================================= KYC ==================================
 // Integration API — GPS CPanel (machine-to-machine via shared x-api-key).
