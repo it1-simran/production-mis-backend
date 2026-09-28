@@ -134,6 +134,11 @@ const purchaseOrderSchema = new mongoose.Schema({
     // NEW: Process auto-created from this PO's product on Engineering approval.
     processId: { type: mongoose.Schema.Types.ObjectId, ref: "process", default: null },
     processName: { type: String, default: "" },
+    // Short-lived claim so two users can't run the same fulfilment step
+    // (OC link, invoice, engineering approval) at once and create duplicate
+    // Products/Processes/invoices. Set atomically, cleared when the step ends;
+    // a stale claim (crashed request) expires — see claimPoLock().
+    lockedAt: { type: Date, default: null },
   },
   approvedBy: {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },

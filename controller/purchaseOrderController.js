@@ -134,6 +134,54 @@ async function createProcessForApprovedPo(po, product, user = {}) {
 }
 
 const VALID_RECHARGE = ["1_year", "2_year"];
+
+// A fulfilment claim older than this belongs to a request that died mid-way.
+const PO_LOCK_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Atomically claim a PO for a fulfilment step. Returns the claimed document,
+ * or null when another request holds the claim or the PO no longer matches
+ * `extraFilter` (e.g. its state moved on). Pair with releasePoLock().
+ */
+async function claimPoLock(id, extraFilter = {}) {
+  const stale = new Date(Date.now() - PO_LOCK_TTL_MS);
+  return PurchaseOrder.findOneAndUpdate(
+    { _id: id, ...extraFilter, $or: [{ "fulfilment.lockedAt": null }, { "fulfilment.lockedAt": { $lt: stale } }] },
+    { $set: { "fulfilment.lockedAt": new Date() } },
+    { new: true }
+  );
+}
+
+function releasePoLock(id) {
+  return PurchaseOrder.updateOne({ _id: id }, { $set: { "fulfilment.lockedAt": null } }).catch((e) =>
+    console.error("releasePoLock error:", e.message)
+  );
+}
+
+/**
+ * Apply requiredQuantity / expectedDeliveryDate from an edit or resubmit body.
+ * Returns an error message for an invalid value instead of silently ignoring
+ * it (which used to answer 200 "updated" while keeping the old quantity).
+ */
+function applyQuantityAndDate(po, b) {
+  if (b.requiredQuantity != null && b.requiredQuantity !== "") {
+    const q = Number(b.requiredQuantity);
+    if (!Number.isInteger(q) || q < 1) return "Required quantity must be a whole number of at least 1.";
+    po.requiredQuantity = q;
+  }
+  if (b.expectedDeliveryDate) {
+    const d = new Date(b.expectedDeliveryDate);
+    if (Number.isNaN(d.getTime())) return "Expected delivery date is not a valid date.";
+    po.expectedDeliveryDate = d;
+  }
+  return null;
+}
+
+// Sales may still edit an Approved PO only until fulfilment has started —
+// after that the Product/Process/invoice were built from these values.
+function fulfilmentStarted(po) {
+  return !!po.ocNumber || (po.fulfilment?.state && po.fulfilment.state !== "awaiting");
+}
 const VALID_LOGISTICS_PARTY = ["us", "customer"];
 
 /**
@@ -345,10 +393,17 @@ module.exports = {
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
       const filter = {};
-      if (raisedBy && String(role).toLowerCase() !== "admin") {
-        filter["raisedBy.cpanelUserId"] = parseInt(raisedBy, 10);
+      // Only an explicit admin call may list every customer's POs — a missing
+      // raisedBy used to fall through to "no filter" and return them all.
+      if (String(role).toLowerCase() !== "admin") {
+        const uid = parseInt(raisedBy, 10);
+        if (!Number.isInteger(uid) || uid <= 0) {
+          return res.status(400).json({ status: 400, message: "raisedBy is required for a non-admin listing." });
+        }
+        filter["raisedBy.cpanelUserId"] = uid;
       }
-      if (status) filter.status = status;
+      // Plain string only — an object here (?status[$ne]=x) would reach Mongo as an operator.
+      if (typeof status === "string" && status) filter.status = status;
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [
@@ -414,11 +469,8 @@ module.exports = {
       if (b.firmware) po.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
       if (typeof b.modelName === "string") po.modelName = b.modelName;
       if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
-      if (b.expectedDeliveryDate) po.expectedDeliveryDate = new Date(b.expectedDeliveryDate);
-      if (b.requiredQuantity != null) {
-        const q = parseInt(b.requiredQuantity, 10);
-        if (Number.isInteger(q) && q >= 1) po.requiredQuantity = q;
-      }
+      const qtyErr = applyQuantityAndDate(po, b);
+      if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
 
       const prev = po.status;
@@ -426,6 +478,16 @@ module.exports = {
       po.resubmissionAllowed = false; // consumed
       po.approvedBy = { userId: null, name: "" };
       po.approvedAt = null;
+      // A resubmitted PO starts the whole review again — clear everything the
+      // previous round's PPC / Accounts steps left behind, or it shows stale
+      // dispatch dates, lands in the wrong tabs, and a leftover ocNumber makes
+      // the next OC link a "rename" that never creates the Product.
+      po.ppcDispatchDate = null;
+      po.ppcReviewedAt = null;
+      po.ppcReviewedBy = { userId: null, name: "" };
+      po.ocNumber = "";
+      po.fulfilment = { state: "awaiting" };
+      po.salesRemarks = "";
       po.statusHistory.push({
         fromStatus: prev,
         toStatus: "Pending",
@@ -608,12 +670,13 @@ module.exports = {
    * back so the Accounts view can show which OC each approved PO produced.
    */
   setOcNumber: async (req, res) => {
+    let claimed = false;
     try {
       const oc = String(req.body?.ocNumber || "").trim();
       if (!oc) {
         return res.status(400).json({ status: 400, message: "OC number is required." });
       }
-      const po = await PurchaseOrder.findById(req.params.id);
+      let po = await PurchaseOrder.findById(req.params.id);
       if (!po) {
         return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       }
@@ -626,6 +689,21 @@ module.exports = {
       // doing so would spawn a second Product/Process and orphan the first,
       // regardless of how far fulfilment has already progressed.
       const isRename = !!po.ocNumber;
+
+      if (!isRename) {
+        // First link only from the undecided state (or after a failed product
+        // auto-creation) — never on a PO already fulfilled from stock.
+        const linkable = ["awaiting", "oc_raised"];
+        if (!linkable.includes(po.fulfilment?.state || "awaiting")) {
+          return res.status(409).json({ status: 409, message: `An OC can't be linked to this PO — it is already ${po.fulfilment.state}.` });
+        }
+        // Claim it so a double click can't auto-create two Products.
+        po = await claimPoLock(req.params.id, { status: "Approved", ocNumber: { $in: ["", null] }, "fulfilment.state": { $in: [...linkable, null] } });
+        if (!po) {
+          return res.status(409).json({ status: 409, message: "This PO is already being processed — refresh and try again." });
+        }
+        claimed = true;
+      }
 
       po.ocNumber = oc;
       po.fulfilment = po.fulfilment || {};
@@ -669,6 +747,8 @@ module.exports = {
     } catch (error) {
       console.error("purchaseOrder setOcNumber error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -695,13 +775,17 @@ module.exports = {
    * it invoiced (it now appears in the Store/dispatch queue).
    */
   createInvoiceForAccounts: async (req, res) => {
+    let claimed = false;
     try {
       const b = req.body || {};
       const invoiceNumber = String(b.invoiceNumber || "").trim();
       if (!invoiceNumber) return res.status(400).json({ status: 400, message: "Invoice number is required." });
       if (!b.dispatchDate) return res.status(400).json({ status: 400, message: "Dispatch date is required." });
+      if (Number.isNaN(new Date(b.dispatchDate).getTime())) {
+        return res.status(400).json({ status: 400, message: "Dispatch date is not a valid date." });
+      }
 
-      const po = await PurchaseOrder.findById(req.params.id);
+      let po = await PurchaseOrder.findById(req.params.id);
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       if (po.status !== "Approved") {
         return res.status(409).json({ status: 409, message: `An invoice can only be raised for an Approved PO (this one is ${po.status}).` });
@@ -709,6 +793,17 @@ module.exports = {
       if (po.fulfilment?.state === "invoiced" || po.fulfilment?.state === "dispatched") {
         return res.status(409).json({ status: 409, message: "This PO has already been invoiced." });
       }
+      // Stock invoicing is the alternative to the OC route — once an OC is
+      // linked (Product/Engineering/Production under way) it can't also be
+      // invoiced from stock, or it would silently drop out of those queues.
+      if (po.ocNumber || (po.fulfilment?.state && po.fulfilment.state !== "awaiting")) {
+        return res.status(409).json({ status: 409, message: `This PO is already on the OC route (${po.fulfilment?.state || "oc linked"}) — it can't be invoiced from stock.` });
+      }
+      po = await claimPoLock(req.params.id, { status: "Approved", ocNumber: { $in: ["", null] }, "fulfilment.state": { $in: ["awaiting", null] } });
+      if (!po) {
+        return res.status(409).json({ status: 409, message: "This PO is already being processed — refresh and try again." });
+      }
+      claimed = true;
 
       const required = Number(po.requiredQuantity || 0);
       const { available, cartons } = await modelStock(po.modelName);
@@ -758,6 +853,8 @@ module.exports = {
       const code = error.status || 500;
       console.error("purchaseOrder createInvoiceForAccounts error:", error);
       return res.status(code).json({ status: code, message: error.message || "Internal server error" });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -774,7 +871,12 @@ module.exports = {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
-      const filter = { "fulfilment.state": view };
+      // A successful approval now lands in production_pending (Process
+      // auto-created); engineering_approved only remains when that failed —
+      // the Approved tab must show both, not just the failures.
+      const filter = {
+        "fulfilment.state": view === "engineering_approved" ? { $in: ["engineering_approved", "production_pending"] } : view,
+      };
       if (search) {
         // No customer-name search — Engineering shouldn't be able to search
         // by (or infer) customer identity, which is Sales & Accounts information.
@@ -910,12 +1012,19 @@ module.exports = {
 
   /** Engineering approves the auto-created product → activate it + create inventory. */
   engineeringApprove: async (req, res) => {
+    let claimed = false;
     try {
-      const po = await PurchaseOrder.findById(req.params.id);
-      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
-      if (po.fulfilment?.state !== "engineering_pending" && po.fulfilment?.state !== "engineering_hold") {
-        return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${po.fulfilment?.state}).` });
+      const found = await PurchaseOrder.findById(req.params.id);
+      if (!found) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      if (found.fulfilment?.state !== "engineering_pending" && found.fulfilment?.state !== "engineering_hold") {
+        return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${found.fulfilment?.state}).` });
       }
+      // Claim it so a concurrent approval can't create a second Process.
+      const po = await claimPoLock(req.params.id, { "fulfilment.state": { $in: ["engineering_pending", "engineering_hold"] } });
+      if (!po) {
+        return res.status(409).json({ status: 409, message: "This PO is already being approved by someone else — refresh and try again." });
+      }
+      claimed = true;
       const productId = po.fulfilment?.productId;
       if (!productId) return res.status(409).json({ status: 409, message: "No product linked to this PO." });
 
@@ -1009,6 +1118,8 @@ module.exports = {
     } catch (error) {
       console.error("engineeringApprove error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -1147,6 +1258,12 @@ module.exports = {
       if (!["Pending", "Approved"].includes(po.status)) {
         return res.status(409).json({ status: 409, message: `A ${po.status} PO cannot be edited.` });
       }
+      // Once Accounts has linked an OC or invoiced it, the Product / Process /
+      // reserved cartons were built from these values — editing now would
+      // change a product mid-production or mismatch the reserved stock.
+      if (fulfilmentStarted(po)) {
+        return res.status(409).json({ status: 409, message: `This PO can no longer be edited — fulfilment is already under way (${po.fulfilment?.state || "OC linked"}).` });
+      }
 
       const b = req.body || {};
       if (b.deviceCategory) {
@@ -1163,11 +1280,8 @@ module.exports = {
       }
       if (typeof b.modelName === "string") po.modelName = b.modelName;
       if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
-      if (b.expectedDeliveryDate) po.expectedDeliveryDate = new Date(b.expectedDeliveryDate);
-      if (b.requiredQuantity != null) {
-        const q = parseInt(b.requiredQuantity, 10);
-        if (Number.isInteger(q) && q >= 1) po.requiredQuantity = q;
-      }
+      const qtyErr = applyQuantityAndDate(po, b);
+      if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
 
       po.statusHistory.push({
