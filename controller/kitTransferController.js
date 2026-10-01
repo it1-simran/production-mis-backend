@@ -480,6 +480,17 @@ module.exports = {
             throw new Error(`Device ${dispatchedSerial} is dispatched and cannot be transferred`);
           }
 
+          // Accessory serials packed onto a device belong to its current PO —
+          // moving the device to another process would orphan them.
+          const withAccessories = await require("../services/accessorySerialService").devicesWithLinkedAccessories(
+            sourceDevices.map((d) => d._id),
+          );
+          if (withAccessories.length) {
+            throw new Error(
+              `Device(s) ${withAccessories.slice(0, 5).join(", ")} carry packed accessory serials — remove the accessories from them before transferring`,
+            );
+          }
+
           const destinationStageSequence = await resolveTransferStageSequence(toProcess, fromProcess);
           const targetStageIndex = getStageIndex(destinationStageSequence, request.targetStage);
           if (targetStageIndex === -1) {

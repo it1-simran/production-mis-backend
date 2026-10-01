@@ -263,7 +263,8 @@ module.exports = {
         });
       }
 
-      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider };
+      // Stages saved by hand: this product stops following its category's testing plan.
+      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider, stagesFromCategory: false, updatedAt: new Date() };
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,

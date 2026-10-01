@@ -146,6 +146,35 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   approvedAt: { type: Date, default: null },
 
+  // Accessories required with this PO's devices — a frozen snapshot of the
+  // Product Category mapping at PO creation (like the SKU fields), validated
+  // server-side (services/poAccessoryService). reserved/issued/returned are
+  // maintained only by services/accessoryStockService.
+  accessories: {
+    type: [
+      {
+        _id: false,
+        accessoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Accessory", required: true },
+        code: { type: String, default: "" },
+        name: { type: String, default: "" },
+        unit: { type: String, default: "pcs" },
+        trackStock: { type: Boolean, default: true },
+        mandatory: { type: Boolean, default: false },
+        qtyMode: { type: String, enum: ["per_device", "per_po"], default: "per_device" },
+        qtyPerUnit: { type: Number, default: 1 }, // per device (per_device) or total (per_po)
+        requiredQty: { type: Number, default: 0 },
+        reservedQty: { type: Number, default: 0 },
+        issuedQty: { type: Number, default: 0 },
+        returnedQty: { type: Number, default: 0 },
+      },
+    ],
+    default: [],
+  },
+  // Short-lived claim so two store users can't issue/return this PO's
+  // accessories at the same moment (see poAccessoryService.withPoLock).
+  accessoriesLockedAt: { type: Date, default: null },
+  accessoriesLockToken: { type: String, default: "" }, // who holds it — only the holder may release it
+
   statusHistory: { type: [statusHistorySchema], default: [] },
 
   createdAt: { type: Date, default: Date.now },
@@ -160,5 +189,8 @@ purchaseOrderSchema.pre("save", function (next) {
 });
 
 const PurchaseOrder = mongoose.model("purchaseOrders", purchaseOrderSchema);
+
+// Process → PO lookups (accessory checklist per device, planning view).
+purchaseOrderSchema.index({ "fulfilment.processId": 1 });
 
 module.exports = PurchaseOrder;

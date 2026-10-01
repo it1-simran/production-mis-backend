@@ -50,6 +50,7 @@ const serviceKeyAuth = require('../middleware/serviceKeyAuth');
 const purchaseOrderController = require('../controller/purchaseOrderController');
 const skuRequestController = require('../controller/skuRequestController');
 const kycController = require('../controller/kycController');
+const accessoryController = require('../controller/accessoryController');
 connectDB();
 
 /** Parses multipart/form-data for API routes that receive FormData from the frontend. */
@@ -95,6 +96,43 @@ router.post('/product-category/sync-from-cpanel', authController.authenticateTok
 router.get('/product-category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.KIT_TRANSFER], "read"), productCategoryController.view);
 router.delete('/product-category/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.delete);
 router.post('/product-category/delete-multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.deleteMultiple);
+// Accessories mapped to a Product Category (edited from the category list, like its testing plan).
+router.get('/product-category/:id/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "read"), accessoryController.getCategoryMapping);
+router.put('/product-category/:id/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "update"), accessoryController.saveCategoryMapping);
+
+// ---------------- Accessories Management ----------------
+// Master list is also readable by Product Category editors (they pick from it).
+router.get('/accessories', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_MASTER, MODULE_KEYS.PRODUCT_CATEGORY], "read"), accessoryController.list);
+router.post('/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "create"), accessoryController.create);
+router.put('/accessories/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "update"), accessoryController.update);
+router.get('/accessories-stock', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "read"), accessoryController.stockList);
+router.post('/accessories-stock/receive', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.receive);
+router.post('/accessories-stock/adjust', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "update"), accessoryController.adjust);
+// Serialized accessories: receive by serial, list, scrap, look up.
+router.post('/accessories/:id/serials/generate', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.generateSerials);
+router.post('/accessories/:id/serials/import', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.importSerials);
+router.get('/accessories/:id/serials', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "read"), accessoryController.listSerials);
+router.get('/accessory-serials/preview', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "read"), accessoryController.previewSerial);
+router.post('/accessory-serials/:serialNo/scrap', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "update"), accessoryController.scrapSerial);
+// Device history views (planning seat records, operator activity, Find Device, cartons): accessories per device.
+router.post('/accessory-serials/by-devices', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_TASK, MODULE_KEYS.VIEW_PLANNING_SCHEDULING, MODULE_KEYS.FIND_DEVICE, MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS], "read"), accessoryController.byDevices);
+router.get('/accessory-serials/lookup/:serialNo', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.FIND_DEVICE], "read"), accessoryController.lookupSerial);
+// Packaging: same permissions as the carton/packing routes the operator already uses.
+// Per-process accessory serials (generated like device serials, from the planning view).
+router.get('/accessories-process-serials/last', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.processSerialLast);
+router.get('/accessories-process-serials/:processId/:accessoryId', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.processSerialSummary);
+router.put('/accessories-process-serials/:processId/:accessoryId/format', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), accessoryController.processSerialSaveFormat);
+router.post('/accessories-process-serials/:processId/:accessoryId/generate', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), accessoryController.processSerialGenerate);
+router.get('/devices/:deviceId/accessory-checklist', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "read"), accessoryController.deviceChecklist);
+router.post('/devices/:deviceId/accessories/link', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "update"), accessoryController.linkDeviceAccessory);
+router.post('/devices/:deviceId/accessories/unlink', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "update"), accessoryController.unlinkDeviceAccessory);
+router.get('/accessories-stock/transactions', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS], "read"), accessoryController.transactions);
+router.get('/accessories-requirements', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "read"), accessoryController.requirements);
+// Read-only accessory lines of a Process's PO — shown on the planning view, so planning viewers can read it too.
+router.get('/accessories-requirements/by-process/:processId', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.byProcess);
+router.post('/accessories-requirements/:poId/issue', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.issue);
+router.post('/accessories-requirements/:poId/return', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.returnItems);
+router.post('/accessories-requirements/:poId/reserve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.reserve);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
@@ -420,6 +458,7 @@ router.get('/integrations/cpanel/purchase-orders', serviceKeyAuth, purchaseOrder
 router.get('/integrations/cpanel/purchase-orders/:id', serviceKeyAuth, purchaseOrderController.getForCpanel);
 router.put('/integrations/cpanel/purchase-orders/:id/resubmit', serviceKeyAuth, purchaseOrderController.resubmitFromCpanel);
 router.get('/integrations/cpanel/esim-options', serviceKeyAuth, purchaseOrderController.esimOptions);
+router.get('/integrations/cpanel/accessories', serviceKeyAuth, accessoryController.mappedForCpanel);
 // Internal Sales UI — user JWT + PURCHASE_ORDER module.
 // Master-data for the Sales edit form (proxied from GPSCPANEL). Hyphen prefix avoids the /purchase-orders/:id route.
 router.get('/purchase-orders-master/categories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.masterCategories);

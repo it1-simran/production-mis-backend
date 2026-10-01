@@ -94,6 +94,7 @@ async function createProductFromPO(po, user = {}) {
     name,
     productCode,
     stages,
+    stagesFromCategory: true, // later edits to the category's testing plan reach it until approval
     commonStages,
     status: "draft", // Engineering approval activates it (and creates inventory).
     createdBy: user.id || null,
@@ -111,4 +112,29 @@ async function createProductFromPO(po, user = {}) {
   return product;
 }
 
-module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory };
+/**
+ * The category's testing plan changed: products auto-created from POs that are
+ * still waiting for Engineering (pending / on hold) take the new plan, unless
+ * their stages were edited by hand. Returns how many products were updated.
+ */
+async function syncPendingProductsForCategory(category) {
+  if (!category || !Array.isArray(category.testingPlan)) return 0;
+  const PurchaseOrder = require("../models/PurchaseOrder");
+  const pos = await PurchaseOrder.find({
+    "fulfilment.state": { $in: ["engineering_pending", "engineering_hold"] },
+    "fulfilment.productId": { $ne: null },
+  }).select("deviceCategory fulfilment.productId").lean();
+  const productIds = [];
+  for (const po of pos) {
+    const cat = await resolveProductCategory(po);
+    if (cat && String(cat._id) === String(category._id)) productIds.push(po.fulfilment.productId);
+  }
+  if (!productIds.length) return 0;
+  const r = await Product.updateMany(
+    { _id: { $in: productIds }, status: "draft", stagesFromCategory: true },
+    { $set: { stages: category.testingPlan, updatedAt: new Date() } }
+  );
+  return r.modifiedCount || 0;
+}
+
+module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory };

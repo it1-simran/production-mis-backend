@@ -123,6 +123,13 @@ const MODULE_KEYS = {
   ESIM_MASTER_PROFILES: "esim_master_data__profiles",
   ESIM_MASTER_APNS: "esim_master_data__apns",
 
+  // Accessories Management — master, per-category mapping (edited under
+  // Product Category), stock ledger, and PO-wise requirement/issue/return.
+  ACCESSORIES_MANAGEMENT: "accessories_management",
+  ACCESSORY_MASTER: "accessories_management__master",
+  ACCESSORY_STOCK: "accessories_management__stock",
+  ACCESSORY_REQUIREMENTS: "accessories_management__requirements",
+
   RS232_MASTER_DATA: "rs232_master_data",
   RS232_MASTER_MANAGE: "rs232_master_data__manage",
 };

@@ -53,6 +53,18 @@ const dispatchInvoiceSchema = new mongoose.Schema(
         deviceCount: { type: Number, default: 0 },
       },
     ],
+    // Accessories issued against the linked PO, snapshotted on confirm so
+    // the invoice / gate pass show what ships alongside the devices.
+    accessories: [
+      {
+        _id: false,
+        accessoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Accessory" },
+        code: { type: String, default: "" },
+        name: { type: String, default: "" },
+        unit: { type: String, default: "pcs" },
+        qty: { type: Number, default: 0 },
+      },
+    ],
     selectedCartonCount: { type: Number, default: 0 },
     totalQuantity: { type: Number, default: 0 },
     gatePassNumber: { type: String, default: "" },
