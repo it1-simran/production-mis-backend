@@ -325,6 +325,10 @@ module.exports = {
           "view product": "product_management__view",
           "add product": "product_management__add",
           "product category": "product_management__category",
+          "accessories management": "accessories_management",
+          "accessory master": "accessories_management__master",
+          "accessory stock": "accessories_management__stock",
+          "po accessory requirements": "accessories_management__requirements",
           "shift management": "shift_management",
           "shift mangement": "shift_management", // live top-level label has a typo (missing "e") — same module as the correctly-spelled entry
           "holiday management": "shift_management__holiday",
@@ -659,6 +663,35 @@ module.exports = {
               moduleKey: "reports__ccid_reassignment_log",
             });
             changed = true;
+          }
+        }
+
+        // Accessories Management: parent + children, added (or completed with
+        // any missing child) on menu load, same as the other nested modules.
+        {
+          const accessoryChildren = [
+            { label: "Accessory Master", route: "/accessories/master", moduleKey: "accessories_management__master" },
+            { label: "Accessory Stock", route: "/accessories/stock", moduleKey: "accessories_management__stock" },
+            { label: "PO Accessory Requirements", route: "/accessories/requirements", moduleKey: "accessories_management__requirements" },
+          ];
+          const accParent = doc.menus.find((m) => m?.moduleKey === "accessories_management");
+          if (!accParent) {
+            doc.menus.push({
+              icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 7h-4V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a1 1 0 0 0-1-1ZM10 5h4v2h-4V5Z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/><path d="M3 12h18" stroke="#ffffff" stroke-width="2"/></svg>`,
+              label: "Accessories Management",
+              route: "#",
+              moduleKey: "accessories_management",
+              children: accessoryChildren,
+            });
+            changed = true;
+          } else {
+            if (!Array.isArray(accParent.children)) accParent.children = [];
+            for (const child of accessoryChildren) {
+              if (!accParent.children.some((c) => c?.moduleKey === child.moduleKey)) {
+                accParent.children.push(child);
+                changed = true;
+              }
+            }
           }
         }
 

@@ -242,6 +242,10 @@ const extractPackagingDataFromStages = (stages = []) => {
   return null;
 };
 
+// Accessory serial scan is enforced only when the packaging step opts in with
+// requireAccessoryScan (shared with the operator checklist — services/accessoryPackingRule).
+const { packagingRequiresAccessoryScan } = require("../services/accessoryPackingRule");
+
 const getProcessAndProductDocs = async (processId) => {
   const processDoc = processId ? await ProcessModel.findById(processId).lean() : null;
   const productId =
@@ -1159,6 +1163,20 @@ module.exports = {
           return res.status(400).json({
             status: 400,
             message: "Scanned Serial / IMEI / CCID does not match the device being packaged.",
+          });
+        }
+      }
+
+      if (packagingRequiresAccessoryScan(processDoc, productDoc)) {
+        const incomplete = await require("../services/accessorySerialService").incompleteDevices(deviceIds);
+        if (incomplete.length) {
+          return res.status(400).json({
+            status: 400,
+            code: "ACCESSORY_SCAN_INCOMPLETE",
+            message: `Scan the accessories before packing: ${incomplete
+              .map((d) => `${d.deviceSerial} needs ${d.missing.join(", ")}`)
+              .join("; ")}.`,
+            incomplete,
           });
         }
       }
@@ -3943,6 +3961,37 @@ module.exports = {
 
       const addedDeviceIds = newDeviceIds.filter(id => !oldDeviceIds.includes(id));
       const removedDeviceIds = oldDeviceIds.filter(id => !newDeviceIds.includes(id));
+
+      // Same accessory rule as packing (createOrUpdate): a device whose process
+      // requires the accessory scan can't be put into a carton without it.
+      if (addedDeviceIds.length > 0) {
+        const addedDocs = await deviceModel.find({ _id: { $in: addedDeviceIds } }).select("_id processID").lean();
+        const byProcess = new Map();
+        for (const d of addedDocs) {
+          const key = String(d.processID || "");
+          if (!byProcess.has(key)) byProcess.set(key, []);
+          byProcess.get(key).push(d._id);
+        }
+        const toCheck = [];
+        for (const [processId, ids] of byProcess) {
+          const { processDoc, productDoc } = await getProcessAndProductDocs(processId || null);
+          if (packagingRequiresAccessoryScan(processDoc, productDoc)) toCheck.push(...ids);
+        }
+        if (toCheck.length) {
+          const incomplete = await require("../services/accessorySerialService").incompleteDevices(toCheck);
+          if (incomplete.length) {
+            await session.abortTransaction();
+            return res.status(400).json({
+              status: 400,
+              code: "ACCESSORY_SCAN_INCOMPLETE",
+              message: `Scan the accessories at packaging before adding these devices: ${incomplete
+                .map((d) => `${d.deviceSerial} needs ${d.missing.join(", ")}`)
+                .join("; ")}.`,
+              incomplete,
+            });
+          }
+        }
+      }
 
       // Update carton
       // Ensure unique IDs

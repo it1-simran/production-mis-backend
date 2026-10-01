@@ -6,6 +6,13 @@ const deviceSchemas = new mongoose.Schema({
   serialNo: { type: String, required: true },
   imeiNo: { type: String, required: false, default: "" },
   customFields: { type: Object, required: false, default: {} },
+  // Serialized accessories packed with this device (denormalized from
+  // accessoryserials, the source of truth). Excluded from sticker loose/deep
+  // matching — printed only via the accessory_serial(s) sticker slugs.
+  accessories: {
+    type: [{ _id: false, accessoryId: mongoose.Schema.Types.ObjectId, code: String, name: String, serialNo: String, linkedAt: Date }],
+    default: undefined,
+  },
   modelName: { type: String, required: false, default: "" },
   ccid: { type: String, required: false, default: "" },
   status: { type: String, required: false, default: "" },

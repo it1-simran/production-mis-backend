@@ -35,6 +35,8 @@ class GatePassService {
             cartonSerial: device.cartonSerial,
           }))
         : [],
+      // Accessories shipping with these devices (snapshotted on confirm).
+      accessories: (invoice.accessories || []).map((a) => ({ code: a.code, name: a.name, unit: a.unit, qty: Number(a.qty || 0) })),
       includeImeiList,
     };
   }
@@ -380,6 +382,14 @@ class GatePassService {
                 <tbody>${cartonsHtml}</tbody>
               </table>
             </div>
+            ${(payload.accessories || []).length ? `
+            <div class="section">
+              <div class="section-title">Accessories</div>
+              <table>
+                <thead><tr><th>#</th><th>Code</th><th>Accessory</th><th>Qty</th></tr></thead>
+                <tbody>${payload.accessories.map((a, i) => `<tr><td>${i + 1}</td><td>${this.escapeHtml(a.code)}</td><td>${this.escapeHtml(a.name)}</td><td>${Number(a.qty || 0)} ${this.escapeHtml(a.unit || "")}</td></tr>`).join("")}</tbody>
+              </table>
+            </div>` : ""}
 
             <div class="totals">
               <div class="total-card">

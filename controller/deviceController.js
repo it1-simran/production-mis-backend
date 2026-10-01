@@ -1247,6 +1247,16 @@ module.exports = {
             await session.endSession();
           }
           deletedCount++;
+          // Accessory serials packed with this device go back to ISSUED on
+          // their PO (reusable) instead of pointing at a deleted device.
+          try {
+            await require("../services/accessorySerialService").releaseForDeletedDevices([deviceDoc._id], {
+              user: req.user,
+              reason: `Device ${deviceDoc.serialNo || ""} deleted: ${trimmedReason}`,
+            });
+          } catch (relErr) {
+            console.error("release accessory serials on device delete failed:", relErr.message);
+          }
         } catch (err) {
           console.error(`Error deleting device for IMEI ${imeiNo}:`, err);
           failed.push({ imei: imeiNo, error: err.message });

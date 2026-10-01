@@ -25,6 +25,7 @@ const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
 const SlugMapping = require("../models/slugMapping");
 const { createProductFromPO, resolveProductCategory } = require("../services/poProductService");
+const poAcc = require("../services/poAccessoryService");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { createInventoryForProduct } = require("../services/inventoryService");
 const ProcessModel = require("../models/process");
@@ -308,8 +309,20 @@ module.exports = {
         String(b.esim?.profile2 || "").trim() ||
         esimRechargePeriod
       );
+      // Recharge period only applies to a JSD-managed eSIM (same rule as the
+      // SKU): a customer-supplied eSIM isn't recharged through JSD. The provider
+      // comes with the request, or from the SKU the PO is raised against.
+      let esimProvider = String(b.esim?.provider || "").trim();
+      if (!esimProvider && hasEsimData && String(b.skuCode || "").trim()) {
+        const sku = await SkuRequest.findOne({ skuCode: String(b.skuCode).trim() }).select("esim.provider").lean();
+        esimProvider = String(sku?.esim?.provider || "").trim();
+      }
+      const needsRecharge = hasEsimData && esimProvider !== "customer";
       // modelName is optional — a PO can be raised without a configured model.
-      if (hasEsimData && !VALID_RECHARGE.includes(esimRechargePeriod)) {
+      if (needsRecharge && !VALID_RECHARGE.includes(esimRechargePeriod)) {
+        return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
+      }
+      if (!needsRecharge && esimRechargePeriod && !VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
       if (!Number.isInteger(requiredQuantity) || requiredQuantity < 1) {
@@ -319,6 +332,20 @@ module.exports = {
       const { logistics, error: logisticsError } = buildLogistics(b.logistics);
       if (logisticsError) {
         return res.status(400).json({ status: 400, message: logisticsError });
+      }
+
+      // Accessories: validated against the Product Category mapping BEFORE a
+      // PO number is consumed (the mapping is authoritative, not the client).
+      let accessories = [];
+      try {
+        accessories = await poAcc.buildPoAccessories(
+          { id: b.deviceCategory?.id ?? null, name: b.deviceCategory?.name || "" },
+          b.accessories,
+          requiredQuantity
+        );
+      } catch (accErr) {
+        if (accErr.status) return res.status(accErr.status).json({ status: accErr.status, message: accErr.message });
+        throw accErr;
       }
 
       const poNumber = await nextPoNumber();
@@ -354,6 +381,7 @@ module.exports = {
         expectedDeliveryDate: b.expectedDeliveryDate ? new Date(b.expectedDeliveryDate) : null,
         requiredQuantity,
         logistics,
+        accessories,
         status: "Pending",
         statusHistory: [
           {
@@ -469,8 +497,12 @@ module.exports = {
       if (b.firmware) po.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
       if (typeof b.modelName === "string") po.modelName = b.modelName;
       if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
+      const qtyBefore = po.requiredQuantity;
       const qtyErr = applyQuantityAndDate(po, b);
       if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
+      // requiredQty is recomputed after the save, under the PO lock (applyRequiredQty) —
+      // never saved from this unlocked copy, which would overwrite issued/reserved counts.
+      const accQtyChanged = po.requiredQuantity !== qtyBefore && (po.accessories || []).length > 0;
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
 
       const prev = po.status;
@@ -497,7 +529,10 @@ module.exports = {
         changedAt: new Date(),
       });
 
-      const saved = await po.save();
+      let saved = await po.save();
+      if (accQtyChanged) {
+        try { saved = (await poAcc.applyRequiredQty(saved._id)) || saved; } catch (accErr) { console.error("purchaseOrder resubmit accessory requiredQty error:", accErr); }
+      }
       return res.status(200).json({ status: 200, message: "Purchase Order resubmitted for approval.", po_number: saved.poNumber, id: saved._id, data: saved });
     } catch (error) {
       console.error("resubmitFromCpanel error:", error);
@@ -848,7 +883,12 @@ module.exports = {
       });
       await po.save();
 
-      return res.status(200).json({ status: 200, message: "Invoice created and order moved to the store for dispatch.", data: { invoice, po } });
+      // Warn (not block) when tracked accessories for this PO aren't in hand.
+      const accessoryShortage = poAcc.shortageOf(po);
+      const shortNote = accessoryShortage.length
+        ? ` Note: accessories not yet issued/reserved — ${accessoryShortage.map((x) => `${x.name} (${x.short})`).join(", ")}.`
+        : "";
+      return res.status(200).json({ status: 200, message: `Invoice created and order moved to the store for dispatch.${shortNote}`, data: { invoice, po, accessoryShortage } });
     } catch (error) {
       const code = error.status || 500;
       console.error("purchaseOrder createInvoiceForAccounts error:", error);
@@ -1037,6 +1077,14 @@ module.exports = {
       // output here would bake ${slug} tokens into literal values and freeze this
       // product exactly like the old behavior, defeating live resolution for it
       // going forward. Raw ${slug} tokens are harmless if a category has none.
+      // Still following the category (not edited by hand): approve with the
+      // category's CURRENT plan, then freeze it — an approved product no
+      // longer changes when the category plan is edited.
+      if (product.stagesFromCategory) {
+        const liveCat = await resolveProductCategory(po);
+        if (liveCat && Array.isArray(liveCat.testingPlan) && liveCat.testingPlan.length) product.stages = liveCat.testingPlan;
+        product.stagesFromCategory = false;
+      }
       if (!Array.isArray(product.stages) || !product.stages.length) {
         const backfillCat = await resolveProductCategory(po);
         if (backfillCat && Array.isArray(backfillCat.testingPlan) && backfillCat.testingPlan.length) {
@@ -1280,8 +1328,12 @@ module.exports = {
       }
       if (typeof b.modelName === "string") po.modelName = b.modelName;
       if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
+      const qtyBefore = po.requiredQuantity;
       const qtyErr = applyQuantityAndDate(po, b);
       if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
+      // requiredQty is recomputed after the save, under the PO lock (applyRequiredQty) —
+      // never saved from this unlocked copy, which would overwrite issued/reserved counts.
+      const accQtyChanged = po.requiredQuantity !== qtyBefore && (po.accessories || []).length > 0;
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
 
       po.statusHistory.push({
@@ -1294,7 +1346,14 @@ module.exports = {
         changedAt: new Date(),
       });
 
-      const saved = await po.save();
+      let saved = await po.save();
+      if (accQtyChanged) {
+        try { saved = (await poAcc.applyRequiredQty(saved._id)) || saved; } catch (accErr) { console.error("purchaseOrder update accessory requiredQty error:", accErr); }
+      }
+      // A quantity change on an Approved PO changes how much it must hold.
+      if (saved.status === "Approved" && (saved.accessories || []).length) {
+        try { await poAcc.syncReservations(saved._id, req.user); } catch (accErr) { console.error("purchaseOrder update accessory reservation error:", accErr); }
+      }
       return res.status(200).json({ status: 200, message: "Purchase Order updated.", data: saved });
     } catch (error) {
       console.error("purchaseOrder update error:", error);
@@ -1352,7 +1411,7 @@ module.exports = {
         // No customer-name search here — PPC shouldn't be able to search by
         // (or infer) customer identity, which is Sales & Accounts information.
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }];
+        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { skuCode: rx }];
       }
 
       const total = await PurchaseOrder.countDocuments(filter);
@@ -1508,9 +1567,23 @@ async function transition(req, res, toStatus, allowedFrom = ["Pending"]) {
     });
 
     const saved = await po.save();
+
+    // Accessory stock follows the PO: an Approved PO reserves what it needs,
+    // a Rejected one releases it. A stock shortfall never blocks the status
+    // change — it shows on the PO Accessory Requirements page instead.
+    let accessoryNote = "";
+    if ((toStatus === "Approved" || toStatus === "Rejected") && (saved.accessories || []).length) {
+      try {
+        const notes = await poAcc.syncReservations(saved._id, req.user);
+        if (notes.length) accessoryNote = ` Accessories short: ${notes.join(", ")}.`;
+      } catch (accErr) {
+        console.error("purchaseOrder transition accessory reservation error:", accErr);
+        accessoryNote = " (Accessory reservation could not be updated — retry from PO Accessory Requirements.)";
+      }
+    }
     return res.status(200).json({
       status: 200,
-      message: `Purchase Order ${toStatus.toLowerCase()} successfully.`,
+      message: `Purchase Order ${toStatus.toLowerCase()} successfully.${accessoryNote}`,
       data: saved,
     });
   } catch (error) {

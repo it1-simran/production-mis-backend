@@ -58,6 +58,7 @@ const processSchema = new mongoose.Schema({
           default: false,
         },
         isPackagingStatus: { type: Boolean, required: false, default: false },
+        requireAccessoryScan: { type: Boolean, required: false, default: false },
         packagingData: {
           packagingType: { type: String, required: false, default: "" },
           cartonLength: { type: Number, required: false, default: 0 },

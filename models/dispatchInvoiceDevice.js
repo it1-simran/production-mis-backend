@@ -20,6 +20,10 @@ const dispatchInvoiceDeviceSchema = new mongoose.Schema(
       unique: true,
     },
     serialNo: { type: String, required: true, trim: true, index: true },
+    accessorySerials: {
+      type: [{ _id: false, code: String, name: String, serialNo: String }],
+      default: undefined,
+    },
     imeiNo: { type: String, default: "", index: true },
     modelName: { type: String, default: "", trim: true },
     cartonId: {

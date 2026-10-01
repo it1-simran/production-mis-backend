@@ -5,6 +5,7 @@ const DispatchInvoice = require("../models/dispatchInvoice");
 const DispatchInvoiceCarton = require("../models/dispatchInvoiceCarton");
 const DispatchInvoiceDevice = require("../models/dispatchInvoiceDevice");
 const GatePass = require("../models/gatePass");
+const PurchaseOrder = require("../models/PurchaseOrder");
 const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
 const WarrantyService = require("./warrantyService");
 const GatePassService = require("./gatePassService");
@@ -717,7 +718,7 @@ class DispatchService {
         dispatchStatus: RESERVED_STATUS,
       })
       .populate({ path: "processId", select: "name processID selectedProduct orderConfirmationNo" })
-      .populate({ path: "devices", select: "serialNo imeiNo modelName dispatchStatus currentStage cartonSerial" });
+      .populate({ path: "devices", select: "serialNo imeiNo modelName dispatchStatus currentStage cartonSerial accessories" });
 
     if (cartons.length !== invoice.selectedCartons.length) {
       const error = new Error("Some reserved cartons are no longer available for this invoice.");
@@ -729,6 +730,13 @@ class DispatchService {
     const cartonLookup = new Map(enrichedCartons.map((carton) => [String(carton._id), carton]));
     const orderedCartons = invoice.selectedCartons.map((row) => cartonLookup.get(String(row.cartonId))).filter(Boolean);
 
+    // Snapshot the accessories issued for the PO this invoice was raised from
+    // (PO → invoice link is PurchaseOrder.fulfilment.invoiceId).
+    const linkedPo = await PurchaseOrder.findOne({ "fulfilment.invoiceId": invoice._id }).select("accessories").lean();
+    invoice.accessories = (linkedPo?.accessories || [])
+      .map((l) => ({ accessoryId: l.accessoryId, code: l.code, name: l.name, unit: l.unit, qty: (l.issuedQty || 0) - (l.returnedQty || 0) }))
+      .filter((l) => l.qty > 0);
+
     const gatePassNumber = this.gatePassService.generateGatePassNumber();
     invoice.gatePassNumber = gatePassNumber;
     invoice.status = "CONFIRMED";
@@ -738,6 +746,15 @@ class DispatchService {
 
     const cartonSnapshots = [];
     const deviceSnapshots = [];
+    // Accessory serials per device from AccessorySerial itself (device.accessories is only a copy).
+    let accessoryByDevice = new Map();
+    try {
+      accessoryByDevice = await require("./accessorySerialService").linkedByDeviceIds(
+        orderedCartons.flatMap((c) => (c.devices || []).map((d) => d._id)).filter(Boolean),
+      );
+    } catch (accErr) {
+      console.error("confirmInvoice accessory snapshot lookup error:", accErr.message);
+    }
 
     for (const carton of orderedCartons) {
       const cartonSnapshot = await DispatchInvoiceCarton.create({
@@ -770,6 +787,10 @@ class DispatchService {
         warrantyEndDate: warranty.warrantyEndDate,
         warrantyMonths: warranty.warrantyMonths,
         status: "DISPATCHED",
+        // Serialized accessories packed with this device (warranty/RMA trail).
+        accessorySerials:
+          accessoryByDevice.get(String(device._id)) ||
+          (device.accessories || []).map((a) => ({ code: a.code, name: a.name, serialNo: a.serialNo })),
       }));
       if (mappedDevices.length > 0) {
         const inserted = await DispatchInvoiceDevice.insertMany(mappedDevices, { ordered: true });
@@ -802,6 +823,22 @@ class DispatchService {
           },
         }
       );
+
+      // Mark this carton's linked accessory serials DISPATCHED. Never blocks
+      // the dispatch — the invoice device snapshot above already holds them.
+      try {
+        await require("./accessorySerialService").markDispatched(
+          (carton.devices || []).map((d) => ({ _id: d._id, serialNo: d.serialNo, cartonSerial: carton.cartonSerial })),
+        );
+      } catch (accErr) {
+        console.error("confirmInvoice markDispatched accessory serials error:", accErr.message);
+      }
+    }
+    // Safety net: serials left LINKED to already-dispatched devices by an earlier failure.
+    try {
+      await require("./accessorySerialService").reconcileDispatched();
+    } catch (accErr) {
+      console.error("confirmInvoice reconcile accessory serials error:", accErr.message);
     }
 
     const gatePassPayload = this.gatePassService.buildPayload(invoice, cartonSnapshots, deviceSnapshots, options);

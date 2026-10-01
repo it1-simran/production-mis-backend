@@ -8,6 +8,10 @@ const productSchema = new mongoose.Schema({
   // actually have one (never colliding on missing/undefined for old records).
   productCode: { type: String, unique: true, sparse: true, index: true },
   status: { type: String, enum: ["draft", "active"], default: "active" },
+  // A product auto-created from a PO keeps following its Product Category's
+  // testing plan (later plan edits reach it) until Engineering approves it or
+  // someone saves its stages in the product editor.
+  stagesFromCategory: { type: Boolean, default: false },
   autoNgEnabled: { type: Boolean, default: false },
   // eSIM provider whose default APN/switch-profile config is used when a step's
   // actionType is "ESIM Settings" (see config/esimProviders.js). Enum will grow
@@ -54,6 +58,9 @@ const productSchema = new mongoose.Schema({
             default: false,
           },
           isPackagingStatus: { type: Boolean, required: false, default: false },
+          // Packaging step: operator must scan the serial of every serialized
+          // accessory the PO needs per device before the device can be packed.
+          requireAccessoryScan: { type: Boolean, required: false, default: false },
           packagingData: {
             packagingType: { type: String, required: false, default: "" },
             cartonLength: { type: Number, required: false, default: 0 },
