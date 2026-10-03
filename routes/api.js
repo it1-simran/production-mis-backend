@@ -390,6 +390,7 @@ router.put("/process/updateIssueKitsToLine", authController.authenticateToken, a
 router.put("/process/confirmKitsToLineWithoutSeat", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.confirmKitsToLineWithoutSeat);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
+router.get("/process/getStageHistory/:id", authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PLANNING_SCHEDULING, "read"), processController.getStageHistoryByProcessId);
 router.get("/devices/retry-logs/:id", authController.authenticateToken, deviceController.getDeviceRetryLogsByProcessId);
 router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);
 router.post("/kit-transfer/request", authController.authenticateToken, authController.authorize([MODULE_KEYS.KIT_TRANSFER, MODULE_KEYS.TRANSFER_REQUESTS], "create"), kitTransferController.createRequest);
