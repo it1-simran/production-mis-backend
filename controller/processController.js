@@ -9,6 +9,7 @@ const AssignJigToPlanModel = require("../models/assignJigToPlan");
 const AssignKitsToLineModel = require("../models/assignKitsToLine");
 const OperatorModel = require("../models/User");
 const DeviceTestRecordModel = require("../models/deviceTestModel");
+const DeviceRetryLog = require("../models/deviceRetryLog");
 const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber");
 const RoomPlanModel = require("../models/roomPlan");
 const { invalidateProcessCache } = require("../utils/cacheManager");
@@ -1591,6 +1592,197 @@ module.exports = {
         message: "Device Record Test Fetched SuccessFully !!",
         deviceTestRecords,
         ...(meta ? { meta } : {}),
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  // Full (all-time by default) test history of ONE stage of a process — every
+  // seat and every operator — served in small cursor pages so the planning
+  // page's History Log never has to pull the whole collection the way
+  // getDeviceTestRecordsByProcessId does (which also silently caps at 2000
+  // rows when no date range is given). Abandoned NG-modal retries
+  // (device_retry_logs) are merged in, reshaped exactly like
+  // deviceController.getDeviceRetryLogsByProcessId does, so the frontend's
+  // attempt-trail builder treats them the same as before.
+  //
+  // Query params:
+  //   stageName  (required) matched like the frontend's stagesMatch(): case-
+  //              insensitive, with spaces/underscores/hyphens interchangeable
+  //   limit      page size, default 50, max 200
+  //   cursor     "<createdAt ISO>|<_id>" of the last row already shown;
+  //              omit for the first page
+  //   from, to   optional ISO datetimes (already in the caller's timezone)
+  //   search     optional: serial prefix, or operator name / employee code
+  //   serials    optional comma-separated serials the caller already resolved
+  //              from its own IMEI/CCID/carton lookup; OR-ed with `search`
+  getStageHistoryByProcessId: async (req, res) => {
+    try {
+      const processId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid processId" });
+      }
+      const stageName = String(req.query.stageName || "").trim();
+      if (!stageName) {
+        return res.status(400).json({ status: 400, message: "stageName is required" });
+      }
+
+      const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const stagePattern = stageName
+        .split(/[\s_-]+/)
+        .filter(Boolean)
+        .map(escapeRegex)
+        .join("[\\s_-]+");
+
+      const filter = {
+        processId: new mongoose.Types.ObjectId(processId),
+        stageName: { $regex: `^\\s*${stagePattern}\\s*$`, $options: "i" },
+      };
+
+      const from = req.query.from ? new Date(req.query.from) : null;
+      const to = req.query.to ? new Date(req.query.to) : null;
+      if ((from && isNaN(from.getTime())) || (to && isNaN(to.getTime()))) {
+        return res.status(400).json({ status: 400, message: "Invalid from/to date" });
+      }
+      if (from || to) {
+        filter.createdAt = {};
+        if (from) filter.createdAt.$gte = from;
+        if (to) filter.createdAt.$lte = to;
+      }
+
+      const search = String(req.query.search || "").trim();
+      const serials = String(req.query.serials || "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .slice(0, 500);
+      if (search || serials.length) {
+        const searchOr = [];
+        if (serials.length) searchOr.push({ serialNo: { $in: serials } });
+        if (search) {
+          searchOr.push({ serialNo: { $regex: `^${escapeRegex(search)}`, $options: "i" } });
+          const operatorRegex = { $regex: escapeRegex(search), $options: "i" };
+          const operators = await OperatorModel.find(
+            { $or: [{ name: operatorRegex }, { employeeCode: operatorRegex }] },
+            { _id: 1 },
+          )
+            .limit(50)
+            .lean();
+          if (operators.length) {
+            searchOr.push({ operatorId: { $in: operators.map((op) => op._id) } });
+          }
+        }
+        filter.$and = [{ $or: searchOr }];
+      }
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+
+      // Cursor (not skip) paging: rows tested while the user is scrolling
+      // land above the cursor, so "load more" never repeats or skips a row.
+      // Both collections are ordered by the same (createdAt, _id) key, so one
+      // cursor pages through their merged stream.
+      const query = { ...filter };
+      const cursorRaw = String(req.query.cursor || "");
+      if (cursorRaw) {
+        const [cursorDateRaw, cursorId] = cursorRaw.split("|");
+        const cursorDate = new Date(cursorDateRaw);
+        if (isNaN(cursorDate.getTime()) || !mongoose.Types.ObjectId.isValid(cursorId)) {
+          return res.status(400).json({ status: 400, message: "Invalid cursor" });
+        }
+        const cursorObjectId = new mongoose.Types.ObjectId(cursorId);
+        query.$or = [
+          { createdAt: { $lt: cursorDate } },
+          { createdAt: cursorDate, _id: { $lt: cursorObjectId } },
+        ];
+      }
+
+      // Everything the frontend's buildTestingAnalytics reads, minus the heavy
+      // logs[] array: auto-NG retry rows come from logData.retryAttempts /
+      // logData.autoNgMeta, which are also mirrored at the top level.
+      const projection = {
+        serialNo: 1,
+        stageName: 1,
+        seatNumber: 1,
+        status: 1,
+        operatorId: 1,
+        planId: 1,
+        startTime: 1,
+        endTime: 1,
+        testDurationMs: 1,
+        timeConsumed: 1,
+        attemptNumber: 1,
+        reattemptReason: 1,
+        reason: 1,
+        ngDescription: 1,
+        assignedDeviceTo: 1,
+        "logData.retryAttempts": 1,
+        "logData.autoNgMeta": 1,
+        createdAt: 1,
+      };
+
+      const [testRows, retryRows, testTotal, retryTotal, uniqueAgg] = await Promise.all([
+        DeviceTestRecordModel.find(query, projection)
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(limit + 1)
+          .populate("operatorId", "name employeeCode")
+          .lean(),
+        DeviceRetryLog.find(query)
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(limit + 1)
+          .populate("operatorId", "name employeeCode")
+          .lean(),
+        // Only the first page needs totals; later pages reuse them.
+        cursorRaw ? null : DeviceTestRecordModel.countDocuments(filter),
+        cursorRaw ? null : DeviceRetryLog.countDocuments(filter),
+        cursorRaw
+          ? null
+          : DeviceTestRecordModel.aggregate([
+              { $match: filter },
+              { $group: { _id: "$serialNo" } },
+              { $count: "count" },
+            ]),
+      ]);
+
+      const reshapedRetryRows = retryRows.map((log) => ({
+        _id: log._id,
+        deviceId: log.deviceId || null,
+        serialNo: log.serialNo,
+        planId: log.planId,
+        processId: log.processId,
+        operatorId: log.operatorId,
+        stageName: log.stageName,
+        seatNumber: log.seatKey,
+        status: "NG",
+        attemptNumber: log.attemptNumber,
+        startTime: log.startTime,
+        endTime: log.endTime,
+        testDurationMs: log.durationMs,
+        reattemptReason: log.failureReason,
+        reason: log.failureReason,
+        isRetryLogOnly: true,
+        logs: [],
+        createdAt: log.createdAt,
+      }));
+
+      const merged = [...testRows, ...reshapedRetryRows].sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) return diff;
+        return String(b._id) > String(a._id) ? 1 : String(b._id) < String(a._id) ? -1 : 0;
+      });
+
+      const hasMore = merged.length > limit;
+      const pageRows = hasMore ? merged.slice(0, limit) : merged;
+      const last = pageRows[pageRows.length - 1];
+      const nextCursor =
+        hasMore && last ? `${new Date(last.createdAt).toISOString()}|${last._id}` : null;
+
+      return res.status(200).json({
+        status: 200,
+        rows: pageRows,
+        total: cursorRaw ? null : testTotal + retryTotal,
+        uniqueDevices: cursorRaw ? null : uniqueAgg?.[0]?.count || 0,
+        hasMore,
+        nextCursor,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
