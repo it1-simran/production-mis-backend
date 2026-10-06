@@ -68,6 +68,19 @@ const skuRequestSchema = new mongoose.Schema({
   modelAllotmentSource: { type: String, enum: ["existing", "new", ""], default: "" },
   // A sample serial number pattern for this SKU's devices (e.g. "JSD-XXXX-000000").
   serialNumberFormat: { type: String, default: "" },
+  // The Device Serial Formats master entry it was picked from (blank on SKUs
+  // raised before the master existed — those keep their typed sample above).
+  serialFormat: {
+    id: { type: String, default: "" },
+    name: { type: String, default: "" },
+    // "Others": the customer's own pattern, added to the master on NPD final
+    // approval (services/deviceSerialFormatSync), which then fills id/name.
+    custom: { type: Boolean, default: false },
+    prefix: { type: String, default: "" },
+    suffix: { type: String, default: "" },
+    enableZero: { type: Boolean, default: true },
+    noOfZeroRequired: { type: Number, default: 0 },
+  },
   // Packaging type: devices packed straight into one master carton, or each
   // unit individually boxed — and which MES sticker format is printed on it.
   cartonType: { type: String, enum: ["direct_master_carton", "unit_packaging", ""], default: "direct_master_carton" },
