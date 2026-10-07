@@ -18,6 +18,8 @@ const {
   computeOperatorActivityTimestamps,
   normalizeAssignedStagesPayload,
   getPlanningDayRange,
+  warnIfStageFlowUnbalanced,
+  computeStageWipDevices,
 } = require("../services/planInsightsService");
 const { queryResultCache } = require("../config/cache");
 const {
@@ -1288,6 +1290,9 @@ module.exports = {
         processIssuedKits: Number(process?.issuedKits || 0),
         processConsumedKits: Number(process?.consumedKits || 0),
       });
+      // Dev-only: stage WIP + units past the last stage must add up to the
+      // allocated kits (no-op in production).
+      warnIfStageFlowUnbalanced(planId, insights.flow);
 
       const seatKey = String(req.query.seatKey || req.query.seatNumber || "").trim();
       const stageName = String(req.query.stageName || "").trim();
@@ -1336,6 +1341,59 @@ module.exports = {
         status: 500,
         message: "Failed to fetch plan insights",
       });
+    }
+  },
+  // Which units make up one stage's WIP (the Stage WIP popup + its Excel download).
+  // Read-only; same access rules as getPlanInsights, and no cache: the Excel must
+  // carry the current serial / IMEI / CCID.
+  getStageWipDevices: async (req, res) => {
+    try {
+      const planId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(String(planId || ""))) {
+        return res.status(400).json({ status: 400, message: "Invalid plan id" });
+      }
+      const bucket = String(req.query.bucket || "").trim().toLowerCase() === "delivered" ? "delivered" : "stage";
+      const stageName = String(req.query.stageName || "").trim();
+      if (bucket === "stage" && !stageName) {
+        return res.status(400).json({ status: 400, message: "stageName is required" });
+      }
+
+      const plan = await PlaningAndSchedulingModel.findOne({
+        _id: planId,
+        ...getUnscopedAuthorizedReadListFilter(),
+      }).lean();
+      if (!plan) {
+        return res.status(404).json({ status: 404, message: "Plan not found" });
+      }
+      const process = plan?.selectedProcess
+        ? await ProcessModel.findById(plan.selectedProcess).lean()
+        : null;
+      if (!process) {
+        return res.status(404).json({ status: 404, message: "Process not found" });
+      }
+      const ka = await assignKitsToLineModel.findOne({ planId, processId: process._id }).lean().catch(() => null);
+
+      const result = await computeStageWipDevices({
+        processId: process._id,
+        processStages: process.stages || [],
+        commonStages: process.commonStages || [],
+        processStatus: process.status || "",
+        allocatedKits: Number(ka?.issuedKits || 0),
+        stageName,
+        bucket,
+      });
+      if (!result.found) {
+        return res.status(404).json({ status: 404, message: "Stage not found in this process" });
+      }
+      res.set("Cache-Control", "no-store");
+      return res.status(200).json({
+        status: 200,
+        message: "Stage WIP devices fetched successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error fetching stage WIP devices:", error);
+      return res.status(500).json({ status: 500, message: "Failed to fetch stage WIP devices" });
     }
   },
   getSeatStageTestingAnalytics: async (req, res) => {

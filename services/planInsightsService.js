@@ -417,32 +417,410 @@ const shouldSkipRecordForFlowVersion = (record, deviceFlowVersions = new Map()) 
   return recordFlowVersion !== currentFlowVersion;
 };
 
-const replicateStageWipToParallelSeats = ({
-  byStageMap = new Map(),
-  bySeatStageMap = new Map(),
-  stageSeatFallbackMap = new Map(),
-}) => {
-  byStageMap.forEach((stageRow) => {
-    const stageName = normalizeValue(stageRow?.stageName);
-    const stageKey = normalizeKey(stageName);
-    const wip = Number(stageRow?.wip || 0);
-    if (!stageKey || wip <= 0) return;
+// ---------------------------------------------------------------------------
+// Stage-flow WIP ("chain" model)
+//
+// Every device of the plan's process lands in exactly ONE bucket, computed from
+// the WHOLE plan history (the Today / From-To date filter never applies to WIP):
+//   - line WIP of a stage of the process sequence (process stages, then common
+//     stages, in the order the process defines them),
+//   - the TRC bucket of a stage: NG units waiting in TRC/QC, attributed to the
+//     stage they failed at (so "Functional: 13 = 5 line + 8 TRC"),
+//   - "after last stage" (passed the final stage) or "rejected" (scrapped).
+// A device is counted once per stage (its latest result), so retries and
+// duplicate records can't double count. A unit that passes a stage leaves that
+// stage's WIP and shows up in the next one.
+//
+// Parallel seats share one queue per stage, so WIP exists at stage level only;
+// bySeatStage rows never carry WIP.
+//
+// Only the FIRST stage is derived from the kit allocation:
+//   first-stage WIP = allocated kits - units that already passed it - rejected
+//                     - its own TRC units
+// which is what makes "sum of every stage WIP + after-last + rejected" equal the
+// allocated kits.
+// ---------------------------------------------------------------------------
+const FINISHED_GOODS_STAGE_KEYS = new Set([
+  "fg to store",
+  "keep in store",
+  "kept in store",
+  "stocked",
+]);
 
-    const seats = stageSeatFallbackMap.get(stageKey) || [];
-    seats.forEach((seatKey) => {
-      const seat = normalizeValue(seatKey);
-      if (!seat) return;
-      const mapKey = `${seat}:${stageKey}`;
-      if (!bySeatStageMap.has(mapKey)) {
-        bySeatStageMap.set(mapKey, getDefaultSeatStageRow(seat, stageName));
+const isFinishedGoodsStage = (stageName) =>
+  FINISHED_GOODS_STAGE_KEYS.has(normalizeStageKeyFlexible(stageName));
+
+/** Canonical stage names in flow order: process stages, then common stages. */
+const buildFlowStageNames = ({ processStages = [], commonStages = [], aliasLookup = new Map() } = {}) => {
+  const names = [];
+  const seen = new Set();
+  [...(Array.isArray(processStages) ? processStages : []), ...(Array.isArray(commonStages) ? commonStages : [])]
+    .forEach((stage) => {
+      const canonical = resolveCanonicalStageName(
+        stage?.stageName || stage?.name || stage?.stage,
+        aliasLookup,
+      );
+      const key = normalizeKey(canonical);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      names.push(canonical);
+    });
+  return names;
+};
+
+const classifyFlowResult = (status) => {
+  if (isPassStatus(status)) return "pass";
+  if (isResolvedStatus(status)) return "resolved";
+  if (isNgStatus(status)) return "ng";
+  return "other";
+};
+
+/**
+ * Places every device in exactly one bucket (see the block comment above).
+ * Pure: no database access, so it can be unit tested with plain objects.
+ *
+ * `records` = latest test records of the process (any order, NOT date scoped);
+ * `devices` = every Device doc of the process.
+ */
+const computeStageFlowSnapshot = ({
+  stageNames = [],
+  aliasLookup = new Map(),
+  records = [],
+  devices = [],
+  // true = also report WHICH devices fall in each bucket (snapshot.membership).
+  // Off in the hot insights path: it is only needed by the stage WIP popup.
+  collectDevices = false,
+} = {}) => {
+  const stageCount = stageNames.length;
+  const lineCount = new Array(stageCount).fill(0);
+  const trcCount = new Array(stageCount).fill(0);
+  // reach[p] = devices whose furthest point is position p (a TRC unit's point
+  // is the stage it failed at, `stageCount` = past the last stage). A device is
+  // counted once, so passedCount below never double counts retries/duplicates.
+  const reach = new Array(stageCount + 1).fill(0);
+  const deviceList = Array.isArray(devices) ? devices : [];
+  const diagnostics = {
+    unmappedStage: 0,
+    ngWithoutSourceStage: 0,
+    untestedAtFirstStage: 0,
+  };
+  const snapshot = {
+    stageNames: [...stageNames],
+    lineCount,
+    trcCount,
+    // passedCount[i] = devices that have passed stage i (unique, whole history).
+    passedCount: new Array(stageCount).fill(0),
+    afterLast: 0,
+    rejected: 0,
+    rejectedConsumed: 0,
+    devicesBeyondFirstStage: 0,
+    consumedKits: 0,
+    deviceCount: deviceList.length,
+    diagnostics,
+  };
+  if (collectDevices) {
+    snapshot.membership = {
+      // line[i] = ids of the units waiting on the line at stage i
+      line: Array.from({ length: stageCount }, () => []),
+      // trc[i] = NG units waiting in TRC/QC that failed at stage i
+      trc: Array.from({ length: stageCount }, () => []),
+      afterLast: [],
+      rejected: [],
+      // devices whose bucket depends on their test records (TRC source stage,
+      // unmappable currentStage): a caller can fetch records for just these.
+      needsRecords: [],
+    };
+  }
+  if (stageCount === 0) return snapshot;
+
+  const indexByKey = new Map(stageNames.map((name, index) => [normalizeKey(name), index]));
+  // Returns the stage's position in the flow, `stageCount` for stages that come
+  // after it (dispatch/delivery/kept in store), or -1 when it can't be mapped.
+  const resolveStageIndex = (stageText) => {
+    const raw = normalizeValue(stageText);
+    if (!raw) return -1;
+    const index = indexByKey.get(normalizeKey(resolveCanonicalStageName(raw, aliasLookup)));
+    if (index !== undefined) return index;
+    const flex = normalizeStageKeyFlexible(raw);
+    if (POST_COMMON_STAGE_KEYS.has(flex) || flex.startsWith("dispatch") || flex.startsWith("deliver")) {
+      return stageCount;
+    }
+    return -1;
+  };
+
+  const deviceFlowVersions = buildDeviceFlowVersionMap(deviceList);
+  const deviceIdBySerial = new Map();
+  deviceList.forEach((device) => {
+    const serial = normalizeValue(device?.serialNo);
+    if (serial) deviceIdBySerial.set(serial, String(device?._id || ""));
+  });
+
+  // Latest result per (device, stage) + the newest NG stage per device.
+  const perDevice = new Map();
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
+    const deviceId =
+      String(record?.deviceId?._id || record?.deviceId || "").trim() ||
+      deviceIdBySerial.get(normalizeValue(record?.serialNo)) ||
+      "";
+    if (!deviceId) return;
+    // Records written at TRC / QC (or any non-plan stage) are not plan stages.
+    const stageIndex = resolveStageIndex(record?.stageName || record?.currentStage);
+    if (stageIndex < 0 || stageIndex >= stageCount) return;
+
+    const time = new Date(record?.createdAt || 0).getTime() || 0;
+    const result = classifyFlowResult(record?.status);
+    let entry = perDevice.get(deviceId);
+    if (!entry) {
+      entry = { results: new Map(), ngIndex: -1, ngTime: -1 };
+      perDevice.set(deviceId, entry);
+    }
+    const existing = entry.results.get(stageIndex);
+    if (!existing || time > existing.time) entry.results.set(stageIndex, { result, time });
+    if (result === "ng" && time > entry.ngTime) {
+      entry.ngIndex = stageIndex;
+      entry.ngTime = time;
+    }
+  });
+
+  let rejectedConsumed = 0;
+  const membership = snapshot.membership;
+  deviceList.forEach((device) => {
+    const deviceKey = String(device?._id || "");
+    const entry = perDevice.get(deviceKey);
+    let maxPassIndex = -1;
+    entry?.results.forEach((value, index) => {
+      if (value.result === "pass" && index > maxPassIndex) maxPassIndex = index;
+    });
+
+    const status = normalizeKey(device?.status);
+    if (status === "rejected") {
+      snapshot.rejected += 1;
+      if (maxPassIndex >= 0) rejectedConsumed += 1;
+      if (membership) membership.rejected.push(deviceKey);
+      return;
+    }
+    if (status === "dispatched" || status === "completed") {
+      snapshot.afterLast += 1;
+      reach[stageCount] += 1;
+      if (membership) membership.afterLast.push(deviceKey);
+      return;
+    }
+
+    // NG unit waiting in TRC/QC: belongs to the stage it failed at.
+    if (isDeviceTerminalNg(device) || isDepartmentStage(device?.currentStage)) {
+      let sourceIndex = entry ? entry.ngIndex : -1;
+      if (membership) {
+        if (sourceIndex < 0) membership.needsRecords.push(deviceKey);
       }
-      const seatRow = bySeatStageMap.get(mapKey);
-      const perSeatWip = Number(seatRow?.wip || 0);
-      if (perSeatWip <= 0) {
-        seatRow.wip = wip;
+      if (sourceIndex < 0) {
+        diagnostics.ngWithoutSourceStage += 1;
+        sourceIndex = Math.min(maxPassIndex + 1, stageCount - 1);
       }
+      trcCount[sourceIndex] += 1;
+      reach[sourceIndex] += 1;
+      if (membership) {
+        membership.trc[sourceIndex].push({
+          id: deviceKey,
+          // when it failed (null when no NG record could be found)
+          ngTime: entry && entry.ngTime > 0 ? entry.ngTime : null,
+        });
+      }
+      return;
+    }
+
+    // Where the device sits right now: its own currentStage is the truth (it is
+    // updated in the same transaction as the test record, and common stages
+    // such as PDI / FG to Store don't reliably write test records at all). Only
+    // when that can't be mapped (empty / unknown name) do the test records
+    // decide - and never by defaulting to the first stage.
+    let position = resolveStageIndex(device?.currentStage);
+    if (position < 0) {
+      diagnostics.unmappedStage += 1;
+      if (membership) membership.needsRecords.push(deviceKey);
+      position = maxPassIndex + 1;
+    }
+
+    if (position >= stageCount) {
+      snapshot.afterLast += 1;
+      reach[stageCount] += 1;
+      if (membership) membership.afterLast.push(deviceKey);
+    } else {
+      lineCount[position] += 1;
+      reach[position] += 1;
+      if (position === 0) diagnostics.untestedAtFirstStage += 1;
+      if (membership) membership.line[position].push(deviceKey);
+    }
+  });
+
+  // Devices that passed stage i = every device whose furthest point is beyond i.
+  // The last stage's count is the units that completed the whole flow.
+  let passedBeyond = 0;
+  for (let index = stageCount - 1; index >= 0; index -= 1) {
+    passedBeyond += reach[index + 1];
+    snapshot.passedCount[index] = passedBeyond;
+  }
+
+  const beyondFirst = snapshot.passedCount[0];
+  snapshot.devicesBeyondFirstStage = beyondFirst;
+  snapshot.rejectedConsumed = rejectedConsumed;
+  // Consumed kits = devices that have passed the first stage (scrapped units
+  // that got past it consumed their kit as well).
+  snapshot.consumedKits = beyondFirst + rejectedConsumed;
+  return snapshot;
+};
+
+/**
+ * Turns a snapshot into per-stage WIP rows + totals for one kit allocation.
+ * Cheap, so the cached insights re-run it for every caller's own allocation.
+ */
+const finalizeStageFlow = (snapshot, { allocatedKits = 0, kitConfirmed = false } = {}) => {
+  const allocated = Math.max(Number(allocatedKits) || 0, 0);
+  const stageNames = snapshot?.stageNames || [];
+  // FG to Store and every stage after it (Dispatch, Delivery...) hold finished
+  // goods, not in-process work.
+  const firstFinishedIndex = stageNames.findIndex((name) => isFinishedGoodsStage(name));
+  const stages = stageNames.map((stageName, index) => {
+    const trcWip = Number(snapshot.trcCount[index] || 0);
+    let lineWip = Number(snapshot.lineCount[index] || 0);
+    if (index === 0) {
+      // Units that are already generated but not (yet) issued to the line are
+      // not WIP, and kits that have no Device doc yet still are: so the first
+      // stage comes from the allocation, never from counting Device docs.
+      lineWip =
+        kitConfirmed && snapshot.deviceCount > 0 && allocated > 0
+          ? Math.max(allocated - snapshot.devicesBeyondFirstStage - snapshot.rejected - trcWip, 0)
+          : 0;
+    }
+    return {
+      stageName,
+      lineWip,
+      trcWip,
+      wip: lineWip + trcWip,
+      // Units that have passed this stage (unique devices, whole history): what
+      // the strip shows as "done". waiting_i = done_(i-1) - done_i - TRC_i.
+      doneCount: Number(snapshot.passedCount?.[index] || 0),
+      finishedGoods: firstFinishedIndex >= 0 && index >= firstFinishedIndex,
+    };
+  });
+
+  const inProcess = stages.filter((stage) => !stage.finishedGoods);
+  const wipLine = inProcess.reduce((sum, stage) => sum + stage.lineWip, 0);
+  const wipTrc = inProcess.reduce((sum, stage) => sum + stage.trcWip, 0);
+  const finishedGoods = stages
+    .filter((stage) => stage.finishedGoods)
+    .reduce((sum, stage) => sum + stage.wip, 0);
+  const stageWipSum = stages.reduce((sum, stage) => sum + stage.wip, 0);
+  const accounted = stageWipSum + Number(snapshot.afterLast || 0) + Number(snapshot.rejected || 0);
+  // In-process WIP split: what is still pending at the first stage (kits not
+  // consumed yet) vs. what is in line after it.
+  const wipFirstStage = stages[0] && !stages[0].finishedGoods ? stages[0].wip : 0;
+
+  return {
+    stages,
+    totals: {
+      wip: wipLine + wipTrc,
+      wipLine,
+      wipTrc,
+      wipFirstStage,
+      wipAfterFirstStage: wipLine + wipTrc - wipFirstStage,
+      finishedGoodsWip: finishedGoods,
+      // Units that passed the LAST stage (unique devices) = completed units.
+      deliveredUnits: Number(snapshot.afterLast || 0),
+      consumedKits: Number(snapshot.consumedKits || 0),
+    },
+    check: {
+      allocatedKits: allocated,
+      stageWipSum,
+      afterLastStage: Number(snapshot.afterLast || 0),
+      rejected: Number(snapshot.rejected || 0),
+      rejectedConsumed: Number(snapshot.rejectedConsumed || 0),
+      consumedKits: Number(snapshot.consumedKits || 0),
+      accounted,
+      balanced: kitConfirmed && allocated > 0 ? accounted === allocated : null,
+    },
+  };
+};
+
+/**
+ * Overlays the flow WIP on an insights payload. Returns a new object (the base
+ * may be the shared cached one), so it is safe to call once per request.
+ */
+const applyStageFlowToInsights = (base, { allocatedKits = 0 } = {}) => {
+  const raw = base?.flow?.raw;
+  if (!raw) return base;
+  const flow = finalizeStageFlow(raw.snapshot, {
+    allocatedKits,
+    kitConfirmed: Boolean(raw.kitConfirmed),
+  });
+  const flowByKey = new Map(flow.stages.map((stage) => [normalizeKey(stage.stageName), stage]));
+
+  const byStage = (Array.isArray(base.byStage) ? base.byStage : []).map((row) => {
+    const flowRow = flowByKey.get(normalizeKey(row?.stageName));
+    return {
+      ...row,
+      wip: flowRow ? flowRow.wip : 0,
+      lineWip: flowRow ? flowRow.lineWip : 0,
+      trcWip: flowRow ? flowRow.trcWip : 0,
+      doneCount: flowRow ? flowRow.doneCount : 0,
+      finishedGoods: flowRow ? flowRow.finishedGoods : false,
+    };
+  });
+  // Stages with WIP but no tested/pass/ng row yet (e.g. a fresh first stage).
+  const present = new Set(byStage.map((row) => normalizeKey(row?.stageName)));
+  flow.stages.forEach((stage) => {
+    if (stage.wip <= 0 || present.has(normalizeKey(stage.stageName))) return;
+    byStage.push({
+      ...getDefaultStageRow(stage.stageName),
+      wip: stage.wip,
+      lineWip: stage.lineWip,
+      trcWip: stage.trcWip,
+      doneCount: stage.doneCount,
+      finishedGoods: stage.finishedGoods,
+      upha: 0,
+      achievedUph: 0,
     });
   });
+  const stageOrder = new Map(flow.stages.map((stage, index) => [normalizeKey(stage.stageName), index]));
+
+  return {
+    ...base,
+    totals: {
+      ...(base.totals || {}),
+      ...flow.totals,
+    },
+    byStage: sortStageRows(byStage, stageOrder),
+    flow: {
+      raw,
+      stages: flow.stages,
+      check: flow.check,
+      diagnostics: raw.snapshot?.diagnostics || {},
+    },
+  };
+};
+
+// Dev-only data-integrity check: every stage's WIP + units past the last stage
+// + rejected units must add up to the allocated kits. Logged once per distinct
+// mismatch so the 30s recompute doesn't flood the console. Only meaningful for
+// the plan-level allocation, so only the plan insights endpoint calls it (an
+// operator seat's insights are computed against that seat's own allocation).
+const flowBalanceWarnings = new Map();
+const warnIfStageFlowUnbalanced = (planId, flow) => {
+  if (process.env.NODE_ENV === "production") return;
+  const check = flow?.check;
+  const key = String(planId || "");
+  if (!check || check.balanced !== false) {
+    flowBalanceWarnings.delete(key);
+    return;
+  }
+  const signature = `${check.accounted}/${check.allocatedKits}`;
+  if (flowBalanceWarnings.get(key) === signature) return;
+  flowBalanceWarnings.set(key, signature);
+  console.assert(
+    false,
+    `[planInsights] stage WIP does not add up for plan ${key}: stages ${check.stageWipSum} + after last stage ${check.afterLastStage} + rejected ${check.rejected} = ${check.accounted}, allocated kits ${check.allocatedKits}`,
+    flow?.diagnostics || {},
+  );
 };
 
 const seedCommonStageRows = (commonStages = [], upsertStage) => {
@@ -450,58 +828,6 @@ const seedCommonStageRows = (commonStages = [], upsertStage) => {
     const stageName = normalizeValue(stage?.stageName || stage?.name || stage?.stage);
     if (stageName) upsertStage(stageName);
   });
-};
-
-const getStageSeatFallbackMap = (assignedStages = {}) => {
-  const stageSeatMap = new Map();
-  sortSeatKeys(Object.keys(assignedStages || {})).forEach((seatKey) => {
-    const seatEntry = getSeatStageEntry(assignedStages, seatKey);
-    if (!seatEntry || seatEntry?.reserved) return;
-    const stageName = normalizeValue(seatEntry?.stageName || seatEntry?.name || seatEntry?.stage);
-    if (!stageName) return;
-    const stageKey = normalizeKey(stageName);
-    if (!stageSeatMap.has(stageKey)) stageSeatMap.set(stageKey, []);
-    stageSeatMap.get(stageKey).push(seatKey);
-  });
-  return stageSeatMap;
-};
-
-const getDeviceSeatKeyForStage = ({ latestRecord = null, stageName = "", stageSeatFallbackMap = new Map() }) => {
-  const normalizedStage = normalizeKey(stageName);
-  if (latestRecord) {
-    const directStage = normalizeKey(
-      latestRecord?.currentLogicalStage ||
-      latestRecord?.currentStage ||
-      latestRecord?.stageName,
-    );
-    if (directStage === normalizedStage) {
-      const directSeat = normalizeValue(
-        latestRecord?.currentSeatKey ||
-        latestRecord?.seatNumber ||
-        latestRecord?.assignedSeatKey,
-      );
-      if (directSeat) return directSeat;
-    }
-
-    const routedStage = normalizeKey(
-      latestRecord?.nextLogicalStage ||
-      latestRecord?.currentLogicalStage ||
-      latestRecord?.currentStage ||
-      latestRecord?.stageName,
-    );
-    if (routedStage === normalizedStage) {
-      const routedSeat = normalizeValue(
-        latestRecord?.assignedSeatKey ||
-        latestRecord?.currentSeatKey ||
-        latestRecord?.seatNumber,
-      );
-      if (routedSeat) return routedSeat;
-    }
-  }
-
-  const candidates = stageSeatFallbackMap.get(normalizedStage) || [];
-  if (candidates.length === 1) return candidates[0];
-  return "";
 };
 
 /** Seat attribution on test records (same precedence everywhere). */
@@ -726,12 +1052,9 @@ const computePlanInsightsUncached = async ({
   dateFrom = "",
   dateTo = "",
   processStatus = "",
-  // Process.issuedKits/consumedKits (Store's own figures) — distinct from
-  // `issuedKits` above, which is the seat-allocation ("Kits to Allocate")
-  // total used for the lineIssueKits/kitsShortage totals below. Used only to
-  // cap untested-device WIP to what's actually been issued to the floor.
-  processIssuedKits = 0,
-  processConsumedKits = 0,
+  // Callers also pass Process.issuedKits/consumedKits (Store's own figures).
+  // Neither is read any more: stage WIP derives from `issuedKits` (the seat /
+  // plan allocation) and the devices' own progress, not from Store counters.
 }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) {
     return {
@@ -741,6 +1064,13 @@ const computePlanInsightsUncached = async ({
         pass: 0,
         ng: 0,
         wip: 0,
+        wipLine: 0,
+        wipTrc: 0,
+        wipFirstStage: 0,
+        wipAfterFirstStage: 0,
+        deliveredUnits: 0,
+        consumedKits: 0,
+        trackedUnits: 0,
         lineIssueKits: 0,
         kitsShortage: 0,
         operatorToday: { totalAttempts: 0, totalCompleted: 0, totalNg: 0 },
@@ -757,13 +1087,7 @@ const computePlanInsightsUncached = async ({
     };
   }
 
-  const normalizedAssignedStages = normalizeAssignedStagesPayload(
-    assignedStages,
-    processStages,
-    commonStages,
-  );
   const stageOrderMap = buildStageOrderMap({ processStages, commonStages });
-  const stageSeatFallbackMap = getStageSeatFallbackMap(normalizedAssignedStages);
   const stageAliasLookup = buildStageAliasLookup({ processStages, commonStages });
 
   // Prioritize processId to match historical records exactly.
@@ -902,43 +1226,9 @@ const computePlanInsightsUncached = async ({
           if (isNgStatus(status)) seatStageRow.ng += 1;
         }
       }
-    } else if (isResolvedStatus(record?.status)) {
-      const returnStage = getResolvedReturnStage(record) || stageName;
-      const stageRow = upsertStage(returnStage);
-      if (stageRow) stageRow.wip += 1;
-
-      const seatKey = getRecordSeatKey(record);
-      if (seatKey) {
-        const seatStageRow = upsertSeatStage(seatKey, returnStage);
-        if (seatStageRow) seatStageRow.wip += 1;
-      }
     }
-
-    // Handle Stage Transition: Pass -> Next Stage WIP
-    if (isPassStatus(status)) {
-      const nextStageName = normalizeValue(record?.nextLogicalStage || "");
-      if (nextStageName) {
-        const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
-        const nextStageKey = normalizeKey(nextStageName);
-        const dsKey = `${deviceId}:${nextStageKey}`;
-
-        // Only count as WIP for the next stage if the device hasn't started that stage yet
-        if (deviceId && !latestByDeviceStage.has(dsKey)) {
-          const nextStageRow = upsertStage(nextStageName);
-          if (nextStageRow) nextStageRow.wip += 1;
-
-          const nextSeatKey = getDeviceSeatKeyForStage({
-            latestRecord: record,
-            stageName: nextStageName,
-            stageSeatFallbackMap,
-          });
-          if (nextSeatKey) {
-            const nextSeatStageRow = upsertSeatStage(nextSeatKey, nextStageName);
-            if (nextSeatStageRow) nextSeatStageRow.wip += 1;
-          }
-        }
-      }
-    }
+    // WIP is not accumulated here: it comes from computeStageFlowSnapshot
+    // below, which places each device exactly once over the whole plan history.
   });
 
   const firstProcessStage = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
@@ -1020,17 +1310,9 @@ const computePlanInsightsUncached = async ({
     if (!deviceFlowVersions.has(key)) deviceFlowVersions.set(key, value);
   });
 
-  // Count active WIP (those without any test in this process yet).
-  // `issuedKits` here is the Production Manager's line allocation
-  // (AssignKitsToLine.issuedKits), not Store's process-level issuedKits —
-  // devices shouldn't read as WIP on a seat/line until the PM has actually
-  // confirmed and allocated kits to it, even if the process itself is past
-  // the pre-kit-confirmation statuses. No line allocation yet = 0 capacity,
-  // not a fallback to how many Store issued to the process as a whole.
-  const effectiveAllocatedKits = Number(issuedKits || 0);
-  let remainingUntestedWipCapacity = isKitConfirmedProcessStatus(processStatus)
-    ? Math.max(effectiveAllocatedKits - Number(processConsumedKits || 0), 0)
-    : 0;
+  // Devices that have no test record in this process yet: only their already
+  // terminal states feed the tested/pass/ng counters here. Their WIP is NOT
+  // counted from Device docs - see computeStageFlowSnapshot.
   (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
     const deviceId = String(device?._id || "");
     if (processedDeviceIds.has(deviceId)) return;
@@ -1047,32 +1329,7 @@ const computePlanInsightsUncached = async ({
     } else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched") {
       stageRow.tested += 1;
       stageRow.pass += 1;
-    } else if (remainingUntestedWipCapacity > 0) {
-      stageRow.wip += 1;
-      remainingUntestedWipCapacity -= 1;
     }
-  });
-
-  // Only pad the first stage's WIP with leftover capacity if Serial Generator
-  // has actually created at least one Device doc for this process — otherwise
-  // there's nothing behind the number: the drill-down list (built from real
-  // Device docs) would always be empty while the count claims units exist.
-  if (
-    firstProcessStage &&
-    isKitConfirmedProcessStatus(processStatus) &&
-    remainingUntestedWipCapacity > 0 &&
-    (Array.isArray(wipDevices) ? wipDevices.length : 0) > 0
-  ) {
-    const firstStageRow = upsertStage(firstProcessStage);
-    if (firstStageRow) {
-      firstStageRow.wip += remainingUntestedWipCapacity;
-    }
-  }
-
-  replicateStageWipToParallelSeats({
-    byStageMap,
-    bySeatStageMap,
-    stageSeatFallbackMap,
   });
 
   const countedSerials = new Set();
@@ -1135,6 +1392,29 @@ const computePlanInsightsUncached = async ({
     upsertStage,
   });
 
+  // Stage WIP: whole plan history over EVERY device of the process. Deliberately
+  // not built from scopedLatestRecords / the date-scoped device snapshots above
+  // - the Today / From-To filter only applies to pass, NG and UPH.
+  const flowDevices = processId && mongoose.Types.ObjectId.isValid(String(processId))
+    ? await deviceModel
+      .find({ processID: new mongoose.Types.ObjectId(String(processId)) })
+      .select("_id serialNo status currentStage flowVersion")
+      .lean()
+    : [];
+  const flowSnapshot = computeStageFlowSnapshot({
+    stageNames: buildFlowStageNames({ processStages, commonStages, aliasLookup: stageAliasLookup }),
+    aliasLookup: stageAliasLookup,
+    records: latestRecords,
+    devices: flowDevices,
+  });
+  const flowKitConfirmed = isKitConfirmedProcessStatus(processStatus);
+  // Make sure every stage that carries WIP has a row (the first stage always
+  // does: it is the one derived from the kit allocation).
+  finalizeStageFlow(flowSnapshot, { allocatedKits: issuedKits, kitConfirmed: flowKitConfirmed })
+    .stages.forEach((stage, index) => {
+      if (index === 0 || stage.wip > 0) upsertStage(stage.stageName);
+    });
+
   const dateFilterDays = hasDateFilter ? countInclusiveCalendarDays(dateFrom, dateTo) : 1;
 
   const byStage = sortStageRows(
@@ -1172,27 +1452,34 @@ const computePlanInsightsUncached = async ({
   const lineIssueKitsCount = Number(issuedKits) || (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip);
   const kitsShortageCount = Math.max(0, lineIssueKitsCount - (uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip));
 
-  return {
-    generatedAt: new Date().toISOString(),
-    totals: {
-      tested: uniquePlanTotals.tested,
-      pass: uniquePlanTotals.pass,
-      ng: uniquePlanTotals.ng,
-      wip: uniquePlanTotals.wip,
-      lineIssueKits: lineIssueKitsCount,
-      kitsShortage: kitsShortageCount,
-      operatorToday,
-      efficiency: {
-        process: processEfficiency,
-        today: todayEfficiency,
+  return applyStageFlowToInsights(
+    {
+      generatedAt: new Date().toISOString(),
+      totals: {
+        tested: uniquePlanTotals.tested,
+        pass: uniquePlanTotals.pass,
+        ng: uniquePlanTotals.ng,
+        // totals.wip (in-process WIP), wipLine, wipTrc, consumedKits are set by
+        // applyStageFlowToInsights. trackedUnits is what pass+ng+wip used to
+        // add up to - kitsShortage is still measured against it.
+        trackedUnits: uniquePlanTotals.pass + uniquePlanTotals.ng + uniquePlanTotals.wip,
+        lineIssueKits: lineIssueKitsCount,
+        kitsShortage: kitsShortageCount,
+        operatorToday,
+        efficiency: {
+          process: processEfficiency,
+          today: todayEfficiency,
+        },
+        targetUpha,
+        productiveHours: productiveHoursForRange,
       },
-      targetUpha,
-      productiveHours: productiveHoursForRange,
+      byStage,
+      bySeatStage,
+      flow: { raw: { snapshot: flowSnapshot, kitConfirmed: flowKitConfirmed } },
+      latestRecords: latestRecords || [],
     },
-    byStage,
-    bySeatStage,
-    latestRecords: latestRecords || [],
-  };
+    { allocatedKits: issuedKits },
+  );
 };
 
 // Every open operator seat polls computePlanInsights every ~10-30s. The heavy
@@ -1222,16 +1509,15 @@ const computePlanInsights = async (params) => {
     return computePlanInsightsUncached(params);
   }
 
-  // processIssuedKits/processConsumedKits are deliberately left out of this
-  // key. processIssuedKits isn't even read inside computePlanInsightsUncached.
-  // processConsumedKits IS read there (caps remainingUntestedWipCapacity),
-  // but it increments on nearly every device pass, so keying on it made a
-  // busy plan generate a near-unique key on almost every call - the cache
-  // never actually absorbed repeat calls, leaving computePlanInsightsUncached
-  // (5-11s on large plans) running on almost every request and pegging CPU.
-  // Dropping it means the WIP-shortage number can lag reality by up to the
-  // TTL below, which is fine: operator tabs already poll on their own ~30s
-  // cycle, so this adds no visible staleness beyond what they already tolerate.
+  // issuedKits and processIssuedKits/processConsumedKits are deliberately left
+  // out of this key. computePlanInsightsUncached doesn't read the process
+  // counters (they incremented on nearly every device pass, so keying on them
+  // used to make a busy plan generate a near-unique key on almost every call -
+  // the cache never absorbed repeat calls, leaving the 5-11s computation
+  // running on almost every request and pegging CPU), and the only thing that
+  // depends on the allocation (the first stage's WIP) is re-derived per call
+  // below. Anything else can lag reality by up to the TTL, which is fine:
+  // operator tabs already poll on their own ~30s cycle.
   const cacheKey = [
     planId,
     processId,
@@ -1268,13 +1554,22 @@ const computePlanInsights = async (params) => {
   const base = await basePromise;
   const operatorToday = await getOperatorTodayStatsCached({ operatorId, planId, processId });
 
-  const totalsBase = base.totals || {};
-  const producedTotal = Number(totalsBase.pass || 0) + Number(totalsBase.ng || 0) + Number(totalsBase.wip || 0);
+  // The cached base was built for whichever caller got there first (the plan
+  // page passes the plan's total allocation, an operator seat passes its own).
+  // The first stage's WIP is derived from the allocation, so re-derive the WIP
+  // overlay for THIS caller; the heavy per-device counts stay cached.
+  const withFlow = applyStageFlowToInsights(base, { allocatedKits: issuedKits });
+
+  const totalsBase = withFlow.totals || {};
+  const producedTotal = Number(
+    totalsBase.trackedUnits ??
+    Number(totalsBase.pass || 0) + Number(totalsBase.ng || 0) + Number(totalsBase.wip || 0),
+  );
   const lineIssueKitsCount = Number(issuedKits) || producedTotal;
   const kitsShortageCount = Math.max(0, lineIssueKitsCount - producedTotal);
 
   return {
-    ...base,
+    ...withFlow,
     totals: {
       ...totalsBase,
       lineIssueKits: lineIssueKitsCount,
@@ -1340,8 +1635,10 @@ const computeProcessInsights = async ({
   selectedProduct = "",
   quantity = 0,
   processStatus = "",
+  // The process's own issued kits (Store): the capacity the first stage's WIP
+  // is derived from. (processConsumedKits is still passed by callers but no
+  // longer read - consumed kits are the devices that passed the first stage.)
   processIssuedKits = 0,
-  processConsumedKits = 0,
 }) => {
   if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) {
     return {
@@ -1482,25 +1779,14 @@ const computeProcessInsights = async ({
           if (isNgStatus(status)) seatRow.ng += 1;
         }
       }
-    } else if (isResolvedStatus(record?.status)) {
-      const returnStage = getResolvedReturnStage(record) || currentStageName;
-      const stageRow = upsertStage(returnStage);
-      if (stageRow) stageRow.wip += 1;
-
-      if (seatKey) {
-        const seatRow = upsertSeatStage(seatKey, returnStage);
-        if (seatRow) seatRow.wip += 1;
-      }
     }
+    // WIP is not accumulated here: it comes from computeStageFlowSnapshot
+    // below (the same model the plan insights use).
   });
 
-  // 2. Process all other active devices (those without test records yet).
-  // Cap untested WIP to (issuedKits - already produced), same reasoning as
-  // computePlanInsightsUncached above.
-  const effectiveAllocatedKits = Number(issuedKits || 0) > 0 ? Number(issuedKits) : Number(processIssuedKits || 0);
-  let remainingUntestedWipCapacity = isKitConfirmedProcessStatus(processStatus)
-    ? Math.max(effectiveAllocatedKits - Number(processConsumedKits || 0), 0)
-    : 0;
+  // 2. Devices that have no test record yet: only their already terminal
+  // states feed the tested/pass/ng counters. Their WIP is NOT counted from
+  // Device docs - see computeStageFlowSnapshot.
   (Array.isArray(wipDevices) ? wipDevices : []).forEach((device) => {
     const deviceId = String(device?._id || "");
     if (processedDeviceIds.has(deviceId)) return;
@@ -1517,29 +1803,11 @@ const computeProcessInsights = async ({
     } else if (normalizeKey(device?.status) === "completed" || normalizeKey(device?.status) === "dispatched" || normalizeKey(device?.status) === "pass") {
       stageRow.tested += 1;
       stageRow.pass += 1;
-    } else if (remainingUntestedWipCapacity > 0) {
-      stageRow.wip += 1;
-      remainingUntestedWipCapacity -= 1;
     }
   });
 
-  // Only pad the first stage's WIP with leftover capacity if Serial Generator
-  // has actually created at least one Device doc for this process — otherwise
-  // there's nothing behind the number: the drill-down list (built from real
-  // Device docs) would always be empty while the count claims units exist.
-  if (
-    firstProcessStage &&
-    isKitConfirmedProcessStatus(processStatus) &&
-    remainingUntestedWipCapacity > 0 &&
-    (Array.isArray(wipDevices) ? wipDevices.length : 0) > 0
-  ) {
-    const firstStageRow = upsertStage(firstProcessStage);
-    if (firstStageRow) {
-      firstStageRow.wip += remainingUntestedWipCapacity;
-    }
-  }
-
-  // Totals: pass/ng from latest row per device-stage combo; wip = sum of stage-level wip buckets
+  // Totals: tested/pass/ng from the latest row per device-stage combo. totals.wip
+  // is set below from the stage-flow model.
   const uniqueProcessTotals = {
     tested: dedupedRecords?.length || 0,
     pass: 0,
@@ -1550,22 +1818,6 @@ const computeProcessInsights = async ({
   dedupedRecords.forEach((record) => {
     if (isPassStatus(record?.status)) uniqueProcessTotals.pass += 1;
     if (isNgStatus(record?.status)) uniqueProcessTotals.ng += 1;
-
-    // Determine if this device should contribute to WIP of the NEXT stage
-    if (isPassStatus(record?.status)) {
-      const nextStageName = normalizeValue(record?.nextLogicalStage || "");
-      if (nextStageName) {
-        const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
-        const nextStageKey = normalizeKey(nextStageName);
-        const dsKey = `${deviceId}:${nextStageKey}`;
-
-        // Only count as WIP for the next stage if the device hasn't started that stage yet
-        if (deviceId && !latestByDeviceStage.has(dsKey)) {
-          const nextStageRow = upsertStage(nextStageName);
-          if (nextStageRow) nextStageRow.wip += 1;
-        }
-      }
-    }
   });
 
   mergeAliasedStageRows(byStageMap, stageAliasLookup);
@@ -1576,26 +1828,44 @@ const computeProcessInsights = async ({
     upsertStage,
   });
 
+  // Stage WIP: same model as the plan insights (whole history, every device of
+  // the process placed once, TRC with its source stage). There is no per-plan
+  // allocation at process level, so the first stage is derived from the
+  // process's own issued kits.
+  const flowSnapshot = computeStageFlowSnapshot({
+    stageNames: buildFlowStageNames({ processStages, commonStages, aliasLookup: stageAliasLookup }),
+    aliasLookup: stageAliasLookup,
+    records: latestRecords,
+    devices: processFlowDevices,
+  });
+  const flowKitConfirmed = isKitConfirmedProcessStatus(processStatus);
+  finalizeStageFlow(flowSnapshot, {
+    allocatedKits: processIssuedKits,
+    kitConfirmed: flowKitConfirmed,
+  }).stages.forEach((stage, index) => {
+    if (index === 0 || stage.wip > 0) upsertStage(stage.stageName);
+  });
+
   const byStage = sortStageRows(Array.from(byStageMap.values()), stageOrderMap);
   const bySeatStage = sortSeatStageRows(Array.from(bySeatStageMap.values()), stageOrderMap);
 
-  uniqueProcessTotals.wip = byStage.reduce(
-    (sum, row) => sum + Number(row?.wip || 0),
-    0,
-  );
-
+  // Process level: there is no plan, and computeOperatorActivityTimestamps only
+  // filters by process (planId is not used as a filter).
   const operatorActivityTimestamps = await computeOperatorActivityTimestamps({
-    planId,
     processId,
   });
 
-  return {
-    generatedAt: new Date().toISOString(),
-    totals: uniqueProcessTotals,
-    byStage,
-    bySeatStage,
-    operatorActivityTimestamps,
-  };
+  return applyStageFlowToInsights(
+    {
+      generatedAt: new Date().toISOString(),
+      totals: uniqueProcessTotals,
+      byStage,
+      bySeatStage,
+      operatorActivityTimestamps,
+      flow: { raw: { snapshot: flowSnapshot, kitConfirmed: flowKitConfirmed } },
+    },
+    { allocatedKits: processIssuedKits },
+  );
 };
 
 const toIsoOrNull = (value) => {
@@ -1800,6 +2070,164 @@ const computeOperatorActivityTimestamps = async ({
   };
 };
 
+// ---------------------------------------------------------------------------
+// Stage WIP popup: WHICH units make up a stage's WIP (READ-ONLY).
+//
+// Uses the very same placement logic as the insights (computeStageFlowSnapshot),
+// so the list always matches the number on the tile. It stays cheap by fetching
+// test records only for the few devices whose bucket depends on them (NG units
+// waiting in TRC/QC need their failing stage; units with an unmappable
+// currentStage), instead of aggregating the whole process history. IMEI / CCID
+// are read at request time, so a download always has the current values.
+// ---------------------------------------------------------------------------
+const STAGE_WIP_LIST_LIMIT = 20000;
+// One shared collator (natural order: SN9 before SN10): localeCompare with options
+// builds a new one per comparison - ~10x slower on 20,000 serials.
+const STAGE_WIP_SERIAL_COLLATOR = new Intl.Collator(undefined, { numeric: true });
+const STAGE_WIP_ID_CHUNK = 1000;
+
+const chunkList = (items, size) => {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+};
+
+const computeStageWipDevices = async ({
+  processId = "",
+  processStages = [],
+  commonStages = [],
+  processStatus = "",
+  allocatedKits = 0,
+  stageName = "",
+  // "stage" = one stage of the flow, "delivered" = units that passed the last stage
+  bucket = "stage",
+}) => {
+  if (!processId || !mongoose.Types.ObjectId.isValid(String(processId))) return { found: false };
+  const processObjectId = new mongoose.Types.ObjectId(String(processId));
+  const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
+  const aliasLookup = buildStageAliasLookup({ processStages, commonStages });
+  const stageNames = buildFlowStageNames({ processStages, commonStages, aliasLookup });
+
+  const flowDevices = await deviceModel
+    .find({ processID: processObjectId })
+    .select("_id serialNo status currentStage flowVersion")
+    .lean();
+  const base = { stageNames, aliasLookup, devices: flowDevices, collectDevices: true };
+
+  // Pass 1 (no records) only tells which devices need their records.
+  let snapshot = computeStageFlowSnapshot({ ...base, records: [] });
+  const needRecordIds = snapshot.membership.needsRecords;
+  if (needRecordIds.length > 0) {
+    const records = [];
+    for (const idChunk of chunkList(needRecordIds, STAGE_WIP_ID_CHUNK)) {
+      const rows = await deviceTestRecordModel
+        .find({ processId: processObjectId, deviceId: { $in: idChunk.map(toObjectId) } })
+        .select("deviceId serialNo stageName status currentStage flowVersion createdAt")
+        .sort({ createdAt: -1 })
+        .lean();
+      records.push(...rows);
+    }
+    snapshot = computeStageFlowSnapshot({ ...base, records });
+  }
+  const flow = finalizeStageFlow(snapshot, {
+    allocatedKits,
+    kitConfirmed: isKitConfirmedProcessStatus(processStatus),
+  });
+
+  let label = "";
+  let stageIndex = -1;
+  let lineIds = [];
+  let trcEntries = [];
+  let wip = 0;
+  let lineWip = 0;
+  let trcWip = 0;
+  // Serials that exist at this stage but are not covered by the kit allocation.
+  let notAllocated = 0;
+  if (bucket === "delivered") {
+    label = "Delivered";
+    lineIds = snapshot.membership.afterLast;
+    wip = Number(snapshot.afterLast || 0);
+    lineWip = wip;
+  } else {
+    const canonical = resolveCanonicalStageName(stageName, aliasLookup);
+    stageIndex = stageNames.findIndex((name) => normalizeKey(name) === normalizeKey(canonical));
+    if (stageIndex < 0) return { found: false };
+    label = stageNames[stageIndex];
+    lineIds = snapshot.membership.line[stageIndex];
+    trcEntries = snapshot.membership.trc[stageIndex];
+    ({ wip, lineWip, trcWip } = flow.stages[stageIndex]);
+    // The FIRST stage's WIP comes from the kit allocation (allocated - passed -
+    // ...), not from how many serials exist: Serial Generator creates every
+    // planned serial up front, so far more units than the kits issued to the line
+    // can still be sitting at the first stage. The popup lists the units the
+    // allocation covers - the oldest serials first (ObjectIds grow with creation
+    // time), i.e. the ones that are tested next - so the list matches the tile.
+    if (stageIndex === 0 && lineIds.length > lineWip) {
+      notAllocated = lineIds.length - lineWip;
+      lineIds = [...lineIds].sort().slice(0, lineWip);
+    }
+  }
+
+  const trcInfo = new Map(trcEntries.map((entry) => [entry.id, entry]));
+  const wantedIds = [...trcEntries.map((entry) => entry.id), ...lineIds];
+  const truncated = wantedIds.length > STAGE_WIP_LIST_LIMIT;
+  const listedIds = wantedIds.slice(0, STAGE_WIP_LIST_LIMIT);
+
+  const details = new Map();
+  for (const idChunk of chunkList(listedIds, 2000)) {
+    const rows = await deviceModel
+      .find({ _id: { $in: idChunk.map(toObjectId) } })
+      .select("_id serialNo imeiNo imei ccid status currentStage cartonSerial modelName updatedAt")
+      .lean();
+    rows.forEach((row) => details.set(String(row._id), row));
+  }
+
+  const devices = listedIds.map((id) => {
+    const device = details.get(id) || {};
+    const trc = trcInfo.get(id);
+    return {
+      id,
+      serialNo: normalizeValue(device.serialNo),
+      imei: normalizeValue(device.imeiNo || device.imei),
+      ccid: normalizeValue(device.ccid),
+      cartonSerial: normalizeValue(device.cartonSerial),
+      modelName: normalizeValue(device.modelName),
+      status: normalizeValue(device.status),
+      currentStage: normalizeValue(device.currentStage),
+      updatedAt: device.updatedAt || null,
+      wipType: bucket === "delivered" ? "delivered" : trc ? "trc" : "line",
+      // NG units waiting in TRC (or QC) are shown with the stage they failed at.
+      assignedTo: trc ? (normalizeKey(device.currentStage) === "qc" ? "QC" : "TRC") : "",
+      failedAt: trc ? label : "",
+      ngAt: trc && trc.ngTime ? new Date(trc.ngTime).toISOString() : null,
+    };
+  });
+  devices.sort((left, right) => {
+    if (left.wipType !== right.wipType) return left.wipType === "trc" ? -1 : 1;
+    return STAGE_WIP_SERIAL_COLLATOR.compare(left.serialNo, right.serialNo);
+  });
+
+  const listedTrc = devices.filter((device) => device.wipType === "trc").length;
+  return {
+    found: true,
+    stageName: label,
+    stageIndex,
+    bucket,
+    wip,
+    lineWip,
+    trcWip,
+    listed: devices.length,
+    listedLine: devices.length - listedTrc,
+    listedTrc,
+    // The first stage is derived from the kit allocation: kits that are issued
+    // but have no serial yet are WIP without a row to list.
+    missingUnits: truncated ? 0 : Math.max(wip - devices.length, 0),
+    notAllocated,
+    truncated,
+    devices,
+  };
+};
+
 module.exports = {
   normalizeValue,
   normalizeKey,
@@ -1817,6 +2245,12 @@ module.exports = {
   getResolvedReturnStage,
   getRecordSeatKey,
   computePlanInsights,
+  computeStageFlowSnapshot,
+  computeStageWipDevices,
+  finalizeStageFlow,
+  buildFlowStageNames,
+  buildStageAliasLookup,
+  warnIfStageFlowUnbalanced,
   computeProcessInsights,
   computeOperatorActivityTimestamps,
 };

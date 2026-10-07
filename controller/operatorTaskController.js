@@ -1579,7 +1579,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const stageInsight = (canonicalInsights?.byStage || []).find(
     (row) => targetStageNames.has(normalizeValue(row?.stageName))
   );
-  const insightStageWip = stageInsight ? Number(stageInsight.wip || 0) : 0;
+  // Units waiting in TRC/QC are shown against their source stage on the plan
+  // page (wip = lineWip + trcWip) but are not in this operator's queue.
+  const insightStageWip = stageInsight
+    ? Number(stageInsight.lineWip ?? stageInsight.wip ?? 0)
+    : 0;
 
   const lineIssueKitsCount = isFirstStage && seatIssuedKits > 0 ? seatIssuedKits : 0;
   const rawWipKitsCount =
