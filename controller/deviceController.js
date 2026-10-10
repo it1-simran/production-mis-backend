@@ -25,7 +25,8 @@ const {
 const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/customFieldsCcid");
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
-const { cachedCompute } = require("../utils/ttlCache");
+const { cachedCompute, invalidatePrefix } = require("../utils/ttlCache");
+const { compressStepLogsForStorage } = require("../utils/stepLogCompression");
 
 function sanitizeKeys(value) {
   if (Array.isArray(value)) {
@@ -145,7 +146,19 @@ const findLatestNgContextForDevice = async ({ deviceId, serialNo, processId }) =
     status: { $regex: /^(ng|fail)$/i },
     $or: [{ deviceId }, { serialNo }],
   };
-  return deviceTestRecords.findOne(match).sort({ createdAt: -1 }).lean();
+  // Explicit include-projection (Phase 1 log-payload cleanup, 2026-09-19):
+  // every caller only ever reads stageName/seatNumber/assignedSeatKey/planId/
+  // operatorId from this result (verified via grep across the codebase) -
+  // never .logs. This document can carry a 50-100KB terminalLogs payload
+  // that was being loaded into memory on every NG-resolve lookup for no
+  // reason. Explicit include-list (not exclude) so a future field addition
+  // to this function's callers fails loudly (undefined) instead of silently
+  // pulling logs back in.
+  return deviceTestRecords
+    .findOne(match)
+    .select("stageName seatNumber assignedSeatKey planId operatorId status createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
 };
 const getStageLabel = (stage) => normalizeText(stage?.name || stage?.stageName || stage?.stage);
 const toStageArray = (value) => (Array.isArray(value) ? value : value ? [value] : []);
@@ -159,12 +172,17 @@ const safeParseJson = (value, fallback) => {
   }
 };
 const shouldLogOperatorPassTimings = String(process.env.LOG_OPERATOR_PASS_TIMINGS || "").toLowerCase() === "true";
+// Requests that come close to the 15s requestTimeout middleware budget are logged
+// unconditionally (not just when LOG_OPERATOR_PASS_TIMINGS is set) so the per-phase
+// breakdown is available whenever a SLOW_REQUEST/timeout fires, without a redeploy.
+const SLOW_TIMING_THRESHOLD_MS = 5000;
 const logOperatorPassTimings = (timings = {}, meta = {}) => {
-  if (!shouldLogOperatorPassTimings) return;
+  const isSlow = Number(timings.totalMs) >= SLOW_TIMING_THRESHOLD_MS;
+  if (!shouldLogOperatorPassTimings && !isSlow) return;
   try {
-    console.info("[operator-pass-timing]", JSON.stringify({ ...meta, ...timings }));
+    console.info(isSlow ? "[operator-pass-timing][SLOW]" : "[operator-pass-timing]", JSON.stringify({ ...meta, ...timings }));
   } catch (error) {
-    console.info("[operator-pass-timing]", { ...meta, ...timings });
+    console.info(isSlow ? "[operator-pass-timing][SLOW]" : "[operator-pass-timing]", { ...meta, ...timings });
   }
 };
 const resolveOperatorSeatKey = async (processId, operatorId) => {
@@ -177,6 +195,17 @@ const resolveOperatorSeatKey = async (processId, operatorId) => {
   if (!assignment?.seatDetails?.rowNumber && !assignment?.seatDetails?.seatNumber) return "";
   return `${assignment.seatDetails.rowNumber || ""}-${assignment.seatDetails.seatNumber || ""}`;
 };
+// Busts operatorTaskController's per-process device-queue caches (the "which
+// devices are at this stage right now" lists) right when a device actually
+// moves, so those caches can run a much longer TTL safely - staleness is now
+// bounded by "since the last real change" instead of a fixed clock tick.
+const invalidateOperatorTaskDeviceCaches = (processId) => {
+  const id = String(processId || "").trim();
+  if (!id) return;
+  invalidatePrefix(`operatorTaskRawDevices:${id}`);
+  invalidatePrefix(`operatorTaskAllProcessDevices:${id}`);
+};
+
 const buildCompactDeviceTestRecord = (record = {}) => ({
   _id: record?._id || null,
   deviceId: record?.deviceId || null,
@@ -490,7 +519,12 @@ const resolvePreviousStageEligibility = async ({
     query.processId = new mongoose.Types.ObjectId(processId);
   }
 
-  const previousStageRecord = await deviceTestRecords.findOne(query).sort({ createdAt: -1 }).lean();
+  // Explicit include-projection (Phase 1 log-payload cleanup, 2026-09-19):
+  // only .status is ever read from this result (the caller never reads
+  // previousStageRecord itself, only isEligible/message) - verified via
+  // grep. Was loading a full test record, including any terminalLogs
+  // payload, on every single device-pass eligibility check.
+  const previousStageRecord = await deviceTestRecords.findOne(query).select("status createdAt").sort({ createdAt: -1 }).lean();
   if (!previousStageRecord) {
     return {
       isEligible: false,
@@ -509,28 +543,6 @@ const resolvePreviousStageEligibility = async ({
   }
 
   return { isEligible: true, message: "", previousStageRecord };
-};
-
-const getRoutedStageName = (record = {}) => normalizeKey(
-  record?.nextLogicalStage ||
-  record?.currentLogicalStage ||
-  record?.currentStage ||
-  record?.stageName,
-);
-
-const getClaimedSeatKey = (record = {}, currentStageName = "") => {
-  const normalizedCurrentStage = normalizeKey(currentStageName);
-  const directStage = normalizeKey(record?.currentLogicalStage || record?.currentStage || record?.stageName);
-  if (directStage === normalizedCurrentStage && normalizeText(record?.currentSeatKey)) {
-    return normalizeText(record.currentSeatKey);
-  }
-
-  const routedStage = getRoutedStageName(record);
-  if (routedStage === normalizedCurrentStage && normalizeText(record?.assignedSeatKey)) {
-    return normalizeText(record.assignedSeatKey);
-  }
-
-  return "";
 };
 
 const buildActionResponseMeta = (status) => {
@@ -1346,6 +1358,11 @@ module.exports = {
       const devices = await cachedCompute(`devicesByProduct:${id}`, 10000, async () => {
         const terminalDevicesInProcess = await deviceTestRecords.aggregate([
           { $match: { productId: new mongoose.Types.ObjectId(id) } },
+          // Phase 1 log-payload cleanup (2026-09-19): only deviceId/status/
+          // assignedDeviceTo/createdAt are used below - drop everything else
+          // (including any terminalLogs payload) before $sort/$limit/$group
+          // process the full documents in memory.
+          { $project: { deviceId: 1, status: 1, assignedDeviceTo: 1, createdAt: 1 } },
           { $sort: { createdAt: -1 } },
           { $limit: 1000 },
           {
@@ -1397,12 +1414,28 @@ module.exports = {
   createDeviceTestEntry: async (req, res) => {
     const requestStartedAt = Date.now();
     const timings = {};
+    // Exposed so requestTimeout middleware can snapshot whatever phases have
+    // completed so far if the 15s budget is hit before this handler finishes —
+    // otherwise a hard-timeout leaves us with zero visibility into which phase
+    // was still in flight (the completion-time logging below never runs).
+    req.timings = timings;
+    req.timingsStartedAt = requestStartedAt;
     const markTiming = (key, startedAt) => {
       timings[key] = Date.now() - startedAt;
     };
 
     try {
       const data = req.body || {};
+      // The frontend sends logs pre-stringified (see createDeviceTestEntry
+      // in src/lib/api.js) since it can carry 50-100KB of nested jig output -
+      // parse it back to an array before anything below touches it.
+      if (typeof data.logs === "string" && data.logs) {
+        try {
+          data.logs = JSON.parse(data.logs);
+        } catch (err) {
+          return res.status(400).json({ status: 400, message: "Invalid logs payload: " + err.message });
+        }
+      }
       if (data && data.logs) {
         data.logs = sanitizeKeys(data.logs);
       }
@@ -1457,6 +1490,17 @@ module.exports = {
       let [planing, products, deviceSnapshot] = await Promise.all([planPromise, processPromise, devicePromise]);
       if (res.headersSent) return;
 
+      // Snapshot the plan's pre-mutation values so the write below can skip
+      // entirely when this submission didn't actually change anything on the
+      // plan document. assignedStages/assignedCustomStagesOp are large
+      // JSON-string blobs covering every seat/stage on the plan — every pass
+      // rewrites the whole thing today, so skipping a no-op write removes one
+      // full transactional round trip on the (rare but real) requests that
+      // don't touch plan-level state.
+      const planOriginalAssignedStages = planing?.assignedStages;
+      const planOriginalAssignedCustomStagesOp = planing?.assignedCustomStagesOp;
+      const planOriginalConsumedKit = planing?.consumedKit;
+
       const resolvedProcessId = normalizeText(planing?.selectedProcess || requestedProcessId || deviceSnapshot?.processID || "");
       if ((!products || !products?._id) && resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
         const fallbackProcessStart = Date.now();
@@ -1481,6 +1525,92 @@ module.exports = {
           status: 404,
           message: "Device not found",
         });
+      }
+
+      // Idempotency check (Phase 2, 2026-09-19): deviceId + stageName +
+      // startTime + endTime uniquely identifies one physical test run - the
+      // frontend sets startTime/endTime once per test, so two requests
+      // sharing all four only happen when the same submission is sent twice
+      // (client retry after a slow/timed-out response, accidental
+      // double-click, etc.), never from two genuinely different tests.
+      // Confirmed against 3 real duplicate FQC records found live: all three
+      // shared this exact combination. Checking this BEFORE any transaction
+      // work means a resend costs one cheap indexed read instead of a full
+      // write - and importantly, none of the UPHA/seat-routing side effects
+      // below get a chance to run a second time.
+      const idempotencyStageName = normalizeText(data.stageName || data.currentLogicalStage || "");
+      if (idempotencyStageName && data.startTime && data.endTime) {
+        const idempotencyCheckStart = Date.now();
+        const existingRecord = await deviceTestRecords
+          .findOne({
+            deviceId: deviceSnapshot._id,
+            stageName: idempotencyStageName,
+            startTime: new Date(data.startTime),
+            endTime: new Date(data.endTime),
+          })
+          .lean();
+        markTiming("idempotencyCheckMs", idempotencyCheckStart);
+        if (existingRecord) {
+          // Step-count cross-check: a matching natural key (same test run)
+          // doesn't guarantee the FIRST save actually captured every step -
+          // e.g. an earlier attempt that itself got cut short mid-write.
+          // Compare the incoming payload's log count against the stage's
+          // CONFIGURED step count (non-disabled subSteps). Common stages
+          // (commonStages) have no subSteps at all, so there's nothing to
+          // compare against there - default to trusting the existing record.
+          const stageConfig = (products?.stages || []).find(
+            (stage) => normalizeKey(stage?.stageName || stage?.name) === normalizeKey(idempotencyStageName),
+          );
+          const configuredStepCount = Array.isArray(stageConfig?.subSteps)
+            ? stageConfig.subSteps.filter((step) => !step?.disabled).length
+            : null;
+          const payloadStepCount = Array.isArray(data.logs) ? data.logs.length : 0;
+
+          const stepCountsMatch =
+            configuredStepCount === null || configuredStepCount === payloadStepCount;
+
+          if (stepCountsMatch) {
+            return res.status(200).json({
+              status: 200,
+              message: actionMeta.message,
+              actionStatus: actionMeta.actionStatus,
+              resultType: actionMeta.resultType,
+              alreadyRecorded: true,
+              data: {
+                ...buildCompactDeviceTestRecord(existingRecord),
+                actionStatus: actionMeta.actionStatus,
+                resultType: actionMeta.resultType,
+              },
+            });
+          }
+
+          // Step counts don't match the stage's configuration - the stored
+          // record may be incomplete (e.g. an earlier attempt was cut short
+          // mid-save). Overwrite it in place with this submission's logs
+          // rather than trusting a possibly-partial existing record, but
+          // keep the same _id/createdAt - this is a correction of the same
+          // test run, not a new one.
+          const overwriteStart = Date.now();
+          const updatedRecord = await deviceTestRecords.findOneAndUpdate(
+            { _id: existingRecord._id },
+            { $set: { logs: compressStepLogsForStorage(data.logs || []), status: data.status, updatedAt: new Date() } },
+            { new: true },
+          ).lean();
+          markTiming("idempotencyOverwriteMs", overwriteStart);
+          return res.status(200).json({
+            status: 200,
+            message: actionMeta.message,
+            actionStatus: actionMeta.actionStatus,
+            resultType: actionMeta.resultType,
+            alreadyRecorded: true,
+            logsOverwritten: true,
+            data: {
+              ...buildCompactDeviceTestRecord(updatedRecord),
+              actionStatus: actionMeta.actionStatus,
+              resultType: actionMeta.resultType,
+            },
+          });
+        }
       }
 
       data.deviceId = data.deviceId || String(deviceSnapshot._id || "");
@@ -1592,6 +1722,7 @@ module.exports = {
             const recordSaveStart = Date.now();
             savedDeviceTestRecord = await new deviceTestRecords({
               ...data,
+              logs: Array.isArray(data.logs) ? compressStepLogsForStorage(data.logs) : data.logs,
               assignedDeviceTo,
             }).save({ session: writeSession });
             markTiming("recordSaveMs", recordSaveStart);
@@ -1611,6 +1742,7 @@ module.exports = {
           branch: "qc-trc-direct",
         });
         invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
+        invalidateOperatorTaskDeviceCaches(resolvedProcessId);
         return res.status(200).json({
           status: 200,
           message: actionMeta.message,
@@ -1640,7 +1772,6 @@ module.exports = {
       const targetStageIdx = resolvedSeatContext.targetStageIdx >= 0 && resolvedSeatContext.targetStageIdx < rawSeatStages.length
         ? resolvedSeatContext.targetStageIdx
         : Math.max(rawSeatStages.findIndex((stage) => normalizeKey(getStageLabel(stage)) === normalizeKey(currentStageName)), 0);
-      const currentSeatStage = getSeatStageEntry(normalizedAssignedStages, currentSeatKey);
       const productStages = (products?.stages || []).map((stage) => normalizeText(stage?.stageName || stage?.name));
       const commonStages = (products?.commonStages || []).map((stage) => normalizeText(stage?.stageName || stage?.name || stage?.stage));
       const mergedStages = [...productStages, ...commonStages];
@@ -1652,13 +1783,15 @@ module.exports = {
       data.currentLogicalStage = currentStageName;
       data.currentSeatKey = currentSeatKey;
 
-      const parallelSeats = getParallelSeatEntries({
-        assignedStages: normalizedAssignedStages,
-        stageName: currentStageName,
-        lineIndex: currentSeatStage?.lineIndex,
-        parallelGroupKey: currentSeatStage?.parallelGroupKey,
-      });
-
+      // Stage-specific, not seat-specific: any seat handling this stage can
+      // submit this device. There is no per-seat lock/conflict check here
+      // anymore - chooseNextStageSeatAssignment's assignedSeatKey is
+      // informational (UPHA-distribution bookkeeping) only. The old check
+      // rejected a device whenever it had been routed to a DIFFERENT parallel
+      // seat than the one submitting, even when both seats were equally valid
+      // to handle it - the queue itself couldn't tell operators apart either,
+      // so a device could be picked up at the "wrong" seat and then rejected
+      // on every resubmit attempt with no way to recover.
       const preTransactionStart = Date.now();
       const eligibilityPromise = resolvePreviousStageEligibility({
         processStages: [...(products?.stages || []), ...(products?.commonStages || [])],
@@ -1668,24 +1801,6 @@ module.exports = {
         planId: data.planId,
         processId: resolvedProcessId,
       });
-
-      const seatConflictPromise = parallelSeats.length > 1
-        ? (() => {
-            const latestRecordQuery = { serialNo: data.serialNo };
-            if (data.planId && mongoose.Types.ObjectId.isValid(data.planId)) {
-              latestRecordQuery.planId = new mongoose.Types.ObjectId(data.planId);
-            }
-            if (resolvedProcessId && mongoose.Types.ObjectId.isValid(resolvedProcessId)) {
-              latestRecordQuery.processId = new mongoose.Types.ObjectId(resolvedProcessId);
-            }
-            return deviceTestRecords
-              .findOne(latestRecordQuery)
-              .sort({ createdAt: -1 })
-              .select("assignedSeatKey currentSeatKey nextLogicalStage currentLogicalStage currentStage stageName status createdAt")
-              .lean()
-              .lean();
-          })()
-        : Promise.resolve(null);
 
       const duplicatePromise = shouldUpdateDevice && (deviceUpdatePayload.imeiNo || deviceUpdatePayload.ccid)
         ? (() => {
@@ -1699,34 +1814,19 @@ module.exports = {
           })()
         : Promise.resolve(null);
 
-      const [eligibility, latestSeatRecord, duplicate] = await Promise.all([
+      const [eligibility, duplicate] = await Promise.all([
         eligibilityPromise,
-        seatConflictPromise,
         duplicatePromise,
       ]);
       if (res.headersSent) return;
       markTiming("preTransactionReadsMs", preTransactionStart);
       markTiming("eligibilityMs", preTransactionStart);
-      if (parallelSeats.length > 1) {
-        markTiming("seatConflictMs", preTransactionStart);
-      }
 
       if (!eligibility.isEligible) {
         return res.status(409).json({
           status: 409,
           message: eligibility.message || "Previous stage must be passed before testing this device.",
         });
-      }
-
-      if (parallelSeats.length > 1) {
-        const claimedSeatKey = getClaimedSeatKey(latestSeatRecord, currentStageName);
-        if (claimedSeatKey && claimedSeatKey !== currentSeatKey) {
-          return res.status(409).json({
-            status: 409,
-            message: `This device is assigned to seat ${claimedSeatKey} for ${currentStageName}.`,
-            conflictSeatKey: claimedSeatKey,
-          });
-        }
       }
 
       if (duplicate) {
@@ -2000,44 +2100,60 @@ module.exports = {
       // 4. Strict Uniqueness Validation for IMEI and CCID (handled in parallel pre-check above)
 
       let savedDeviceTestRecord = null;
+      const planChanged =
+        planing.assignedStages !== planOriginalAssignedStages ||
+        planing.assignedCustomStagesOp !== planOriginalAssignedCustomStagesOp ||
+        planing.consumedKit !== planOriginalConsumedKit;
+
+      // The plan update used to run INSIDE this transaction. It rewrites the
+      // whole plan's assignedStages/consumedKit/assignedCustomStagesOp on
+      // every submission, and two operators on the same plan submitting close
+      // together both touch that one document — MongoDB flags that as a
+      // write-write conflict, and Mongoose's withTransaction auto-retries the
+      // ENTIRE transaction (device update + record save included) from
+      // scratch. That's what produced "sometimes stuck" rather than just
+      // slow: an ordinary submission occasionally getting caught in someone
+      // else's retry storm on a document it didn't even need atomicity with.
+      //
+      // The device update + record save (+ NG save) are what actually
+      // represent "this test happened" and must stay atomic. The plan's
+      // UPHA/passed-device counters are derived bookkeeping, not the source
+      // of truth, so they no longer need to commit in the same transaction —
+      // moved to a separate write AFTER the transaction commits, so plan-
+      // document contention can no longer stall or retry a device's own
+      // pass/NG submission.
+      //
+      // Compressed here, right before save - every earlier read of
+      // data.logs (IMEI/CCID extraction, the CCID-reassignment log push)
+      // needs the raw object shape, so this has to be the last touch.
+      if (Array.isArray(data.logs)) {
+        data.logs = compressStepLogsForStorage(data.logs);
+      }
       const writeSession = await mongoose.startSession();
       try {
         await writeSession.withTransaction(async () => {
-          const planUpdateStart = Date.now();
-          const updateResult = await planingAndScheduling.updateOne(
-            { _id: data.planId },
-            {
-              $set: {
-                assignedStages: planing.assignedStages,
-                consumedKit: planing.consumedKit,
-                assignedCustomStagesOp: planing.assignedCustomStagesOp,
-              },
-            },
-            { session: writeSession },
-          );
-          markTiming("planUpdateMs", planUpdateStart);
-          if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
-            throw new Error("Error updating planing data.");
-          }
-
+          // Device update and record save write independent documents — no
+          // ordering dependency between them, so run them concurrently instead
+          // of paying two sequential round trips inside the transaction.
           const deviceUpdateStart = Date.now();
-          if (shouldUpdateDevice) {
-            const deviceUpdateResult = await deviceModel.updateOne(
-              { _id: deviceSnapshot._id },
-              { $set: deviceUpdatePayload },
-              { session: writeSession },
-            );
-            markTiming("deviceUpdateMs", deviceUpdateStart);
-            if (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount) {
-              throw new Error("Error updating device stage.");
-            }
-          } else {
-            markTiming("deviceUpdateMs", deviceUpdateStart);
-          }
-
           const recordSaveStart = Date.now();
-          savedDeviceTestRecord = await new deviceTestRecords(data).save({ session: writeSession });
+          const [deviceUpdateResult] = await Promise.all([
+            shouldUpdateDevice
+              ? deviceModel.updateOne(
+                  { _id: deviceSnapshot._id },
+                  { $set: deviceUpdatePayload },
+                  { session: writeSession },
+                )
+              : Promise.resolve(null),
+            new deviceTestRecords(data).save({ session: writeSession }).then((saved) => {
+              savedDeviceTestRecord = saved;
+            }),
+          ]);
+          markTiming("deviceUpdateMs", deviceUpdateStart);
           markTiming("recordSaveMs", recordSaveStart);
+          if (shouldUpdateDevice && (!deviceUpdateResult?.acknowledged || !deviceUpdateResult?.matchedCount)) {
+            throw new Error("Error updating device stage.");
+          }
 
           if (
             pendingNgPayload &&
@@ -2054,6 +2170,42 @@ module.exports = {
         await writeSession.endSession();
       }
       if (res.headersSent) return;
+
+      // Plan-counter write, outside the transaction (see comment above). The
+      // test record and device state are already durably committed at this
+      // point regardless of what happens here.
+      const planUpdateStart = Date.now();
+      if (planChanged) {
+        try {
+          const updateResult = await planingAndScheduling.updateOne(
+            { _id: data.planId },
+            {
+              $set: {
+                assignedStages: planing.assignedStages,
+                consumedKit: planing.consumedKit,
+                assignedCustomStagesOp: planing.assignedCustomStagesOp,
+              },
+            },
+          );
+          markTiming("planUpdateMs", planUpdateStart);
+          if (!updateResult?.acknowledged || !updateResult?.matchedCount) {
+            console.error(
+              `[PLAN-UPDATE] Plan ${data.planId} not matched/acknowledged after device ${data.serialNo} submission — counters may be stale.`,
+            );
+          }
+        } catch (planUpdateError) {
+          markTiming("planUpdateMs", planUpdateStart);
+          // Non-fatal: the device's test result is already committed above.
+          // The plan's UPHA/passed-device counters are derived bookkeeping —
+          // log and continue rather than fail an already-recorded submission.
+          console.error(
+            `[PLAN-UPDATE] Failed to update plan ${data.planId} after device ${data.serialNo} submission:`,
+            planUpdateError.message,
+          );
+        }
+      } else {
+        markTiming("planUpdateMs", planUpdateStart);
+      }
 
       if (actionMeta.actionStatus === "NG" && assignedDeviceTo && assignedDeviceTo !== "QC" && assignedDeviceTo !== "TRC") {
         const attemptFilter = { deviceId: deviceSnapshot._id };
@@ -2082,6 +2234,7 @@ module.exports = {
       });
 
       invalidateOperatorTaskSummaryCache(data.planId, data.operatorId || data.userId);
+      invalidateOperatorTaskDeviceCaches(resolvedProcessId);
 
       // This route runs behind a 15s request-timeout middleware. If the DB work
       // above outlasts that window, the timeout middleware already sent a 504 and
@@ -2625,9 +2778,20 @@ module.exports = {
 
       let deviceTestRecord;
       let meta;
+      // Exclude-only projection (found live, 2026-09-19): this had NO field
+      // selection at all (null projection = every field), so every call
+      // fetched up to 2000 full records - including any 50-100KB
+      // terminalLogs payload per record - for a response that only ever
+      // uses stageName/status/assignedDeviceTo/timeConsumed/deviceInfo
+      // (verified via grep across both frontend callers: viewTask's history
+      // tab and OperatorDashboard's recent-activity widget). Confirmed via
+      // live pm2 logs as one of the most frequently-hit endpoints on the
+      // server - a real, previously-missed contributor to memory/CPU load,
+      // not just a diagnosed-but-unconfirmed one.
       const baseQuery = () =>
         deviceTestRecords
           .find(query, null, { sort: { createdAt: -1 } })
+          .select("-logs")
           .populate("deviceId")
           .populate("operatorId", "name employeeCode")
           .populate("productId", "name")
@@ -2788,6 +2952,10 @@ module.exports = {
 
       const trend = await deviceTestRecords.aggregate([
         { $match: match },
+        // Phase 1 log-payload cleanup (2026-09-19): only createdAt/status
+        // feed the $group below - drop everything else (including any
+        // terminalLogs payload) before it.
+        { $project: { createdAt: 1, status: 1 } },
         {
           $group: {
             _id: {
@@ -3498,6 +3666,7 @@ module.exports = {
         { $set: { status: "", currentStage: returnStage } },
         { new: true, runValidators: true },
       );
+      invalidateOperatorTaskDeviceCaches(device.processID);
 
       if (planId && seatKey && returnStage) {
         await applyPlanCountersOnResolve({
@@ -3562,8 +3731,16 @@ module.exports = {
         query.createdAt = { $gte: start, $lte: end };
       }
 
+      // Exclude-only projection (Phase 1 log-payload cleanup, 2026-09-19):
+      // no frontend caller of this endpoint was found anywhere in src/
+      // despite being wired up in api.js - likely unused/legacy. Using
+      // exclude-only (not an explicit include list) since the full set of
+      // fields a hypothetical caller might need isn't confirmed here;
+      // this only drops the heavy terminalLogs payload, every other field
+      // stays exactly as before.
       const deviceTestRecord = await deviceTestRecords
         .find(query)
+        .select("-logs")
         .populate("operatorId", "name employeeCode")
         .populate("productId", "name")
         .populate("planId", "processName")

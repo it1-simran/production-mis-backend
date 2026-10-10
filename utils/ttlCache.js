@@ -26,6 +26,19 @@ async function cachedCompute(key, ttlMs, fn) {
   if (pending) {
     return pending;
   }
+  // Confirmed live memory leak (2026-09-19): store never removed an expired
+  // entry unless that exact key happened to be requested again - many keys
+  // here are scoped to a specific plan/process/device combination that stops
+  // being polled once that work finishes, so those entries (and whatever
+  // value they cached) sat in memory forever. Sweep expired entries
+  // opportunistically once the map is large enough that a full pass is
+  // worth it, same pattern as operatorTodayStatsCache in planInsightsService.js.
+  if (store.size > 500) {
+    for (const [entryKey, entry] of store) {
+      if (entry.expiresAt <= now) store.delete(entryKey);
+    }
+  }
+
   const promise = (async () => {
     const value = await fn();
     store.set(key, { expiresAt: Date.now() + ttlMs, value });

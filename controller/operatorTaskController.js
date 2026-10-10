@@ -433,34 +433,6 @@ const getParallelSeatEntries = ({ assignedStages = {}, stageName = "", lineIndex
   return normalizedEntries.filter(({ stage }) => normalizeKey(stage?.stageName || stage?.name || stage?.stage) === targetStageName);
 };
 
-const getLatestStageRecordBySerial = ({ records = [], serialNo = "", stageName = "" }) => {
-  const normalizedSerial = normalizeKey(serialNo);
-  const normalizedStageName = normalizeKey(stageName);
-  if (!normalizedSerial) return null;
-
-  let matchedRecord = null;
-  (Array.isArray(records) ? records : []).forEach((record) => {
-    const recordSerial = normalizeKey(
-      record?.serialNo || record?.serial || record?.device?.serialNo || record?.deviceInfo?.serialNo,
-    );
-    if (recordSerial !== normalizedSerial) return;
-
-    const recordStage = normalizeKey(
-      record?.stageName || record?.currentStage || record?.currentLogicalStage || record?.nextLogicalStage,
-    );
-    if (normalizedStageName && recordStage !== normalizedStageName) return;
-
-    const recordTime = new Date(record?.createdAt || 0).getTime();
-    const matchedTime = new Date(matchedRecord?.createdAt || 0).getTime();
-    if (!matchedRecord || recordTime >= matchedTime) {
-      matchedRecord = record;
-    }
-  });
-
-  return matchedRecord;
-};
-
-const getClaimSeatKey = (record = {}) => normalizeValue(record?.assignedSeatKey || record?.seatNumber || "");
 const getRecordSeatKey = (record = {}) =>
   normalizeValue(record?.seatNumber || record?.currentSeatKey || record?.assignedSeatKey);
 
@@ -637,18 +609,19 @@ const setNoStoreHeaders = (res) => {
   res.set("Surrogate-Control", "no-store");
 };
 
-const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageName = "", processId = "", processStages = [], normalizedAssignedStages = {}, seatKey = "" }) => {
+// Stage-specific, not seat-specific: any parallel seat handling a stage (e.g.
+// any FQC seat) can see and submit any device queued for that stage. There is
+// no per-seat lock/claim - chooseNextStageSeatAssignment's assignedSeatKey is
+// informational (UPHA-distribution bookkeeping) only and is never used here
+// to hide a device from a seat. Previously this restricted visibility to
+// whichever single seat a device was routed to, which caused a device to
+// appear unavailable to every seat but the one it happened to be pre-assigned
+// to, even when multiple seats were equally valid to pick it up.
+const isDeviceVisibleToSeat = ({ device = {}, operatorStageName = "", processId = "", processStages = [] }) => {
   const trimmedStageName = normalizeValue(operatorStageName);
   const normalizedTrimmedStageName = normalizeKey(trimmedStageName);
   const firstStageName = normalizeValue(processStages?.[0]?.stageName || processStages?.[0]?.name || "");
   const normalizedFirstStageName = normalizeKey(firstStageName);
-  const currentSeatStage = getSeatStageEntry(normalizedAssignedStages, seatKey);
-  const parallelSeats = getParallelSeatEntries({
-    assignedStages: normalizedAssignedStages,
-    stageName: trimmedStageName,
-    lineIndex: currentSeatStage?.lineIndex,
-    parallelGroupKey: currentSeatStage?.parallelGroupKey,
-  });
 
   const deviceProcessId = String(device?.processID || device?.processId || "");
   const deviceStatus = normalizeKey(device?.status || "");
@@ -659,60 +632,21 @@ const isDeviceVisibleToSeat = ({ device = {}, latestRecords = [], operatorStageN
     normalizedDeviceCurrentStage === normalizedTrimmedStageName ||
     (!normalizedDeviceCurrentStage && normalizedTrimmedStageName && normalizedTrimmedStageName === normalizedFirstStageName);
 
-  if (
-    !(
-      deviceProcessId === String(processId) &&
-      deviceStatus !== "ng" &&
-      deviceStatus !== "fail" &&
-      stageMatches
-    )
-  ) {
-    return false;
-  }
-
-  if (parallelSeats.length <= 1) {
-    return true;
-  }
-
-  const deviceSerial = normalizeValue(device?.serialNo || device?.serial_no || "");
-  const currentStageRecord = getLatestStageRecordBySerial({
-    records: latestRecords,
-    serialNo: deviceSerial,
-    stageName: trimmedStageName,
-  });
-
-  if (!currentStageRecord) {
-    return true;
-  }
-
-  if (isRevertedEquivalentStatus(currentStageRecord?.status)) {
-    return true;
-  }
-
-  if (isTerminalStageStatus(currentStageRecord?.status)) {
-    // A terminal record from an earlier pass should not hide a device that is
-    // currently routed back into the same stage (for example after TRC resolve/rework).
-    return normalizedDeviceCurrentStage === normalizedTrimmedStageName;
-  }
-
-  const claimedSeatKey = getClaimSeatKey(currentStageRecord);
-  if (!claimedSeatKey) {
-    return true;
-  }
-
-  return String(claimedSeatKey) === String(seatKey);
+  return (
+    deviceProcessId === String(processId) &&
+    deviceStatus !== "ng" &&
+    deviceStatus !== "fail" &&
+    stageMatches
+  );
 };
 
-const filterDevicesForSeat = ({ devices = [], latestRecords = [], operatorStageName = "", processId = "", processStages = [], normalizedAssignedStages = {}, seatKey = "" }) => {
+const filterDevicesForSeat = ({ devices = [], operatorStageName = "", processId = "", processStages = [] }) => {
   return (Array.isArray(devices) ? devices : []).filter((device) =>
     isDeviceVisibleToSeat({
       device,
-      latestRecords,
       operatorStageName,
       processId,
       processStages,
-      normalizedAssignedStages,
-      seatKey,
     }),
   );
 };
@@ -1074,55 +1008,6 @@ const buildOperatorTaskDeviceContext = async ({ planId, operatorId }) => {
   };
 };
 
-const getLatestSeatRecordForDeviceStage = async ({
-  planId,
-  processId,
-  stageName,
-  device,
-}) => {
-  const base = {};
-  if (mongoose.Types.ObjectId.isValid(String(planId || ""))) {
-    base.planId = new mongoose.Types.ObjectId(planId);
-  }
-  if (processId && mongoose.Types.ObjectId.isValid(String(processId))) {
-    base.processId = new mongoose.Types.ObjectId(processId);
-  }
-  if (stageName) {
-    base.stageName = String(stageName).trim();
-  }
-
-  const projection = {
-    serialNo: 1,
-    stageName: 1,
-    status: 1,
-    seatNumber: 1,
-    assignedSeatKey: 1,
-    createdAt: 1,
-  };
-
-  if (device?._id && mongoose.Types.ObjectId.isValid(String(device._id))) {
-    const byDeviceId = await deviceTestRecordModel
-      .findOne(
-        { ...base, deviceId: new mongoose.Types.ObjectId(String(device._id)) },
-        projection,
-        { sort: { createdAt: -1 } },
-      )
-      .lean();
-    if (byDeviceId) return byDeviceId;
-  }
-
-  const serial = normalizeValue(device?.serialNo || device?.serial_no || "");
-  if (!serial) return null;
-
-  return deviceTestRecordModel
-    .findOne(
-      { ...base, serialNo: serial },
-      projection,
-      { sort: { createdAt: -1 } },
-    )
-    .lean();
-};
-
 const getLatestDeviceTests = async (planId, processId, stageNames = []) => {
   const match = { planId: new mongoose.Types.ObjectId(planId) };
   if (processId && mongoose.Types.ObjectId.isValid(processId)) {
@@ -1291,13 +1176,31 @@ const getOperatorStats = async (operatorId, includeHistory = false) => {
   };
 };
 
+const SUMMARY_SLOW_TIMING_THRESHOLD_MS = 5000;
+const logOperatorTaskSummaryTimings = (timings, meta) => {
+  if (Number(timings.totalMs) < SUMMARY_SLOW_TIMING_THRESHOLD_MS) return;
+  try {
+    console.warn("[operator-task-summary-timing][SLOW]", JSON.stringify({ ...meta, ...timings }));
+  } catch (error) {
+    console.warn("[operator-task-summary-timing][SLOW]", { ...meta, ...timings });
+  }
+};
+
 const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = false }) => {
+  const summaryStartedAt = Date.now();
+  const timings = {};
+  const markTiming = (key, startedAt) => {
+    timings[key] = Date.now() - startedAt;
+  };
+
   // plan/process/product/shift are identical for every operator working the
   // same plan — every open operator tab polls this every ~30s, so collapse
   // concurrent/repeat lookups the same way getLatestDeviceTests already does
   // below, instead of each operator re-fetching the same four documents.
+  const planStart = Date.now();
   const plan = await cachedCompute(`operatorTaskPlan:${planId}`, 10000, () =>
     planningAndSchedulingModel.findById(planId).lean());
+  markTiming("planLoadMs", planStart);
   if (!plan) {
     const error = new Error("Planning not found");
     error.status = 404;
@@ -1311,6 +1214,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   // local state to whichever device's Start/Break/Stop action actually won,
   // instead of silently going stale or spinning up a duplicate session.
   let workSessionSnapshot = null;
+  const workSessionStart = Date.now();
   if (
     mongoose.Types.ObjectId.isValid(String(operatorId || "")) &&
     mongoose.Types.ObjectId.isValid(String(plan?.selectedProcess || ""))
@@ -1331,7 +1235,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       };
     }
   }
+  markTiming("workSessionMs", workSessionStart);
 
+  const assignedTaskDetailsStart = Date.now();
   const assignedTaskDetails =
     (await assignedOperatorsToPlanModel
       .findOne({ userId: operatorId, processId: plan?.selectedProcess })
@@ -1341,7 +1247,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       .findOne({ userId: operatorId })
       .sort({ updatedAt: -1 })
       .lean());
+  markTiming("assignedTaskDetailsMs", assignedTaskDetailsStart);
 
+  const processProductShiftStart = Date.now();
   const process = plan?.selectedProcess
     ? await cachedCompute(`operatorTaskProcess:${plan.selectedProcess}`, 10000, () =>
         processModel.findById(plan.selectedProcess).lean())
@@ -1356,6 +1264,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
           shiftModel.findById(plan.selectedShift).lean())
       : Promise.resolve(null),
   ]);
+  markTiming("processProductShiftMs", processProductShiftStart);
 
   const isCommon = assignedTaskDetails?.stageType === "common";
 
@@ -1462,28 +1371,32 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     : planId;
   const processObjectId = process?._id;
 
-  const [latestRecords, rawDevices, allProcessDevices, kitAssignment, operatorSummary] = await Promise.all([
+  const parallelFetchStart = Date.now();
+  const [latestRecords, rawDevices, kitAssignment, operatorSummary] = await Promise.all([
     process?._id && stageNames.length > 0
       ? getLatestDeviceTests(planId, process._id, stageNames)
       : Promise.resolve([]),
     process?._id
-      ? deviceModel
-        .find({
-          processID: process._id,
-          status: { $nin: ["NG"] },
-          ...(buildProductTypeMatch(process?.selectedProduct)
-            ? { productType: buildProductTypeMatch(process?.selectedProduct) }
-            : {}),
-          ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
-        })
-        .select(DEVICE_LOOKUP_SELECT_FIELDS)
-        .lean()
-      : Promise.resolve([]),
-    process?._id
-      ? deviceModel
-        .find({ processID: process._id })
-        .select("_id serialNo flowVersion")
-        .lean()
+      ? cachedCompute(
+          `operatorTaskRawDevices:${process._id}:${stageAwareCurrentStage ?? ""}:${process?.selectedProduct || ""}`,
+          // Was 10s. deviceController now invalidates this key by processId
+          // right when a device actually moves stage/status (pass/NG/resolve),
+          // so staleness is bounded by "since the last real change", not this
+          // clock - safe to raise well past the operator poll interval.
+          60000,
+          () =>
+            deviceModel
+              .find({
+                processID: process._id,
+                status: { $nin: ["NG"] },
+                ...(buildProductTypeMatch(process?.selectedProduct)
+                  ? { productType: buildProductTypeMatch(process?.selectedProduct) }
+                  : {}),
+                ...(stageAwareCurrentStage !== undefined ? { currentStage: stageAwareCurrentStage } : {}),
+              })
+              .select(DEVICE_LOOKUP_SELECT_FIELDS)
+              .lean(),
+        )
       : Promise.resolve([]),
     processObjectId
       ? assignKitsToLineModel
@@ -1493,6 +1406,44 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
       : Promise.resolve(null),
     getOperatorStats(operatorId, includeHistory),
   ]);
+  markTiming("parallelFetchMs", parallelFetchStart);
+
+  // deviceFlowVersions/activeWipDeviceKeys (built below) are only ever looked
+  // up by recordPassesSeatStageGates using a key derived from latestRecords
+  // (record.deviceId || record.serialNo) — never any other device. So instead
+  // of fetching every device ever created for this process (unbounded, the
+  // single most expensive query in this endpoint on a mature process — up to
+  // tens of thousands of docs, confirmed as the 22s+ live bottleneck), we only
+  // need the devices actually referenced by latestRecords.
+  const referencedDeviceIds = [];
+  const referencedSerialNos = [];
+  latestRecords.forEach((record) => {
+    const deviceId = String(record?.deviceId || "").trim();
+    const serialNo = String(record?.serialNo || "").trim();
+    if (deviceId && mongoose.Types.ObjectId.isValid(deviceId)) referencedDeviceIds.push(deviceId);
+    else if (serialNo) referencedSerialNos.push(serialNo);
+  });
+  const allProcessDevicesStart = Date.now();
+  const allProcessDevices = process?._id && (referencedDeviceIds.length > 0 || referencedSerialNos.length > 0)
+    ? await cachedCompute(
+        `operatorTaskAllProcessDevices:${process._id}:${planId}:${stageNames.join(",")}`,
+        // Same reasoning as operatorTaskRawDevices above - invalidated on
+        // real device moves, so this can be long-lived.
+        60000,
+        () =>
+          deviceModel
+            .find({
+              processID: process._id,
+              $or: [
+                ...(referencedDeviceIds.length > 0 ? [{ _id: { $in: referencedDeviceIds } }] : []),
+                ...(referencedSerialNos.length > 0 ? [{ serialNo: { $in: referencedSerialNos } }] : []),
+              ],
+            })
+            .select("_id serialNo flowVersion")
+            .lean(),
+      )
+    : [];
+  markTiming("allProcessDevicesMs", allProcessDevicesStart);
 
   const mergedStagesForSeatFilter = [
     ...(process?.stages || []),
@@ -1507,6 +1458,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     }
   }
 
+  const insightsStart = Date.now();
   const canonicalInsights = await computePlanInsights({
     planId,
     processId: process?._id || "",
@@ -1522,16 +1474,16 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
     processIssuedKits: Number(process?.issuedKits || 0),
     processConsumedKits: Number(process?.consumedKits || 0),
   });
+  markTiming("insightsMs", insightsStart);
 
-  const deviceQueue = seatKey && currentAssignedStageName && process
+  // Stage-specific, not seat-specific: any seat handling this stage can see
+  // and take any device queued for it - no per-seat routing claim to resolve.
+  const deviceQueue = currentAssignedStageName && process
     ? filterDevicesForSeat({
       devices: rawDevices,
-      latestRecords,
       operatorStageName: currentAssignedStageName,
       processId: process._id,
       processStages: mergedStagesForSeatFilter,
-      normalizedAssignedStages,
-      seatKey,
     })
     : [];
 
@@ -1627,7 +1579,11 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const stageInsight = (canonicalInsights?.byStage || []).find(
     (row) => targetStageNames.has(normalizeValue(row?.stageName))
   );
-  const insightStageWip = stageInsight ? Number(stageInsight.wip || 0) : 0;
+  // Units waiting in TRC/QC are shown against their source stage on the plan
+  // page (wip = lineWip + trcWip) but are not in this operator's queue.
+  const insightStageWip = stageInsight
+    ? Number(stageInsight.lineWip ?? stageInsight.wip ?? 0)
+    : 0;
 
   const lineIssueKitsCount = isFirstStage && seatIssuedKits > 0 ? seatIssuedKits : 0;
   const rawWipKitsCount =
@@ -1666,6 +1622,9 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
   const downTimeEnabled =
     currentStatus === "down_time_hold" &&
     (downTimeEnd == null || Number.isNaN(downTimeEnd) || downTimeEnd > Date.now());
+
+  timings.totalMs = Date.now() - summaryStartedAt;
+  logOperatorTaskSummaryTimings(timings, { planId, operatorId, includeHistory });
 
   return {
     plan,
@@ -2055,49 +2014,13 @@ module.exports = {
           });
         }
       }
-
-      const latestSeatRecord =
-        context?.currentAssignedStageName && context?.seatKey && processId
-          ? await getLatestSeatRecordForDeviceStage({
-            planId,
-            processId,
-            stageName: context.currentAssignedStageName,
-            device,
-          }).catch(() => null)
-          : null;
-      const latestRecords = latestSeatRecord ? [latestSeatRecord] : [];
-
-      const isVisibleToSeat = context?.currentAssignedStageName && context?.seatKey && processId
-        ? isDeviceVisibleToSeat({
-          device,
-          latestRecords,
-          operatorStageName: context.currentAssignedStageName,
-          processId,
-          processStages: mergedStagesForOperatorContext,
-          normalizedAssignedStages: context?.normalizedAssignedStages || {},
-          seatKey: context.seatKey,
-        })
-        : true;
-
-      if (!isVisibleToSeat) {
-        const currentStageRecord = getLatestStageRecordBySerial({
-          records: latestRecords,
-          serialNo: device?.serialNo || serialNo,
-          stageName: context?.currentAssignedStageName,
-        });
-        const claimedSeatKey = getClaimSeatKey(currentStageRecord);
-        if (
-          claimedSeatKey &&
-          claimedSeatKey !== context?.seatKey &&
-          !isTerminalStageStatus(currentStageRecord?.status)
-        ) {
-          return res.status(409).json({
-            status: 409,
-            message: "Device is already in progress on seat " + claimedSeatKey + ".",
-          });
-        }
-        // return res.status(404).json({ status: 404, message: "Device is not available for this seat" });
-      }
+      // Stage-specific, not seat-specific: any seat handling this stage can
+      // scan/take this device. The per-seat conflict check that used to run
+      // here was removed - see isDeviceVisibleToSeat's comment for why (it
+      // hid devices from every seat but whichever one a load-balancing pick
+      // happened to route them to, even when other seats were equally valid
+      // to take them). The process/stage/status match this used to also
+      // gate on is already validated above.
 
       const history = await deviceTestRecordModel
         .find(

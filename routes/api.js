@@ -29,6 +29,7 @@ const skillManagementController = require('../controller/skillController');
 const kitsController = require('../controller/kitsController');
 const kitTransferController = require('../controller/kitTransferController');
 const ccidTransferController = require('../controller/ccidTransferController');
+const operatorDeboardingController = require('../controller/operatorDeboardingController');
 const OrderConfirmationController = require('../controller/orderConfirmationController');
 const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
@@ -162,6 +163,7 @@ router.post('/user/check-duplicates', authController.authenticateToken, authCont
 router.get('/user/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_USER, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), userController.getUsers);
 router.get('/user/operator-dashboard-stats', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "read"), userController.getOperatorDashboardStats);
 router.put('/user/deboard/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "update"), userController.deboardOperator);
+router.put('/user/restore/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "update"), userController.restoreOperator);
 router.delete('/user/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "delete"), userController.deleteUser);
 router.post('/user/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "delete"), userController.deleteUserMultiple);
 router.put('/user/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "update"), userController.updateUser);
@@ -209,6 +211,7 @@ router.delete('/planing/delete/:id', authController.authenticateToken, authContr
 router.post('/planing/delete/multiple', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "delete"), planningAndSchedulingController.deletePlaningMultiple);
 router.get('/planingAndScheduling/get/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByID);
 router.get('/planingAndScheduling/insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlanInsights);
+router.get('/planingAndScheduling/insights/:id/stage-wip-devices', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getStageWipDevices);
 router.get('/planingAndScheduling/testing-analytics/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getSeatStageTestingAnalytics);
 router.get('/planingAndScheduling/process-insights/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getProcessInsights);
 router.get('/planingAndScheduling/getPlaningAnDschedulingByProcessId/:id', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAnDschedulingByProcessId);
@@ -429,6 +432,7 @@ router.put("/process/updateIssueKitsToLine", authController.authenticateToken, a
 router.put("/process/confirmKitsToLineWithoutSeat", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.confirmKitsToLineWithoutSeat);
 router.put("/process/updateStatusRecivedKit/:id", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateStatusRecievedKit);
 router.get("/process/getDeviceTestRecordsByProcessId/:id", authController.authenticateToken, processController.getDeviceTestRecordsByProcessId);
+router.get("/process/getStageHistory/:id", authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PLANNING_SCHEDULING, "read"), processController.getStageHistoryByProcessId);
 router.get("/devices/retry-logs/:id", authController.authenticateToken, deviceController.getDeviceRetryLogsByProcessId);
 router.get("/process/getLatestDeviceTestsByPlanId/:planId", authController.authenticateToken, processController.getLatestDeviceTestsByPlanId);
 router.post("/kit-transfer/request", authController.authenticateToken, authController.authorize([MODULE_KEYS.KIT_TRANSFER, MODULE_KEYS.TRANSFER_REQUESTS], "create"), kitTransferController.createRequest);
@@ -445,6 +449,16 @@ router.get("/ccid-transfer/request/:id", authController.authenticateToken, authC
 router.put("/ccid-transfer/request/:id/approve", authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_REMOVAL, MODULE_KEYS.ESIM_REMOVAL_REQUESTS, MODULE_KEYS.TRANSFER_REQUESTS], "update"), ccidTransferController.approveRequest);
 router.put("/ccid-transfer/request/:id/reject", authController.authenticateToken, authController.authorize([MODULE_KEYS.ESIM_REMOVAL, MODULE_KEYS.ESIM_REMOVAL_REQUESTS, MODULE_KEYS.TRANSFER_REQUESTS], "update"), ccidTransferController.rejectRequest);
 router.get("/ccid-reassignment-log", authController.authenticateToken, authController.authorize([MODULE_KEYS.CCID_REASSIGNMENT_LOG, MODULE_KEYS.ESIM_REMOVAL, MODULE_KEYS.ESIM_REMOVAL_REQUESTS, MODULE_KEYS.TRANSFER_REQUESTS], "read"), deviceController.listCcidReassignmentLogs);
+
+// Operator Deboarding Requests — Admin/HR raise a "final deboarding" request (enforced inside
+// the controller) when an operator can't be deboarded directly due to active assignments; a
+// Production Manager with OPERATOR_DEBOARDING_APPROVALS reviews and approves/rejects it.
+router.post("/operator-deboarding/request", authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "update"), operatorDeboardingController.createRequest);
+router.get("/operator-deboarding/request", authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_DEBOARDING_APPROVALS, "read"), operatorDeboardingController.listRequests);
+router.get("/operator-deboarding/request/:id", authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_DEBOARDING_APPROVALS, "read"), operatorDeboardingController.getRequestById);
+router.put("/operator-deboarding/request/:id/approve", authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_DEBOARDING_APPROVALS, "update"), operatorDeboardingController.approveRequest);
+router.put("/operator-deboarding/request/:id/reject", authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_DEBOARDING_APPROVALS, "update"), operatorDeboardingController.rejectRequest);
+router.put("/operator-deboarding/request/:id/replacement", authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_DEBOARDING_APPROVALS, "update"), operatorDeboardingController.markReplacementAssigned);
 
 router.get("/process/orderConfirmation/get", authController.authenticateToken, authController.authorize([MODULE_KEYS.OC_MANAGEMENT, MODULE_KEYS.VIEW_PROCESS], "read"), OrderConfirmationController.view); // Also called from the Process view page's OC-numbers lookup, not just OC Management itself
 router.post('/process/orderConfirmation/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.OC_MANAGEMENT, "create"), OrderConfirmationController.create);

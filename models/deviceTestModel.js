@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { decompressDocLogs } = require("../utils/stepLogCompression");
 
 const deviceTestSchema = new mongoose.Schema({
   deviceId: { type: mongoose.Schema.Types.ObjectId, ref: "devices" },
@@ -18,6 +19,11 @@ const deviceTestSchema = new mongoose.Schema({
         stepName: { type: String, required: false },
         stepType: { type: String, required: false },
         logData: { type: mongoose.Schema.Types.Mixed, required: false },
+        // True when logData above is a gzip Buffer rather than the raw
+        // object - see utils/stepLogCompression.js. Absent/false on records
+        // saved before compression existed, so old data still reads as plain
+        // objects untouched.
+        logDataCompressed: { type: Boolean, required: false, default: false },
         status: { type: String, required: false },
         createdAt: { type: Date, default: Date.now }
       }
@@ -74,6 +80,17 @@ deviceTestSchema.index({ status: 1, createdAt: -1 });
 deviceTestSchema.index({ status: 1, processId: 1, createdAt: -1 });
 deviceTestSchema.index({ status: 1, serialNo: 1, createdAt: -1 });
 deviceTestSchema.index({ createdAt: -1 });
+
+// Transparently restores gzip-compressed logs[].logData for every consumer -
+// including .lean() queries, since these are query-level hooks, not document
+// getters. This is what lets storage compress step logs without any read-path
+// call site needing to know about it. See utils/stepLogCompression.js.
+deviceTestSchema.post(["find"], function (docs) {
+  if (Array.isArray(docs)) docs.forEach(decompressDocLogs);
+});
+deviceTestSchema.post(["findOne", "findOneAndUpdate"], function (doc) {
+  decompressDocLogs(doc);
+});
 
 const deviceTest = mongoose.model("deviceTestRecords", deviceTestSchema);
 
