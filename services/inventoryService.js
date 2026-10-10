@@ -4,7 +4,8 @@ const InventoryModel = require("../models/inventoryManagement");
  * Create the Inventory row for a product if one doesn't already exist.
  * This is the single reusable unit shared by product create/activate and the
  * PO-driven product automation (previously the logic was copy-pasted). Idempotent:
- * uses productType as the natural key so it never duplicates an inventory row.
+ * uses productType as the natural key so it never duplicates an inventory row (with the unique index from
+ * scripts/create-product-inventory-indexes.js, even when two requests arrive at the same moment).
  *
  * @param {{_id:any, name:string}} product
  * @param {{id?:any, department?:string}} [user]
@@ -14,18 +15,27 @@ async function createInventoryForProduct(product, user = {}) {
   if (!product || !product._id) {
     throw new Error("createInventoryForProduct requires a saved product");
   }
-  return InventoryModel.findOneAndUpdate(
-    { productType: product._id },
-    {
-      $setOnInsert: {
-        productName: product.name,
-        productType: product._id,
-        createdBy: user.id || null,
-        department: user.department || "",
+  try {
+    return await InventoryModel.findOneAndUpdate(
+      { productType: product._id },
+      {
+        $setOnInsert: {
+          productName: product.name,
+          productType: product._id,
+          createdBy: user.id || null,
+          department: user.department || "",
+        },
       },
-    },
-    { upsert: true, new: true }
-  );
+      { upsert: true, new: true }
+    );
+  } catch (error) {
+    // Two requests upserted at the same moment and the unique index (productType) let only one in: use the row that won.
+    if (error?.code === 11000) {
+      const winner = await InventoryModel.findOne({ productType: product._id });
+      if (winner) return winner;
+    }
+    throw error;
+  }
 }
 
 module.exports = { createInventoryForProduct };

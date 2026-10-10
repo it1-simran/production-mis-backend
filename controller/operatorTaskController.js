@@ -1807,6 +1807,8 @@ module.exports = {
             processName: "$processDetails.name",
             taskStartDate: { $ifNull: ["$planDetails.startDate", "$startDate"] },
             "planDetails.assignedStages": 1,
+            "planDetails.scheduleMode": 1,
+            "planDetails.daySchedule": 1,
             "planDetails.startDate": { $ifNull: ["$planDetails.startDate", "$startDate"] },
             "planDetails.estimatedEndDate": { $ifNull: ["$planDetails.estimatedEndDate", "$estimatedEndDate"] },
             "planDetails.roomName": 1,

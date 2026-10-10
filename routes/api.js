@@ -12,6 +12,7 @@ const menuController = require('../controller/menuController');
 const shiftController = require('../controller/shiftController');
 const processController = require('../controller/processController');
 const planningAndSchedulingController = require('../controller/planningAndSchedulingController');
+const planningV2Controller = require('../controller/planningV2Controller');
 const holidayController = require('../controller/holidayController');
 const assignedOperatorsToPlan = require('../controller/operatorTaskController');
 const operatorWorkController = require('../controller/operatorWorkController');
@@ -668,6 +669,28 @@ router.delete('/esim-apn/delete/:id', authController.authenticateToken, authCont
 // of not restricting shared lookup endpoints without verifying every caller first.
 router.get('/esim-apn/getAPNByMakeAndProfile/:esimMake/:profile1', authController.authenticateToken, esimMasterController.getAPNByMakeAndProfile);
 router.get("/process/orderconfirmation/:orderConfirmationNo(*)", authController.authenticateToken, processController.getOrderConfirmationByNo);
+
+// --- Planning & Scheduling v2 (new validated planner; the legacy /planing/* routes above are untouched) ---
+const PLANNING_V2_MODULES = [MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING, MODULE_KEYS.ADD_PLANNING_SCHEDULING];
+const PLANNING_V2_EDIT_MODULES = [MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING];
+router.get('/planing-v2/lookups', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, ["read", "create", "update"]), planningV2Controller.lookups);
+router.get('/planing-v2/plan/:id', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, ["read", "update"]), planningV2Controller.getPlan);
+router.post('/planing-v2/availability', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, ["read", "create", "update"]), createRequestTimeoutMiddleware(15000), planningV2Controller.availability);
+router.post('/planing-v2/schedule/preview', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, ["create", "update"]), createRequestTimeoutMiddleware(15000), planningV2Controller.schedulePreview);
+router.post('/planing-v2/validate', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, ["create", "update"]), createRequestTimeoutMiddleware(15000), planningV2Controller.validate);
+router.post('/planing-v2/create', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "create"), createRequestTimeoutMiddleware(30000), submitDeduplicationMiddleware, planningV2Controller.create);
+router.get('/planing-v2/plan/:id/overview', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(20000), planningV2Controller.overview);
+router.get('/planing-v2/plan/:id/operations', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(20000), planningV2Controller.operations);
+router.get('/planing-v2/plan/:id/stage/:stage/summary', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(30000), planningV2Controller.stageSummary);
+router.get('/planing-v2/plan/:id/stage/:stage/devices', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(30000), planningV2Controller.stageDevices);
+router.get('/planing-v2/plan/:id/stage/:stage/history', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(30000), planningV2Controller.stageHistory);
+router.get('/planing-v2/plan/:id/kits', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(20000), planningV2Controller.kitsAndNg);
+router.get('/planing-v2/plan/:id/timeline', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(20000), planningV2Controller.operatorTimeline);
+router.get('/planing-v2/plan/:id/hourly', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(20000), planningV2Controller.hourly);
+router.get('/planing-v2/schedule-board', authController.authenticateToken, authController.authorize(PLANNING_V2_MODULES, "read"), createRequestTimeoutMiddleware(30000), planningV2Controller.scheduleBoard);
+router.post('/planing-v2/plan/:id/review', authController.authenticateToken, authController.authorize(PLANNING_V2_EDIT_MODULES, "update"), createRequestTimeoutMiddleware(20000), planningV2Controller.review);
+router.put('/planing-v2/update/:id', authController.authenticateToken, authController.authorize(PLANNING_V2_EDIT_MODULES, "update"), createRequestTimeoutMiddleware(30000), planningV2Controller.update);
+router.delete('/planing-v2/delete/:id', authController.authenticateToken, authController.authorize(PLANNING_V2_EDIT_MODULES, "delete"), planningV2Controller.remove);
 
 module.exports = router;
 

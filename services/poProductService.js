@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
 const { nextProductCode } = require("./productCodeService");
@@ -48,23 +49,106 @@ async function resolveProductCategory(po) {
   return null;
 }
 
+// ---- product identity ----------------------------------------------------------------------------------------------------
+
+const norm = (v) => String(v === undefined || v === null ? "" : v).trim();
+
+// The configuration values of a PO (the SKU's snapshot), reduced to one digest so two POs can be compared. Order does not matter.
+function configValuesDigest(po) {
+  let values = po?.configuration?.values;
+  if (values instanceof Map) values = Object.fromEntries(values);
+  if (!values || typeof values !== "object") return "none";
+  const entries = Object.keys(values)
+    .sort()
+    .map((k) => [k, norm(values[k] && typeof values[k] === "object" && "value" in values[k] ? values[k].value : values[k])]);
+  return entries.length ? crypto.createHash("sha1").update(JSON.stringify(entries)).digest("hex") : "none";
+}
+
 /**
- * Auto-create a draft Product from a PO after OC is raised.
- *
- * IMPORTANT — one product per PO (no name-based reuse):
- * The product name is built from model + eSIM + profiles + category, which is
- * intentionally coarse-grained (human-readable). Two POs can share the same
- * name but differ in configuration values (vendorId, pip, eip, firmware, …).
- * Re-using a product by name would:
- *   (a) silently discard the second PO's slug-resolved testing commands, and
- *   (b) collapse their quantities into a single shared inventory row.
- * Every PO therefore always gets its own dedicated product document.
- *
- * Mutates po.fulfilment (productId/productName/state) but does NOT save the PO —
- * the caller persists it. Returns the product.
+ * What makes two POs the same PRODUCT: the same SKU, the same configuration values, and the same eSIM, vendor, model, category and
+ * firmware (every field a testing-plan slug can read, see SlugMapping). The quantity, delivery date and who raised it do not matter.
+ * Returns null when the PO has no SKU, which means "do not reuse a product for this PO".
  */
-async function createProductFromPO(po, user = {}) {
+function productIdentityKey(po) {
+  const sku = norm(po?.skuCode);
+  if (!sku) return null;
+  return [
+    sku,
+    configValuesDigest(po),
+    norm(po?.vendorId),
+    norm(po?.esim?.make),
+    norm(po?.esim?.profile1),
+    norm(po?.esim?.profile2),
+    norm(po?.modelName),
+    norm(po?.deviceCategory?.id),
+    norm(po?.firmware?.id),
+  ].join("|");
+}
+
+const REUSABLE_STATUS = ["draft", "active"];
+
+/**
+ * An existing product made for the same configuration, or null. First by the identity stored on the product; then, for products that
+ * were made from earlier POs before the identity was stored, by finding an earlier PO of the same SKU with the same identity (the
+ * product is then given its identity so the next lookup is direct).
+ */
+async function findReusableProduct(po, key) {
+  if (!key) return null;
+  const direct = await Product.findOne({ sourceKey: key });
+  if (direct) return REUSABLE_STATUS.includes(direct.status) ? direct : null;
+
+  const PurchaseOrder = require("../models/PurchaseOrder");
+  const earlier = await PurchaseOrder.find({ skuCode: norm(po.skuCode), "fulfilment.productId": { $ne: null }, _id: { $ne: po._id } })
+    .select("skuCode configuration vendorId esim modelName deviceCategory firmware fulfilment.productId")
+    .sort({ createdAt: 1 })
+    .limit(200)
+    .lean();
+  for (const other of earlier) {
+    if (productIdentityKey(other) !== key) continue;
+    const candidate = await Product.findById(other.fulfilment.productId);
+    if (!candidate || !REUSABLE_STATUS.includes(candidate.status)) continue;
+    try {
+      await Product.updateOne({ _id: candidate._id, sourceKey: { $exists: false } }, { $set: { sourceKey: key } });
+    } catch (e) {
+      if (e?.code !== 11000) throw e; // someone else already holds this identity: use theirs below
+      const holder = await Product.findOne({ sourceKey: key });
+      if (holder) return holder;
+    }
+    return candidate;
+  }
+  return null;
+}
+
+function linkPoToProduct(po, product) {
+  po.fulfilment = po.fulfilment || {};
+  po.fulfilment.productId = product._id;
+  po.fulfilment.productName = product.name;
+  po.fulfilment.state = "engineering_pending";
+}
+
+/**
+ * Give a PO its Product after OC is raised: REUSE the product already made for the same configuration, otherwise create a draft one.
+ *
+ * Reuse is by CONFIGURATION IDENTITY (productIdentityKey), never by name alone. An earlier version reused by name; the name is coarse
+ * (model + eSIM + profiles + category), two POs with the same name can differ in vendor, PIP, EIP or firmware, and sharing one product
+ * then silently dropped the second PO's testing commands and merged the quantities of different products. Two POs raised against the
+ * same SKU with the same configuration are the same product, so they share it - and its inventory row - and each still gets its own
+ * Process when Engineering approves it. A PO with no SKU is never matched (a new product, as before).
+ *
+ * Mutates po.fulfilment (productId/productName/state) but does NOT save the PO: the caller persists it.
+ * Returns { product, reused }.
+ */
+async function findOrCreateProductFromPO(po, user = {}) {
+  const key = productIdentityKey(po);
   const cat = await resolveProductCategory(po);
+
+  const existing = await findReusableProduct(po, key);
+  if (existing) {
+    if (cat && isActiveCategory(cat)) await ProductCategory.updateOne({ _id: cat._id }, { $addToSet: { products: existing._id } });
+    linkPoToProduct(po, existing);
+    return { product: existing, reused: true };
+  }
+
   const categoryName = (cat && cat.name) || po?.deviceCategory?.name || "";
 
   // Name = <Model> <eSIM Make> <A+B> <Category>
@@ -94,26 +178,44 @@ async function createProductFromPO(po, user = {}) {
   const commonStages = DEFAULT_COMMON_STAGES.map((s) => ({ ...s }));
 
   const productCode = await nextProductCode();
-  const product = await new Product({
-    name,
-    productCode,
-    stages,
-    stagesFromCategory: true, // later edits to the category's testing plan reach it until approval
-    commonStages,
-    status: "draft", // Engineering approval activates it (and creates inventory).
-    createdBy: user.id || null,
-    department: user.department || "",
-  }).save();
+  let product;
+  try {
+    product = await new Product({
+      name,
+      productCode,
+      ...(key ? { sourceKey: key } : {}),
+      stages,
+      stagesFromCategory: true, // later edits to the category's testing plan reach it until approval
+      commonStages,
+      status: "draft", // Engineering approval activates it (and creates inventory).
+      createdBy: user.id || null,
+      department: user.department || "",
+    }).save();
+  } catch (e) {
+    // Two POs of the same configuration were processed at the same moment and the other one won: use its product.
+    if (e?.code === 11000 && key) {
+      const winner = await Product.findOne({ sourceKey: key });
+      if (winner) {
+        if (cat && isActiveCategory(cat)) await ProductCategory.updateOne({ _id: cat._id }, { $addToSet: { products: winner._id } });
+        linkPoToProduct(po, winner);
+        return { product: winner, reused: true };
+      }
+    }
+    throw e;
+  }
 
   if (cat && isActiveCategory(cat)) {
     await ProductCategory.updateOne({ _id: cat._id }, { $addToSet: { products: product._id } });
   }
 
-  po.fulfilment = po.fulfilment || {};
-  po.fulfilment.productId = product._id;
+  linkPoToProduct(po, product);
   po.fulfilment.productName = name;
-  po.fulfilment.state = "engineering_pending";
-  return product;
+  return { product, reused: false };
+}
+
+// The original entry point: returns just the product.
+async function createProductFromPO(po, user = {}) {
+  return (await findOrCreateProductFromPO(po, user)).product;
 }
 
 /**
@@ -142,4 +244,4 @@ async function syncPendingProductsForCategory(category) {
   return r.modifiedCount || 0;
 }
 
-module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory, DEFAULT_COMMON_STAGES };
+module.exports = { createProductFromPO, findOrCreateProductFromPO, productIdentityKey, findReusableProduct, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory, DEFAULT_COMMON_STAGES };

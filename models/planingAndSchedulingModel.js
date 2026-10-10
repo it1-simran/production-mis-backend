@@ -53,6 +53,31 @@ const planingAndSchedulingSchema = new mongoose.Schema({
     default: "Waiting_Kits_allocation"
   },
   estimatedEndDate: { type: Date, required: false },
+  // Finish date the planner chose in the v2 builder (null = the finish date is capacity-calculated).
+  // `estimatedEndDate` always holds the effective finish, so legacy code that reads only that
+  // field keeps working; this field just remembers that the date was set by hand.
+  plannedEndDate: { type: Date, required: false, default: null },
+  // Custom day-wise schedule (v2 builder). Absent or "shift" = the plan runs on selectedShift as always. With "custom",
+  // daySchedule holds the hours of each day and selectedShift is only an optional template; the single-window
+  // fields above (startDate, estimatedEndDate, ProcessShiftMappings) then hold a summary for older screens.
+  scheduleMode: { type: String, enum: ["shift", "custom"], default: undefined },
+  daySchedule: {
+    type: [
+      {
+        _id: false,
+        dayKey: { type: String, required: true },
+        startTime: { type: String, default: "" },
+        endTime: { type: String, default: "" },
+        breaks: { type: [{ _id: false, startTime: String, endTime: String }], default: [] },
+        unplacedBreakMinutes: { type: Number, default: 0 },
+        working: { type: Boolean, default: true },
+        edited: { type: Boolean, default: false },
+        note: { type: String, default: "" },
+      },
+    ],
+    default: undefined,
+  },
+  scheduleDefaults: { type: mongoose.Schema.Types.Mixed, default: undefined },
   consumedKit: { type: Number, default: 0 },
   downTime: {
     from: { type: Date, required: false, default: null },

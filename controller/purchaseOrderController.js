@@ -24,7 +24,7 @@ const DispatchService = require("../services/dispatchService");
 const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
 const SlugMapping = require("../models/slugMapping");
-const { createProductFromPO, resolveProductCategory } = require("../services/poProductService");
+const { findOrCreateProductFromPO, resolveProductCategory } = require("../services/poProductService");
 const poAcc = require("../services/poAccessoryService");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { createInventoryForProduct } = require("../services/inventoryService");
@@ -809,14 +809,19 @@ module.exports = {
       let productNote = "";
       if (!isRename || retryProduct) {
         try {
-          const product = await createProductFromPO(po, req.user || {});
-          productNote = ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
+          // The same SKU with the same configuration already has a product: reuse it (and its inventory) instead of making a duplicate.
+          const { product, reused } = await findOrCreateProductFromPO(po, req.user || {});
+          productNote = reused
+            ? ` Existing product "${po.fulfilment.productName}" reused (same SKU and configuration) → Engineering pending.`
+            : ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
           po.statusHistory.push({
             fromStatus: po.status,
             toStatus: po.status,
             actorType: "mes",
             changedByName: req.user?.name || req.user?.email || "system",
-            remarks: `Auto-created product "${product.name}" from PO → Engineering pending approval`,
+            remarks: reused
+              ? `Linked existing product "${product.name}" (${product.productCode || product._id}): same SKU and configuration as an earlier PO → Engineering pending approval`
+              : `Auto-created product "${product.name}" from PO → Engineering pending approval`,
             changedAt: new Date(),
           });
         } catch (prodErr) {

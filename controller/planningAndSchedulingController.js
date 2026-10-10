@@ -559,6 +559,11 @@ module.exports = {
       };
       const id = req.params.id;
       const existingPlan = await PlaningAndSchedulingModel.findById(id).lean();
+      // A plan with a custom day-wise schedule is edited in the new builder only: this form would overwrite
+      // its shift and single-window fields and leave the schedule out of date.
+      if (existingPlan?.scheduleMode === "custom") {
+        return res.status(409).json({ status: 409, error: "This plan uses a custom day-wise schedule. Edit it in the new planning builder." });
+      }
       const previousUserIds = collectPlanOperatorUserIds(existingPlan || {});
       const updatedData = req.body;
       const safeParse = (val, fallback) => {
@@ -633,6 +638,8 @@ module.exports = {
             issuedKits: 1,
             issuedCarton: 1,
             ProcessShiftMappings: 1,
+            scheduleMode: 1,
+            daySchedule: 1,
             repeatCount: 1,
             startDate: 1,
             assignedJigs: 1,
@@ -1151,6 +1158,8 @@ module.exports = {
             issuedKits: 1,
             issuedCarton: 1,
             ProcessShiftMappings: 1,
+            scheduleMode: 1,
+            daySchedule: 1,
             repeatCount: 1,
             startDate: 1,
             assignedJigs: 1,

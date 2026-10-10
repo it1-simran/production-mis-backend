@@ -19,6 +19,9 @@
  *      re-resolving stages from that PO's own slug values.
  *   3. Re-links po.fulfilment.productId to the clone.
  *   4. Idempotent: groups with only one PO are skipped.
+ *   5. POs that share a product BY DESIGN are left alone: since 2026-10 a PO raised against the same SKU with the
+ *      same configuration (productIdentityKey) reuses that SKU's product, so only a PO whose identity DIFFERS from
+ *      the oldest PO's in the group is a real collision and gets a clone.
  */
 
 "use strict";
@@ -33,6 +36,7 @@ const PurchaseOrder = require("../models/PurchaseOrder");
 const ProductCategory = require("../models/productCategory");
 const SlugMapping = require("../models/slugMapping");
 const { resolveTestingPlan } = require("../services/slugResolver");
+const { productIdentityKey } = require("../services/poProductService");
 
 const DRY_RUN = !process.argv.includes("--execute");
 
@@ -144,8 +148,13 @@ async function main() {
       `  → PO ${group[0].poNumber} keeps the original product (no change).`
     );
 
+    const keeperKey = productIdentityKey(group[0]);
     for (let i = 1; i < group.length; i++) {
       const po = group[i];
+      if (keeperKey && productIdentityKey(po) === keeperKey) {
+        console.log(`  → PO ${po.poNumber} shares the product by design (same SKU and configuration) — left as is.`);
+        continue;
+      }
       const { cat, stages } = await resolveStagesForPo(po, originalProduct);
 
       console.log(

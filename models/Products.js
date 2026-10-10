@@ -8,6 +8,12 @@ const productSchema = new mongoose.Schema({
   // actually have one (never colliding on missing/undefined for old records).
   productCode: { type: String, unique: true, sparse: true, index: true },
   status: { type: String, enum: ["draft", "active"], default: "active" },
+  // Identity of the PO configuration a product was auto-created for (see productIdentityKey in
+  // services/poProductService.js): SKU + configuration values + eSIM + vendor + model. A later PO with
+  // the same identity reuses this product (and so its inventory) instead of creating a duplicate.
+  // Absent on products made by hand or before this existed; sparse-unique so a second product with
+  // the same identity can never be saved, even when two POs are processed at the same moment.
+  sourceKey: { type: String, unique: true, sparse: true },
   // A product auto-created from a PO keeps following its Product Category's
   // testing plan (later plan edits reach it) until Engineering approves it or
   // someone saves its stages in the product editor.
