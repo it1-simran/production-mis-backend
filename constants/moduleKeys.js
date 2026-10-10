@@ -64,6 +64,7 @@ const MODULE_KEYS = {
   BULK_DELETE_DEVICES: "device_management__bulk_delete",
   DELETION_HISTORY: "device_management__deletion_history",
   FIND_DEVICE: "device_management__find_device",
+  DEVICE_SERIAL_FORMATS: "device_management__serial_formats",
 
   ROOM_MANAGEMENT: "room_management",
   VIEW_ROOMS: "room_management__view",

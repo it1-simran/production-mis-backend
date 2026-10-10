@@ -74,6 +74,36 @@ async function cpanelPost(path, body) {
   return r.json();
 }
 
+/**
+ * A SKU's serial format picked from the Device Serial Formats master:
+ * returns { serialFormat: {id,name}, sample } with the sample taken from the
+ * master (authoritative), or null when none was picked (legacy typed sample).
+ * `keepId` lets an existing SKU keep a format that was deactivated since.
+ */
+async function resolveSerialFormat(b, keepId = "") {
+  if (b?.serialFormat?.custom) {
+    const { readCustomPattern } = require("../services/deviceSerialFormatSync");
+    const pattern = readCustomPattern(b.serialFormat);
+    const DeviceSerialFormat = require("../models/DeviceSerialFormat");
+    return { serialFormat: { id: "", name: "", custom: true, ...pattern }, sample: DeviceSerialFormat.sampleOf(pattern) };
+  }
+  const id = String(b?.serialFormat?.id || "").trim();
+  if (!id) return null;
+  const DeviceSerialFormat = require("../models/DeviceSerialFormat");
+  const f = require("mongoose").isValidObjectId(id) ? await DeviceSerialFormat.findById(id).lean() : null;
+  if (!f) throw Object.assign(new Error("The selected serial number format no longer exists in MES — pick another."), { status: 400 });
+  if (!f.activeStatus && id !== String(keepId || "")) {
+    throw Object.assign(new Error(`Serial number format "${f.name}" is inactive — pick another.`), { status: 400 });
+  }
+  return {
+    serialFormat: {
+      id: String(f._id), name: f.name, custom: false,
+      prefix: f.prefix || "", suffix: f.suffix || "", enableZero: !!f.enableZero, noOfZeroRequired: f.enableZero ? Number(f.noOfZeroRequired) || 1 : 0,
+    },
+    sample: DeviceSerialFormat.sampleOf(f),
+  };
+}
+
 module.exports = {
   /**
    * POST /integrations/cpanel/skus  (service-key auth)
@@ -97,6 +127,13 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
 
+      let pickedFormat = null;
+      try {
+        pickedFormat = await resolveSerialFormat(b);
+      } catch (fmtErr) {
+        return res.status(fmtErr.status || 400).json({ status: fmtErr.status || 400, message: fmtErr.message });
+      }
+      if (pickedFormat) b.serialNumberFormat = pickedFormat.sample;
       if (!String(b.serialNumberFormat || "").trim()) {
         return res.status(400).json({ status: 400, message: "serialNumberFormat is required." });
       }
@@ -128,11 +165,12 @@ module.exports = {
         },
         deviceCategory: { id: b.deviceCategory?.id ?? null, name: b.deviceCategory?.name || "" },
         esim: esimFromBody(b.esim),
-        esimRechargePeriod: hasEsim ? esimRechargePeriod : "",
+        esimRechargePeriod: hasEsim && esimProviderIn === "jsd" ? esimRechargePeriod : "",
         firmware: { id: b.firmware?.id ?? null, name: b.firmware?.name || "" },
         modelName: String(b.modelName || "").trim(),
         vendorId: b.vendorId || "",
         serialNumberFormat: String(b.serialNumberFormat || "").trim(),
+        serialFormat: pickedFormat ? pickedFormat.serialFormat : { id: "", name: "" },
         cartonType: ["direct_master_carton", "unit_packaging"].includes(b.cartonType) ? b.cartonType : "",
         stickerFormat: { id: b.stickerFormat?.id || null, name: b.stickerFormat?.name || "" },
         configuration: b.configuration && typeof b.configuration === "object" ? b.configuration : {},
@@ -175,10 +213,14 @@ module.exports = {
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
       const filter = {};
-      if (raisedBy && String(role).toLowerCase() !== "admin") {
-        filter["raisedBy.cpanelUserId"] = parseInt(raisedBy, 10);
+      if (String(role).toLowerCase() !== "admin") {
+        const owner = parseInt(raisedBy, 10);
+        if (!Number.isInteger(owner)) {
+          return res.status(400).json({ status: 400, message: "raisedBy is required." });
+        }
+        filter["raisedBy.cpanelUserId"] = owner;
       }
-      if (status) filter.status = status;
+      if (typeof status === "string" && status) filter.status = status;
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [
@@ -237,6 +279,9 @@ module.exports = {
       }
 
       const b = req.body || {};
+      if (b.kycApproved !== true) {
+        return res.status(403).json({ status: 403, message: "Customer KYC is not approved. Cannot resubmit the SKU request." });
+      }
       if (b.deviceCategory) skuRequest.deviceCategory = { id: b.deviceCategory.id ?? null, name: b.deviceCategory.name || "" };
       if (b.esim) skuRequest.esim = esimFromBody(b.esim);
       if (skuRequest.esim.provider !== "jsd") {
@@ -247,7 +292,14 @@ module.exports = {
       if (b.firmware) skuRequest.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
       if (typeof b.modelName === "string") skuRequest.modelName = b.modelName;
       if (typeof b.vendorId === "string") skuRequest.vendorId = b.vendorId;
-      if (typeof b.serialNumberFormat === "string") skuRequest.serialNumberFormat = b.serialNumberFormat;
+      if (b.serialFormat && (b.serialFormat.custom || String(b.serialFormat.id || "").trim())) {
+        const picked = await resolveSerialFormat(b, skuRequest.serialFormat?.id);
+        skuRequest.serialFormat = picked.serialFormat;
+        skuRequest.serialNumberFormat = picked.sample;
+      } else if (typeof b.serialNumberFormat === "string") {
+        skuRequest.serialNumberFormat = b.serialNumberFormat;
+        if (b.serialFormat) skuRequest.serialFormat = { id: "", name: "" }; // switched back to a typed sample
+      }
       if (["direct_master_carton", "unit_packaging"].includes(b.cartonType)) skuRequest.cartonType = b.cartonType;
       if (b.stickerFormat) skuRequest.stickerFormat = { id: b.stickerFormat.id || null, name: b.stickerFormat.name || "" };
       if (b.configuration && typeof b.configuration === "object") skuRequest.configuration = b.configuration;
@@ -279,6 +331,7 @@ module.exports = {
         data: saved,
       });
     } catch (error) {
+      if (error?.status) return res.status(error.status).json({ status: error.status, message: error.message });
       console.error("resubmitFromCpanel (sku) error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
@@ -299,6 +352,9 @@ module.exports = {
       }
 
       const b = req.body || {};
+      if (b.kycApproved !== true) {
+        return res.status(403).json({ status: 403, message: "Customer KYC is not approved. Cannot edit the SKU request." });
+      }
       if (b.deviceCategory) skuRequest.deviceCategory = { id: b.deviceCategory.id ?? null, name: b.deviceCategory.name || "" };
       if (b.esim) skuRequest.esim = esimFromBody(b.esim);
       if (skuRequest.esim.provider !== "jsd") {
@@ -309,7 +365,14 @@ module.exports = {
       if (b.firmware) skuRequest.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
       if (typeof b.modelName === "string") skuRequest.modelName = b.modelName;
       if (typeof b.vendorId === "string") skuRequest.vendorId = b.vendorId;
-      if (typeof b.serialNumberFormat === "string") skuRequest.serialNumberFormat = b.serialNumberFormat;
+      if (b.serialFormat && (b.serialFormat.custom || String(b.serialFormat.id || "").trim())) {
+        const picked = await resolveSerialFormat(b, skuRequest.serialFormat?.id);
+        skuRequest.serialFormat = picked.serialFormat;
+        skuRequest.serialNumberFormat = picked.sample;
+      } else if (typeof b.serialNumberFormat === "string") {
+        skuRequest.serialNumberFormat = b.serialNumberFormat;
+        if (b.serialFormat) skuRequest.serialFormat = { id: "", name: "" }; // switched back to a typed sample
+      }
       if (["direct_master_carton", "unit_packaging"].includes(b.cartonType)) skuRequest.cartonType = b.cartonType;
       if (b.stickerFormat) skuRequest.stickerFormat = { id: b.stickerFormat.id || null, name: b.stickerFormat.name || "" };
       if (b.configuration && typeof b.configuration === "object") skuRequest.configuration = b.configuration;
@@ -332,6 +395,7 @@ module.exports = {
         data: saved,
       });
     } catch (error) {
+      if (error?.status) return res.status(error.status).json({ status: error.status, message: error.message });
       console.error("updateFromCpanel (sku) error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
@@ -636,6 +700,18 @@ module.exports = {
         .limit(limit)
         .lean();
       redactCustomer(data);
+      // Customer's own serial format: will approval add it to the master or reuse an identical one?
+      const { planSerialFormatSync } = require("../services/deviceSerialFormatSync");
+      for (const row of data) {
+        if (row.serialFormat?.custom && !row.serialFormat?.id) {
+          try {
+            const plan = await planSerialFormatSync(row);
+            if (plan) row.serialFormatPlan = { existingName: plan.existing ? plan.existing.name : "" };
+          } catch (planErr) {
+            console.error("skuRequest list serial format plan error:", planErr.message);
+          }
+        }
+      }
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -666,6 +742,22 @@ module.exports = {
    * Final approval — the SKU is now Completed and can be used to raise a PO.
    */
   approve: async (req, res) => {
+    // NPD must record the FG BOM Number and Tranzact ID before final approval —
+    // every PO raised from this SKU carries them.
+    try {
+      const current = await SkuRequest.findById(req.params.id).select("fgBomNumber tranzactId status").lean();
+      if (!current) return res.status(404).json({ status: 404, message: "SKU request not found." });
+      const missing = [
+        !String(current.fgBomNumber || "").trim() && "FG BOM Number",
+        !String(current.tranzactId || "").trim() && "Tranzact ID",
+      ].filter(Boolean);
+      if (missing.length) {
+        return res.status(400).json({ status: 400, code: "NPD_REFERENCES_REQUIRED", message: `Save the ${missing.join(" and ")} before approving this SKU.` });
+      }
+    } catch (e) {
+      console.error("skuRequest approve reference check error:", e);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: e.message });
+    }
     // A typed-in / customer-supplied eSIM goes into the eSIM master on final
     // approval — anything already there (make, profile, APN) is reused, not
     // recreated. Written BEFORE completing, so a Completed SKU never lacks the
@@ -674,6 +766,10 @@ module.exports = {
     let extraSet = {};
     try {
       const sku = await SkuRequest.findById(req.params.id).lean();
+      if (sku && sku.status === "PendingNpd" && sku.esim?.customEntry && ["jsd", "customer"].includes(sku.esim?.provider)
+          && !String(sku.esim?.apnProfile1 || "").trim() && !String(sku.esim?.apnProfile2 || "").trim()) {
+        return res.status(400).json({ status: 400, code: "APN_REQUIRED", message: "This SKU has a typed-in eSIM — enter and save its APN(s) under eSIM Master Data before approving, so CCID uploads can resolve it." });
+      }
       if (sku && sku.status === "PendingNpd") {
         const r = await applyEsimMasterSync(sku);
         const notes = [];
@@ -687,6 +783,20 @@ module.exports = {
     } catch (e) {
       console.error("skuRequest approve esimMasterSync error:", e);
       return res.status(500).json({ status: 500, message: "Could not add this SKU's eSIM details to the eSIM master data.", error: e.message });
+    }
+    // A customer's own serial format ("Others") joins the Device Serial Formats master.
+    try {
+      const sku = await SkuRequest.findById(req.params.id).lean();
+      if (sku && sku.status === "PendingNpd") {
+        const r = await require("../services/deviceSerialFormatSync").applySerialFormatSync(sku);
+        if (r) {
+          extraSet.serialFormat = r.serialFormat;
+          masterNote = [masterNote, r.note].filter(Boolean).join(". ");
+        }
+      }
+    } catch (e) {
+      console.error("skuRequest approve serial format sync error:", e);
+      return res.status(500).json({ status: 500, message: "Could not add this SKU's serial number format to the master.", error: e.message });
     }
     return transition(req, res, "Completed", masterNote, extraSet);
   },
@@ -732,6 +842,16 @@ module.exports = {
       }
 
       const changed = [];
+      // An approved SKU raises POs with these — they can be corrected, never blanked.
+      if (skuRequest.status === "Completed") {
+        const blanked = [
+          typeof req.body?.fgBomNumber === "string" && !req.body.fgBomNumber.trim() && "FG BOM Number",
+          typeof req.body?.tranzactId === "string" && !req.body.tranzactId.trim() && "Tranzact ID",
+        ].filter(Boolean);
+        if (blanked.length) {
+          return res.status(400).json({ status: 400, message: `The ${blanked.join(" and ")} of an approved SKU can't be empty.` });
+        }
+      }
       if (typeof req.body?.fgBomNumber === "string") {
         skuRequest.fgBomNumber = req.body.fgBomNumber.trim();
         changed.push("fgBomNumber");
@@ -739,6 +859,15 @@ module.exports = {
       if (typeof req.body?.tranzactId === "string") {
         skuRequest.tranzactId = req.body.tranzactId.trim();
         changed.push("tranzactId");
+      }
+      // POs raised from this SKU carry a copy — keep them in step.
+      if (skuRequest.skuCode && (changed.includes("fgBomNumber") || changed.includes("tranzactId"))) {
+        const set = {};
+        if (changed.includes("fgBomNumber")) set.fgBomNumber = skuRequest.fgBomNumber;
+        if (changed.includes("tranzactId")) set.tranzactId = skuRequest.tranzactId;
+        await require("../models/PurchaseOrder").updateMany({ skuCode: skuRequest.skuCode }, { $set: set }).catch((e) =>
+          console.error("updateNpdConfig PO sync error:", e.message)
+        );
       }
       // NPD may correct a typed-in APN before final approval — after that it
       // has already been written to the eSIM master (edit it there instead).

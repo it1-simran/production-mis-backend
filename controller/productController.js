@@ -12,6 +12,31 @@ const SlugMapping = require("../models/slugMapping");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { nextProductCode } = require("../services/productCodeService");
 const { ESIM_PROVIDERS } = require("../config/esimProviders");
+/**
+ * Comparable form of a testing plan: ids, UI-only keys (drag ids, expand
+ * state) and empty/default values dropped, keys sorted — so stages sent back
+ * unchanged by the editor compare equal to what is stored.
+ */
+const UI_ONLY_KEYS = new Set(["_id", "dragId", "isExpanded", "isSubExpand", "__v"]);
+function canonicalValue(v) {
+  if (Array.isArray(v)) return v.map(canonicalValue);
+  if (v && typeof v === "object" && !(v instanceof Date)) {
+    if (typeof v.toHexString === "function") return String(v);
+    const out = {};
+    for (const k of Object.keys(v).sort()) {
+      if (UI_ONLY_KEYS.has(k)) continue;
+      const c = canonicalValue(v[k]);
+      if (c === "" || c === null || c === undefined || c === false || (Array.isArray(c) && !c.length)) continue;
+      if (c && typeof c === "object" && !Array.isArray(c) && !Object.keys(c).length) continue;
+      out[k] = c;
+    }
+    return out;
+  }
+  if (typeof v === "number") return String(v);
+  return v;
+}
+const canonicalStages = (stages) => JSON.stringify(canonicalValue(Array.isArray(stages) ? stages : []));
+
 module.exports = {
   create: async (req, res) => {
     try {
@@ -263,8 +288,13 @@ module.exports = {
         });
       }
 
-      // Stages saved by hand: this product stops following its category's testing plan.
-      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider, stagesFromCategory: false, updatedAt: new Date() };
+      // Stages actually changed by hand: this product stops following its
+      // category's testing plan. A save that only renames the product or
+      // toggles Auto NG (stages sent back unchanged) keeps it following.
+      const stored = await Product.findById(id).select("stages").lean();
+      const stagesChanged = !stored || canonicalStages(stored.stages) !== canonicalStages(stages);
+      const updatedData = { name: req.body.name, stages, commonStages, autoNgEnabled, esimProvider, updatedAt: new Date() };
+      if (stagesChanged) updatedData.stagesFromCategory = false;
 
       const updatedProduct = await Product.findByIdAndUpdate(id, updatedData, {
         new: true,
