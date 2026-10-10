@@ -49,9 +49,18 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   // eSIM make + its two profiles (mirrors EsimMaster: esimMake / profile1 / profile2)
   esim: {
+    // Whose eSIM (from the SKU): "jsd" needs a recharge period, "customer"
+    // doesn't, "" = the device category has no eSIM. Blank on older POs.
+    provider: { type: String, default: "" },
     make: { type: String, default: "" },
     profile1: { type: String, default: "" },
     profile2: { type: String, default: "" },
+  },
+  // Who actually submitted it in GPSCPANEL (an admin raising it for a customer).
+  raisedByActual: {
+    cpanelUserId: { type: Number, default: null },
+    name: { type: String, default: "" },
+    role: { type: String, default: "" },
   },
   // Blank when the PO's Device Category has no eSIM at all (inherited from
   // its SKU) — otherwise 1_year/2_year for a JSD-managed eSIM.

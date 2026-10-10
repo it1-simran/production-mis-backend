@@ -658,6 +658,11 @@ class DispatchService {
     if (payload.logisticsDetails !== undefined) invoice.logisticsDetails = this.normalizeLogisticsDetails(payload.logisticsDetails || {});
     if (payload.dispatchDate) invoice.dispatchDate = payload.dispatchDate;
     if (payload.invoiceDate) invoice.invoiceDate = payload.invoiceDate;
+    // A PO invoiced from stock keeps a copy of these — keep it in step.
+    await PurchaseOrder.updateOne(
+      { "fulfilment.invoiceId": invoice._id },
+      { $set: { "fulfilment.invoiceNumber": invoice.invoiceNumber, "fulfilment.ewayBillNo": invoice.ewayBillNo || "" } }
+    ).catch((e) => console.error("updateDraft PO sync error:", e.message));
     if (payload.remarks !== undefined) invoice.remarks = String(payload.remarks || "").trim();
     if (payload.pricingSummary) invoice.pricingSummary = this.normalizePricingSummary(payload.pricingSummary);
 
@@ -694,6 +699,16 @@ class DispatchService {
     invoice.cancelledAt = new Date();
     invoice.updatedBy = userId || null;
     await invoice.save();
+    // A PO invoiced from stock with this invoice returns to Accounts' pending
+    // queue — otherwise it stays "invoiced" forever and can't be re-invoiced,
+    // OC-linked or cancelled.
+    await PurchaseOrder.updateOne(
+      { "fulfilment.invoiceId": invoice._id, "fulfilment.state": "invoiced" },
+      {
+        $set: { "fulfilment.state": "awaiting", "fulfilment.invoiceId": null, "fulfilment.invoiceNumber": "", "fulfilment.ewayBillNo": "", "fulfilment.decidedAt": null },
+        $push: { statusHistory: { fromStatus: "Approved", toStatus: "Approved", actorType: "mes", changedBy: userId || null, changedByName: "", remarks: `Invoice ${invoice.invoiceNumber} cancelled — back to Accounts for OC / invoice`, changedAt: new Date() } },
+      }
+    ).catch((e) => console.error("cancelInvoice PO reset error:", e.message));
     return this.getInvoiceById(invoice._id);
   }
 
@@ -834,6 +849,14 @@ class DispatchService {
         console.error("confirmInvoice markDispatched accessory serials error:", accErr.message);
       }
     }
+    // The PO this invoice was raised from is now dispatched.
+    await PurchaseOrder.updateOne(
+      { "fulfilment.invoiceId": invoice._id, "fulfilment.state": "invoiced" },
+      {
+        $set: { "fulfilment.state": "dispatched" },
+        $push: { statusHistory: { fromStatus: "Approved", toStatus: "Approved", actorType: "mes", changedBy: userId || null, changedByName: "", remarks: `Dispatched on invoice ${invoice.invoiceNumber} (gate pass ${gatePassNumber})`, changedAt: new Date() } },
+      }
+    ).catch((e) => console.error("confirmInvoice PO dispatched error:", e.message));
     // Safety net: serials left LINKED to already-dispatched devices by an earlier failure.
     try {
       await require("./accessorySerialService").reconcileDispatched();

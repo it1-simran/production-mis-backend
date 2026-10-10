@@ -18,6 +18,15 @@ function profilePair(po) {
   return [a, b].filter(Boolean).join("+");
 }
 
+// PDI / FG to Store seed for products created by the PO path (the product
+// editor's COMMON_STAGE_DEFAULTS); Dispatch/Delivery reserved, left unassigned.
+const DEFAULT_COMMON_STAGES = [
+  { stageName: "PDI", managedBy: "QC", requiredSkill: "PDI" },
+  { stageName: "FG to Store", managedBy: "Store", requiredSkill: "FG to Store" },
+  { stageName: "Dispatch", managedBy: "", requiredSkill: "" },
+  { stageName: "Delivery", managedBy: "", requiredSkill: "" },
+];
+
 function isActiveCategory(cat) {
   return cat && String(cat.status) !== "0" && String(cat.status).toLowerCase() !== "inactive";
 }
@@ -82,12 +91,7 @@ async function createProductFromPO(po, user = {}) {
   // and both the product editor and any auto-created Process silently inherit
   // that empty array. Dispatch/Delivery intentionally left unset (not in
   // active use yet), matching the frontend.
-  const commonStages = [
-    { stageName: "PDI", managedBy: "QC", requiredSkill: "PDI" },
-    { stageName: "FG to Store", managedBy: "Store", requiredSkill: "FG to Store" },
-    { stageName: "Dispatch", managedBy: "", requiredSkill: "" },
-    { stageName: "Delivery", managedBy: "", requiredSkill: "" },
-  ];
+  const commonStages = DEFAULT_COMMON_STAGES.map((s) => ({ ...s }));
 
   const productCode = await nextProductCode();
   const product = await new Product({
@@ -131,10 +135,11 @@ async function syncPendingProductsForCategory(category) {
   }
   if (!productIds.length) return 0;
   const r = await Product.updateMany(
-    { _id: { $in: productIds }, status: "draft", stagesFromCategory: true },
+    // Field missing = auto-created before the flag existed: still following the plan.
+    { _id: { $in: productIds }, status: "draft", stagesFromCategory: { $ne: false } },
     { $set: { stages: category.testingPlan, updatedAt: new Date() } }
   );
   return r.modifiedCount || 0;
 }
 
-module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory };
+module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory, DEFAULT_COMMON_STAGES };

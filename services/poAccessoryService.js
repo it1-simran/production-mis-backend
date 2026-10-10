@@ -23,6 +23,30 @@ async function perProcessIdsFor(lines) {
   const docs = await Accessory.find({ _id: { $in: ids }, serialMode: "per_process" }).select("_id").lean();
   return new Set(docs.map((d) => String(d._id)));
 }
+/**
+ * A PO line snapshots the accessory's trackStock when the PO is raised. If the
+ * accessory was switched to/from stock-tracked since, lines with nothing issued
+ * yet follow the current setting (units issued while untracked never left the
+ * store's count, so those lines keep their old value). Mutates; caller saves.
+ */
+async function refreshTracking(po) {
+  const lines = po.accessories || [];
+  if (!lines.length) return false;
+  const docs = await Accessory.find({ _id: { $in: lines.map((l) => l.accessoryId) } }).select("_id trackStock").lean();
+  const live = new Map(docs.map((d) => [String(d._id), !!d.trackStock]));
+  let changed = false;
+  for (const l of lines) {
+    const now = live.get(String(l.accessoryId));
+    const outstanding = (l.issuedQty || 0) - (l.returnedQty || 0);
+    if (now !== undefined && now !== !!l.trackStock && outstanding <= 0) {
+      l.trackStock = now;
+      changed = true;
+    }
+  }
+  if (changed && po.markModified) po.markModified("accessories");
+  return changed;
+}
+
 async function serializedIdsFor(lines) {
   const ids = (lines || []).map((l) => l.accessoryId);
   if (!ids.length) return new Set();
@@ -184,6 +208,7 @@ async function rollback(undo, what, po) {
  */
 async function syncReservations(poId, user) {
   return withPoLock(poId, async (po) => {
+    if (await refreshTracking(po)) await po.save();
     const notes = [];
     const meta = { poId: po._id, poNumber: po.poNumber, user, remarks: `PO ${po.poNumber || ""} ${po.status}` };
     // Each line is recorded on the PO as soon as its stock moved, so one bad
@@ -253,6 +278,7 @@ async function issueForPo(poId, items, { processId = null, refNo = "", remarks =
   if (!Array.isArray(items) || !items.length) throw httpError(400, "Nothing to issue.");
   return withPoLock(poId, async (po) => {
     if (po.status !== "Approved") throw httpError(409, `Accessories can only be issued for an Approved PO (this one is ${po.status}).`);
+    await refreshTracking(po);
     const meta = { poId: po._id, poNumber: po.poNumber, processId: processId || po.fulfilment?.processId || null, refNo, remarks, user };
     const serialized = await serializedIdsFor(po.accessories);
     const plan = planItems(po, items, "Issue", (l, q) => {

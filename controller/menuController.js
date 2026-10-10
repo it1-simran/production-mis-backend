@@ -213,7 +213,6 @@ module.exports = {
           moduleKey: "ng_devices",
           children: [
             { label: "View NG Devices", route: "/ng-devices", moduleKey: "ng_devices__view" },
-            { label: "NG Issue Master", route: "/ng-issue-master/view", moduleKey: "ng_devices__issue_master" },
           ],
         },
         {
@@ -308,6 +307,7 @@ module.exports = {
           "bulk delete devices": "device_management__bulk_delete",
           "deletion history": "device_management__deletion_history",
           "find device": "device_management__find_device",
+          "device serial formats": "device_management__serial_formats",
           "room management": "room_management",
           "view rooms": "room_management__view",
           "add room": "room_management__add",
@@ -497,6 +497,7 @@ module.exports = {
         const deviceManagementChildrenToAdd = [
           { label: "Bulk Delete Devices", route: "/device/bulk-delete", moduleKey: "device_management__bulk_delete" },
           { label: "Deletion History", route: "/device/deleted-devices", moduleKey: "device_management__deletion_history" },
+          { label: "Device Serial Formats", route: "/device/serial-formats", moduleKey: "device_management__serial_formats" },
         ];
         const deviceMenuIndex = menus.findIndex(
           (m) => String(m?.label || "").toLowerCase() === "device management",
@@ -814,11 +815,6 @@ module.exports = {
                 moduleKey: "ng_devices",
                 children: [
                   { label: "View NG Devices", route: ngMenu.route === "#" ? "/ng-devices" : ngMenu.route, moduleKey: "ng_devices__view" },
-                  {
-                    label: "NG Issue Master",
-                    route: looseNgIssueMaster?.route || "/ng-issue-master/view",
-                    moduleKey: "ng_devices__issue_master",
-                  },
                 ],
               };
               if (looseNgIssueMaster) {
@@ -831,6 +827,13 @@ module.exports = {
               // labeled exactly "NG Devices" (same as its parent), which made
               // the generic label-sync correction above collapse its moduleKey
               // back onto the parent's — fix that specific collision here.
+              // NG Issue Master has no page (its route 404s) — drop it from the menu.
+              const before = ngMenu.children.length;
+              ngMenu.children = ngMenu.children.filter((c) => c?.moduleKey !== "ng_devices__issue_master");
+              if (ngMenu.children.length !== before) {
+                changed = true;
+                console.log("Auto-migrated: Removed NG Issue Master (no page) from NG Devices.");
+              }
               const viewChild = ngMenu.children.find((c) => c?.route === "/ng-devices");
               if (viewChild && (viewChild.label !== "View NG Devices" || viewChild.moduleKey !== "ng_devices__view")) {
                 viewChild.label = "View NG Devices";
