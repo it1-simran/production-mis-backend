@@ -129,4 +129,41 @@ module.exports = {
       return res.status(500).json({ status: 500, error: error.message });
     }
   },
+
+  /**
+   * GET /integrations/cpanel/sticker-formats  (service-key auth)
+   * Lightweight picklist for the GPSCPANEL SKU form's Sticker Format select.
+   */
+  listForCpanel: async (req, res) => {
+    try {
+      const formats = await StickerFormatMaster.find()
+        .select("_id name dimensions")
+        .sort({ name: 1 })
+        .lean();
+      return res.status(200).json({ status: 200, data: formats });
+    } catch (error) {
+      return res.status(500).json({ status: 500, message: "Server error", error: error.message });
+    }
+  },
+
+  /**
+   * GET /integrations/cpanel/sticker-formats/:id  (service-key auth)
+   * Full design payload (dimensions + fields) so GPSCPANEL can render a
+   * client-side preview — mirrors getById but without the JWT auth gate.
+   */
+  getForCpanel: async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ status: 400, message: "Invalid format ID." });
+      }
+      const format = await StickerFormatMaster.findById(id).lean();
+      if (!format) {
+        return res.status(404).json({ status: 404, message: "Sticker format not found." });
+      }
+      return res.status(200).json({ status: 200, data: format });
+    } catch (error) {
+      return res.status(500).json({ status: 500, message: "Server error", error: error.message });
+    }
+  },
 };

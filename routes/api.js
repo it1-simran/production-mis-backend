@@ -22,6 +22,7 @@ const RoomPlan = require('../models/roomPlan');
 const reportController = require('../controller/reportController');
 const stickerController = require('../controller/stickerController');
 const stickerFormatMasterController = require('../controller/stickerFormatMasterController');
+const deviceSerialFormatController = require('../controller/deviceSerialFormatController');
 const inventoryController = require('../controller/inventoryController');
 const inventory = require('../models/inventoryManagement');
 const productionManagerController = require('../controller/productionManagerController');
@@ -35,6 +36,7 @@ const CartonController = require('../controller/cartonController');
 const cartonController = require('../controller/cartonController');
 const esimMasterController = require('../controller/esimMasterController');
 const esimMakeController = require('../controller/esimMakeController');
+const rs232CommandMasterController = require('../controller/rs232CommandMasterController');
 const slugMappingController = require('../controller/slugMappingController');
 const esimProfileController = require('../controller/esimProfileController');
 const dispatchController = require('../controller/dispatchController');
@@ -48,6 +50,9 @@ const { submitDeduplicationMiddleware } = require('../middleware/requestDeduplic
 const { createRequestTimeoutMiddleware } = require('../middleware/requestTimeout');
 const serviceKeyAuth = require('../middleware/serviceKeyAuth');
 const purchaseOrderController = require('../controller/purchaseOrderController');
+const skuRequestController = require('../controller/skuRequestController');
+const kycController = require('../controller/kycController');
+const accessoryController = require('../controller/accessoryController');
 connectDB();
 
 /** Parses multipart/form-data for API routes that receive FormData from the frontend. */
@@ -82,7 +87,7 @@ router.post('/product/delete/multiple', authController.authenticateToken, authCo
 router.post('/login', authController.login);
 router.post('/logout', authController.logout);
 router.post('/register', authController.register);
-router.post('/add/product', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "create"), productController.create);
+router.post('/add/product', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.ADD_PRODUCT], "create"), productController.create);
 router.put('/product/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "update"), productController.update);
 router.put('/product/activate/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PRODUCT, "update"), productController.activate);
 
@@ -93,6 +98,43 @@ router.post('/product-category/sync-from-cpanel', authController.authenticateTok
 router.get('/product-category/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.PRODUCT_CATEGORY, MODULE_KEYS.VIEW_PRODUCT, MODULE_KEYS.KIT_TRANSFER], "read"), productCategoryController.view);
 router.delete('/product-category/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.delete);
 router.post('/product-category/delete-multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "delete"), productCategoryController.deleteMultiple);
+// Accessories mapped to a Product Category (edited from the category list, like its testing plan).
+router.get('/product-category/:id/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "read"), accessoryController.getCategoryMapping);
+router.put('/product-category/:id/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCT_CATEGORY, "update"), accessoryController.saveCategoryMapping);
+
+// ---------------- Accessories Management ----------------
+// Master list is also readable by Product Category editors (they pick from it).
+router.get('/accessories', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_MASTER, MODULE_KEYS.PRODUCT_CATEGORY], "read"), accessoryController.list);
+router.post('/accessories', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "create"), accessoryController.create);
+router.put('/accessories/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "update"), accessoryController.update);
+router.get('/accessories-stock', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "read"), accessoryController.stockList);
+router.post('/accessories-stock/receive', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.receive);
+router.post('/accessories-stock/adjust', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "update"), accessoryController.adjust);
+// Serialized accessories: receive by serial, list, scrap, look up.
+router.post('/accessories/:id/serials/generate', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.generateSerials);
+router.post('/accessories/:id/serials/import', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "create"), accessoryController.importSerials);
+router.get('/accessories/:id/serials', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "read"), accessoryController.listSerials);
+router.get('/accessory-serials/preview', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_MASTER, "read"), accessoryController.previewSerial);
+router.post('/accessory-serials/:serialNo/scrap', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_STOCK, "update"), accessoryController.scrapSerial);
+// Device history views (planning seat records, operator activity, Find Device, cartons): accessories per device.
+router.post('/accessory-serials/by-devices', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_TASK, MODULE_KEYS.VIEW_PLANNING_SCHEDULING, MODULE_KEYS.FIND_DEVICE, MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS], "read"), accessoryController.byDevices);
+router.get('/accessory-serials/lookup/:serialNo', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.FIND_DEVICE], "read"), accessoryController.lookupSerial);
+// Packaging: same permissions as the carton/packing routes the operator already uses.
+// Per-process accessory serials (generated like device serials, from the planning view).
+router.get('/accessories-process-serials/last', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.processSerialLast);
+router.get('/accessories-process-serials/:processId/:accessoryId', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.processSerialSummary);
+router.put('/accessories-process-serials/:processId/:accessoryId/format', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), accessoryController.processSerialSaveFormat);
+router.post('/accessories-process-serials/:processId/:accessoryId/generate', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), accessoryController.processSerialGenerate);
+router.get('/devices/:deviceId/accessory-checklist', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "read"), accessoryController.deviceChecklist);
+router.post('/devices/:deviceId/accessories/link', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "update"), accessoryController.linkDeviceAccessory);
+router.post('/devices/:deviceId/accessories/unlink', authController.authenticateToken, authController.authorize([MODULE_KEYS.CARTON_MANAGEMENT, MODULE_KEYS.VIEW_TASK], "update"), accessoryController.unlinkDeviceAccessory);
+router.get('/accessories-stock/transactions', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_STOCK, MODULE_KEYS.ACCESSORY_REQUIREMENTS], "read"), accessoryController.transactions);
+router.get('/accessories-requirements', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "read"), accessoryController.requirements);
+// Read-only accessory lines of a Process's PO — shown on the planning view, so planning viewers can read it too.
+router.get('/accessories-requirements/by-process/:processId', authController.authenticateToken, authController.authorize([MODULE_KEYS.ACCESSORY_REQUIREMENTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), accessoryController.byProcess);
+router.post('/accessories-requirements/:poId/issue', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.issue);
+router.post('/accessories-requirements/:poId/return', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.returnItems);
+router.post('/accessories-requirements/:poId/reserve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCESSORY_REQUIREMENTS, "update"), accessoryController.reserve);
 router.post('/upload-image/:userId', authController.authenticateToken, upload.single('profilePic'), userController.uploadProfilePicture);
 router.post('/upload-cover-image/:userId', authController.authenticateToken, upload.single('coverPic'), userController.uploadCoverPicture);
 router.get('/protected', authController.authenticateToken, authController.getProtectedData);
@@ -107,7 +149,7 @@ router.post('/jig/delete/multiple', authController.authenticateToken, authContro
 router.post('/jig/categories/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_CATEGORIES, "delete"), jigController.deleteCategoryMultiple);
 router.get(`/fetchJigsById/:id`, authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "read"), jigController.fetchJigsById);
 router.get(`/fetchJigByJigId/:id`, authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "read"), jigController.fetchJigByJigId);
-router.post('/room-plan/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "create"), roomPlanController.create);
+router.post('/room-plan/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_ROOMS, MODULE_KEYS.ADD_ROOM], "create"), roomPlanController.create);
 // Also the room dropdown on the Planning & Scheduling pages.
 router.get('/room-plan/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_ROOMS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), roomPlanController.view);
 router.delete('/room-plan/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "delete"), roomPlanController.deleteRoomPlan);
@@ -115,7 +157,7 @@ router.post('/room-plan/deleteRoomPlan', authController.authenticateToken, authC
 router.get('/room-plan/getRoomPlanByID/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_ROOMS, MODULE_KEYS.OPERATOR_ASSIGNMENT], "read"), roomPlanController.getRoomPlanByID)
 router.put('/room-plan/getRoomPlanByID/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_ROOMS, "update"), roomPlanController.update);
 router.get('/user/generate-code', authController.authenticateToken, userController.generateEmployeeCode);
-router.post('/user/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "create"), userController.createUser);
+router.post('/user/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_USER, MODULE_KEYS.ADD_USER], "create"), userController.createUser);
 router.post('/user/bulk-create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "create"), userController.bulkCreateUsers);
 router.post('/user/check-duplicates', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_USER, "read"), userController.checkUserDuplicates);
 // Also the user list on the Planning & Scheduling view page.
@@ -144,14 +186,14 @@ router.get('/user-type/get', authController.authenticateToken, userRolesControll
 router.get('/user-type/getPermissionByType', authController.authenticateToken, userRolesController.getUserTypeByType);
 router.post('/menu/create', authController.authenticateToken, authController.authorizeAdminOnly, menuController.create);
 router.get('/menu/get', authController.authenticateToken, menuController.view);
-router.post('/shift/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "create"), shiftController.create);
+router.post('/shift/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_SHIFTS, MODULE_KEYS.ADD_SHIFT], "create"), shiftController.create);
 // Also the shift dropdown on the Planning & Scheduling pages.
 router.get('/shift/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_SHIFTS, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "read"), shiftController.view);
 router.delete('/shift/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "delete"), shiftController.delete);
 router.post('/shift/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "delete"), shiftController.deleteUserRoleMultiple);
 router.get('/shift/get/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "read"), shiftController.getShiftByID);
 router.put('/shift/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_SHIFTS, "update"), shiftController.updateshift);
-router.post('/process/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_PROCESS, "create"), processController.create);
+router.post('/process/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.ADD_PROCESS], "create"), processController.create);
 router.get('/process/generate-iap-no', authController.authenticateToken, processController.generateIapNo);
 router.get('/process/view', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), processController.view);
 router.get(
@@ -182,7 +224,7 @@ router.delete('/holiday/delete/:id', authController.authenticateToken, authContr
 router.post('/holiday/delete/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.HOLIDAY_MANAGEMENT, "delete"), holidayController.deleteHolidayMultiple);
 router.post('/planing/getFromCurrentDate', authController.authenticateToken, planningAndSchedulingController.checkAvailabilityFromCurrentDate);
 router.get('/planing/getPlaningAndSchedulingModel', authController.authenticateToken, planningAndSchedulingController?.fetchAllPlaningModel);
-router.post('/planing/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "create"), planningAndSchedulingController.create);
+router.post('/planing/create', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING, MODULE_KEYS.ADD_PLANNING_SCHEDULING], "create"), planningAndSchedulingController.create);
 router.post('/process/log/create', authController.authenticateToken, processController.processLogs);
 router.get('/process/logs/getLogsByProcessID/:id', authController.authenticateToken, planningAndSchedulingController.getProcessLogsByProcessId);
 router.post('/assignPlanToOperator/create', authController.authenticateToken, assignedOperatorsToPlan.create);
@@ -341,6 +383,11 @@ router.post('/sticker/fields/delete/multiple', authController.authenticateToken,
 // Sticker Format Master
 router.post('/sticker/format/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.STICKER_FORMAT_MASTER, "create"), stickerFormatMasterController.create);
 router.get('/sticker/format/list', authController.authenticateToken, authController.authorize(MODULE_KEYS.STICKER_FORMAT_MASTER, "read"), stickerFormatMasterController.getAll);
+// Device Serial Formats master (Device Management)
+router.get('/device-serial-formats', authController.authenticateToken, authController.authorize(MODULE_KEYS.DEVICE_SERIAL_FORMATS, "read"), deviceSerialFormatController.list);
+router.post('/device-serial-formats', authController.authenticateToken, authController.authorize(MODULE_KEYS.DEVICE_SERIAL_FORMATS, "create"), deviceSerialFormatController.create);
+router.put('/device-serial-formats/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.DEVICE_SERIAL_FORMATS, "update"), deviceSerialFormatController.update);
+router.delete('/device-serial-formats/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.DEVICE_SERIAL_FORMATS, "delete"), deviceSerialFormatController.remove);
 router.get('/sticker/format/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.STICKER_FORMAT_MASTER, "read"), stickerFormatMasterController.getById);
 router.put('/sticker/format/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.STICKER_FORMAT_MASTER, "update"), stickerFormatMasterController.update);
 router.delete('/sticker/format/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.STICKER_FORMAT_MASTER, "delete"), stickerFormatMasterController.delete);
@@ -385,7 +432,7 @@ router.post('/operators/reassign', authController.authenticateToken, authControl
 router.put('/operator/updateStatus/:id', authController.authenticateToken, processController.updateStatusAssignedOperator);
 router.post('/operators/assign', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "update"), processController.assignOperatorToProcess);
 router.post('/operators/unassign', authController.authenticateToken, authController.authorize(MODULE_KEYS.OPERATOR_ASSIGNMENT, "update"), processController.unassignOperatorFromProcess);
-router.post('/planing/createAssignedJigs', authController.authenticateToken, assignedOperatorsToPlan.createJigAssignedToPlan)
+router.post('/planing/createAssignedJigs', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING, MODULE_KEYS.ADD_PLANNING_SCHEDULING], ["create", "update"]), assignedOperatorsToPlan.createJigAssignedToPlan)
 router.put('/jig/updateStatus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.JIG_VIEW, "update"), jigController.updateJigStatus);
 router.put("/process/updateIssueKitsToLine", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.updateIssuedKitsToLine);
 router.put("/process/confirmKitsToLineWithoutSeat", authController.authenticateToken, authController.authorize([MODULE_KEYS.VIEW_PROCESS, MODULE_KEYS.VIEW_TASK], "update"), processController.confirmKitsToLineWithoutSeat);
@@ -431,6 +478,7 @@ router.get('/integrations/cpanel/purchase-orders', serviceKeyAuth, purchaseOrder
 router.get('/integrations/cpanel/purchase-orders/:id', serviceKeyAuth, purchaseOrderController.getForCpanel);
 router.put('/integrations/cpanel/purchase-orders/:id/resubmit', serviceKeyAuth, purchaseOrderController.resubmitFromCpanel);
 router.get('/integrations/cpanel/esim-options', serviceKeyAuth, purchaseOrderController.esimOptions);
+router.get('/integrations/cpanel/accessories', serviceKeyAuth, accessoryController.mappedForCpanel);
 // Internal Sales UI — user JWT + PURCHASE_ORDER module.
 // Master-data for the Sales edit form (proxied from GPSCPANEL). Hyphen prefix avoids the /purchase-orders/:id route.
 router.get('/purchase-orders-master/categories', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "read"), purchaseOrderController.masterCategories);
@@ -442,6 +490,46 @@ router.get('/purchase-orders/:id', authController.authenticateToken, authControl
 router.put('/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.update);
 router.put('/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.approve);
 router.put('/purchase-orders/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.reject);
+router.put('/purchase-orders/:id/confirm-dispatch', authController.authenticateToken, authController.authorize(MODULE_KEYS.PURCHASE_ORDER, "update"), purchaseOrderController.confirmDispatch);
+// PPC stage — sets the estimated dispatch date, then hands the PO back to Sales.
+router.get('/ppc/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.PPC_PURCHASE_ORDERS, "read"), purchaseOrderController.ppcList);
+router.get('/ppc/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.PPC_PURCHASE_ORDERS, "read"), purchaseOrderController.ppcGetOne);
+router.put('/ppc/purchase-orders/:id/set-dispatch-date', authController.authenticateToken, authController.authorize(MODULE_KEYS.PPC_PURCHASE_ORDERS, "update"), purchaseOrderController.ppcSetDispatchDate);
+
+// ================================= SKUs =================================
+// Integration API — GPS CPanel (machine-to-machine via shared x-api-key).
+router.post('/integrations/cpanel/skus', serviceKeyAuth, skuRequestController.createFromCpanel);
+router.get('/integrations/cpanel/skus', serviceKeyAuth, skuRequestController.listForCpanel);
+router.get('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.getForCpanel);
+router.put('/integrations/cpanel/skus/:id/resubmit', serviceKeyAuth, skuRequestController.resubmitFromCpanel);
+router.put('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.updateFromCpanel);
+router.delete('/integrations/cpanel/skus/:id', serviceKeyAuth, skuRequestController.deleteFromCpanel);
+router.get('/integrations/cpanel/sticker-formats', serviceKeyAuth, stickerFormatMasterController.listForCpanel);
+router.get('/integrations/cpanel/device-serial-formats', serviceKeyAuth, deviceSerialFormatController.listForCpanel);
+router.get('/integrations/cpanel/sticker-formats/:id', serviceKeyAuth, stickerFormatMasterController.getForCpanel);
+// Internal Sales review UI (stage 1) — user JWT + SALES_SKU_REQUESTS module.
+router.get('/sales/skus', authController.authenticateToken, authController.authorize(MODULE_KEYS.SALES_SKU_REQUESTS, "read"), skuRequestController.salesList);
+router.get('/sales/skus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.SALES_SKU_REQUESTS, "read"), skuRequestController.salesGetOne);
+router.put('/sales/skus/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.SALES_SKU_REQUESTS, "update"), skuRequestController.salesApprove);
+router.put('/sales/skus/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.SALES_SKU_REQUESTS, "update"), skuRequestController.salesReject);
+// Internal NPD review UI (stage 2) — user JWT + NPD_SKU_REQUESTS module.
+router.get('/npd/skus', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.list);
+router.get('/npd/skus/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.getOne);
+router.put('/npd/skus/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.approve);
+router.put('/npd/skus/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.reject);
+router.put('/npd/skus/:id/config', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "update"), skuRequestController.updateNpdConfig);
+router.get('/npd/skus/:id/esim-master-preview', authController.authenticateToken, authController.authorize(MODULE_KEYS.NPD_SKU_REQUESTS, "read"), skuRequestController.esimMasterPreview);
+
+// ================================= KYC ==================================
+// Integration API — GPS CPanel (machine-to-machine via shared x-api-key).
+router.post('/integrations/cpanel/kyc', serviceKeyAuth, kycController.createFromCpanel);
+router.get('/integrations/cpanel/kyc/:cpanelUserId', serviceKeyAuth, kycController.getStatusForCpanel);
+// Internal Accounts review UI — user JWT + ACCOUNTS_KYC module.
+router.get('/accounts/kyc', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_KYC, "read"), kycController.list);
+router.get('/accounts/kyc/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_KYC, "read"), kycController.getOne);
+router.get('/accounts/kyc/:id/document', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_KYC, "read"), kycController.getDocument);
+router.put('/accounts/kyc/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_KYC, "update"), kycController.approve);
+router.put('/accounts/kyc/:id/reject', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_KYC, "update"), kycController.reject);
 
 // Accounts Portal — read-only view of approved (and post-approval cancelled) POs.
 router.get('/accounts/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.listForAccounts);
@@ -449,11 +537,17 @@ router.get('/accounts/purchase-orders/:id', authController.authenticateToken, au
 router.put('/accounts/purchase-orders/:id/oc-number', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "update"), purchaseOrderController.setOcNumber);
 router.get('/accounts/purchase-orders/:id/stock', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "read"), purchaseOrderController.stockForAccounts);
 router.post('/accounts/purchase-orders/:id/invoice', authController.authenticateToken, authController.authorize(MODULE_KEYS.ACCOUNTS_PO, "update"), purchaseOrderController.createInvoiceForAccounts);
-router.put('/process/addDownTime/:id', authController.authenticateToken, planningAndSchedulingController.updateDownTime);
-router.put('/process/addOvertime/:id', authController.authenticateToken, planningAndSchedulingController.addOvertime);
-router.delete('/process/removeOvertime/:id/:windowId', authController.authenticateToken, planningAndSchedulingController.removeOvertime);
+// Planning changes need planning update permission (were open to any logged-in user).
+router.put('/process/addDownTime/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), planningAndSchedulingController.updateDownTime);
+router.put('/process/addOvertime/:id', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), planningAndSchedulingController.addOvertime);
+router.delete('/process/removeOvertime/:id/:windowId', authController.authenticateToken, authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], "update"), planningAndSchedulingController.removeOvertime);
 router.get('/process/overtime/:id', authController.authenticateToken, planningAndSchedulingController.getOvertime);
-router.put('/process/updateProcessStatus/:id', authController.authenticateToken, planningAndSchedulingController.updateProcessStatus);
+// Resuming to "active" also happens automatically when anyone viewing the plan
+// loads it after its downtime ended — view access is enough for that; any
+// other status change needs update.
+router.put('/process/updateProcessStatus/:id', authController.authenticateToken,
+  (req, res, next) => authController.authorize([MODULE_KEYS.PLANNING_SCHEDULING_MANAGEMENT, MODULE_KEYS.VIEW_PLANNING_SCHEDULING], req.body?.status === "active" ? "read" : "update")(req, res, next),
+  planningAndSchedulingController.updateProcessStatus);
 router.get('/process/getPlaningAndSchedulingDateWise/get', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), planningAndSchedulingController.getPlaningAndSchedulingDateWise);
 router.get('/planing/downtime-reasons', authController.authenticateToken, planningAndSchedulingController.getDowntimeReasons);
 
@@ -546,17 +640,29 @@ router.get('/esim-make/view', authController.authenticateToken, authController.a
 router.put('/esim-make/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "update"), esimMakeController.update);
 router.delete('/esim-make/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_MAKES, "delete"), esimMakeController.delete);
 
+// Also used by the ESIM Make add/edit form's Manufacturer select.
+router.get('/rs232-command-master/manufacturers', authController.authenticateToken, authController.authorize([MODULE_KEYS.RS232_MASTER_MANAGE, MODULE_KEYS.ESIM_MASTER_MAKES], "read"), rs232CommandMasterController.listManufacturers);
+router.post('/rs232-command-master/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "create"), rs232CommandMasterController.create);
+router.get('/rs232-command-master/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "read"), rs232CommandMasterController.view);
+router.put('/rs232-command-master/update/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "update"), rs232CommandMasterController.update);
+router.delete('/rs232-command-master/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.RS232_MASTER_MANAGE, "delete"), rs232CommandMasterController.delete);
+
 // Engineering — approve auto-created products from POs (activate + inventory).
 router.get('/engineering/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringList);
 router.get('/engineering/purchase-orders/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringDetail);
+router.get('/engineering/purchase-orders/:id/serial-plan', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "read"), purchaseOrderController.engineeringSerialPlan);
+router.put('/engineering/purchase-orders/:id/create-process', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringCreateProcess);
 router.put('/engineering/purchase-orders/:id/approve', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringApprove);
 router.put('/engineering/purchase-orders/:id/hold', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringHold);
 router.put('/engineering/purchase-orders/:id/resume', authController.authenticateToken, authController.authorize(MODULE_KEYS.ENGINEERING_APPROVALS, "update"), purchaseOrderController.engineeringResumeFromHold);
+router.get('/production-queue/purchase-orders', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCTION_QUEUE, "read"), purchaseOrderController.productionQueueList);
+router.put('/production-queue/purchase-orders/:id/set-pid', authController.authenticateToken, authController.authorize(MODULE_KEYS.PRODUCTION_QUEUE, "update"), purchaseOrderController.productionQueueSetPid);
 
 // Slug Management — maps ${slug} tokens in testing plans to PO fields.
 router.get('/slug-mapping/view', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), slugMappingController.view);
 router.post('/slug-mapping/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "create"), slugMappingController.create);
 router.delete('/slug-mapping/delete/:id', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "delete"), slugMappingController.delete);
+router.get('/slug-mapping/configuration-field-hints', authController.authenticateToken, authController.authorize(MODULE_KEYS.SLUG_MANAGEMENT, "read"), purchaseOrderController.configurationFieldHints);
 
 router.post('/esim-profile/create', authController.authenticateToken, authController.authorize(MODULE_KEYS.ESIM_MASTER_PROFILES, "create"), esimProfileController.create);
 // Also hit by the operator portal's jig ESIM Settings Validation flow (viewEsimProfiles()),

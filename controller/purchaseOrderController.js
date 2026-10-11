@@ -1,4 +1,22 @@
 const PurchaseOrder = require("../models/PurchaseOrder");
+const SkuRequest = require("../models/SkuRequest");
+
+/**
+ * Customer identity (name/email/mobile) is Sales & Accounts information — PPC
+ * only needs to know a PO exists and its dispatch-relevant details, not who
+ * raised it. Redact in place for PPC's views; role and cpanelUserId are kept.
+ */
+function redactCustomer(rows) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  list.forEach((row) => {
+    if (row && row.raisedBy) {
+      row.raisedBy.name = "";
+      row.raisedBy.email = "";
+      row.raisedBy.mobile = "";
+    }
+  });
+  return rows;
+}
 const Sequence = require("../models/Sequence");
 const EsimMake = require("../models/EsimMake");
 const EsimProfile = require("../models/EsimProfile");
@@ -7,22 +25,30 @@ const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
 const SlugMapping = require("../models/slugMapping");
 const { createProductFromPO, resolveProductCategory } = require("../services/poProductService");
+const poAcc = require("../services/poAccessoryService");
 const { resolveTestingPlan } = require("../services/slugResolver");
 const { createInventoryForProduct } = require("../services/inventoryService");
+const ProcessModel = require("../models/process");
 
 /**
- * The testing plan to apply for a PO: the product's own stages if it already has
- * them, else the mapped category's testing plan resolved against the PO (${slug}).
+ * The testing plan to preview/apply for a PO, with ${slug} tokens resolved
+ * against this PO's own data using whatever SlugMapping docs are active RIGHT
+ * NOW (not frozen at product-creation time - see poProductService.js). Prefers
+ * the product's own stages (its category's plan at creation), falling back to
+ * re-resolving the category's current plan if the product has none yet.
  */
 async function resolvedPlanForPo(po, product) {
-  if (product && Array.isArray(product.stages) && product.stages.length) return product.stages;
-  const cat = await resolveProductCategory(po);
-  if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
-    const slugMaps = await SlugMapping.find({ isActive: true }).lean();
-    const poObj = typeof po.toObject === "function" ? po.toObject() : po;
-    return resolveTestingPlan(cat.testingPlan, poObj, slugMaps);
+  let rawStages = product && Array.isArray(product.stages) && product.stages.length ? product.stages : null;
+  if (!rawStages) {
+    const cat = await resolveProductCategory(po);
+    if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
+      rawStages = cat.testingPlan;
+    }
   }
-  return [];
+  if (!rawStages || !rawStages.length) return [];
+  const slugMaps = await SlugMapping.find({ isActive: true }).lean();
+  const poObj = typeof po.toObject === "function" ? po.toObject() : po;
+  return resolveTestingPlan(rawStages, poObj, slugMaps);
 }
 
 const dispatchService = new DispatchService();
@@ -66,7 +92,138 @@ async function nextPoNumber() {
   return `PO-${year}-${String(seq.value).padStart(6, "0")}`;
 }
 
+/**
+ * Atomic, gap-free Process ID: PRC-YYYY-000123. processID is otherwise a
+ * free-typed field with no consistent format across existing records (see
+ * process.js) - this generator is only used for POs auto-creating their
+ * Process on Engineering approval, so it's a clean new namespace that can't
+ * collide with any manually-typed processID.
+ */
+async function nextProcessId() {
+  const year = new Date().getFullYear();
+  const seq = await Sequence.findOneAndUpdate(
+    { name: "auto_process_id" },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true }
+  );
+  return `PRC-${year}-${String(seq.value).padStart(6, "0")}`;
+}
+
+/**
+ * Auto-create the Process for a just-activated product, copying its stages/
+ * commonStages/autoNgEnabled verbatim (same data a human would copy manually
+ * via the Add Process form). Returns the saved Process, or null if one
+ * couldn't be created (caller decides how to handle that without blocking the
+ * approval itself).
+ */
+async function createProcessForApprovedPo(po, product, user = {}) {
+  const processID = await nextProcessId();
+  const name = `${product.name} - ${po.poNumber}`.trim();
+  const process = await new ProcessModel({
+    name,
+    selectedProduct: product._id,
+    orderConfirmationNo: po.ocNumber || po.poNumber || "",
+    processID,
+    quantity: String(po.requiredQuantity ?? ""),
+    stages: product.stages || [],
+    commonStages: product.commonStages || [],
+    autoNgEnabled: !!product.autoNgEnabled,
+    createdBy: user.id || user._id || null,
+    department: user.department || "",
+  }).save();
+  return process;
+}
+
 const VALID_RECHARGE = ["1_year", "2_year"];
+
+// A fulfilment claim older than this belongs to a request that died mid-way.
+const PO_LOCK_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Atomically claim a PO for a fulfilment step. Returns the claimed document,
+ * or null when another request holds the claim or the PO no longer matches
+ * `extraFilter` (e.g. its state moved on). Pair with releasePoLock().
+ */
+async function claimPoLock(id, extraFilter = {}) {
+  const stale = new Date(Date.now() - PO_LOCK_TTL_MS);
+  return PurchaseOrder.findOneAndUpdate(
+    { _id: id, ...extraFilter, $or: [{ "fulfilment.lockedAt": null }, { "fulfilment.lockedAt": { $lt: stale } }] },
+    { $set: { "fulfilment.lockedAt": new Date() } },
+    { new: true }
+  );
+}
+
+function releasePoLock(id) {
+  return PurchaseOrder.updateOne({ _id: id }, { $set: { "fulfilment.lockedAt": null } }).catch((e) =>
+    console.error("releasePoLock error:", e.message)
+  );
+}
+
+/**
+ * Apply requiredQuantity / expectedDeliveryDate from an edit or resubmit body.
+ * Returns an error message for an invalid value instead of silently ignoring
+ * it (which used to answer 200 "updated" while keeping the old quantity).
+ */
+function applyQuantityAndDate(po, b) {
+  if (b.requiredQuantity != null && b.requiredQuantity !== "") {
+    const q = Number(b.requiredQuantity);
+    if (!Number.isInteger(q) || q < 1) return "Required quantity must be a whole number of at least 1.";
+    po.requiredQuantity = q;
+  }
+  if (b.expectedDeliveryDate === null) {
+    po.expectedDeliveryDate = null; // explicitly cleared on the form
+  } else if (b.expectedDeliveryDate) {
+    const d = new Date(b.expectedDeliveryDate);
+    if (Number.isNaN(d.getTime())) return "Expected delivery date is not a valid date.";
+    po.expectedDeliveryDate = d;
+  }
+  return null;
+}
+
+// Sales may still edit an Approved PO only until fulfilment has started —
+// after that the Product/Process/invoice were built from these values.
+function fulfilmentStarted(po) {
+  return !!po.ocNumber || (po.fulfilment?.state && po.fulfilment.state !== "awaiting");
+}
+const VALID_LOGISTICS_PARTY = ["us", "customer"];
+
+/**
+ * Validate + normalize the logistics block CPanel sends. Returns
+ * { logistics, error } — error is a user-facing message when invalid.
+ */
+function buildLogistics(input) {
+  const l = input && typeof input === "object" ? input : {};
+  const managedBy = VALID_LOGISTICS_PARTY.includes(l.managedBy) ? l.managedBy : "us";
+  const ewayBillBy = VALID_LOGISTICS_PARTY.includes(l.ewayBillBy) ? l.ewayBillBy : "us";
+
+  const logistics = {
+    managedBy,
+    deliveryAddress: String(l.deliveryAddress || "").trim(),
+    contactName: String(l.contactName || "").trim(),
+    contactPhone: String(l.contactPhone || "").trim(),
+    deliveryMode: String(l.deliveryMode || "").trim(),
+    insuranceRequired: !!l.insuranceRequired,
+    transporterName: String(l.transporterName || "").trim(),
+    transporterContact: String(l.transporterContact || "").trim(),
+    vehicleNumber: String(l.vehicleNumber || "").trim(),
+    pickupDateTime: l.pickupDateTime ? new Date(l.pickupDateTime) : null,
+    pickupPersonName: String(l.pickupPersonName || "").trim(),
+    ewayBillBy,
+    specialInstructions: String(l.specialInstructions || "").trim(),
+  };
+
+  if (managedBy === "us") {
+    if (!logistics.deliveryAddress || !logistics.contactName || !logistics.contactPhone) {
+      return { logistics: null, error: "Delivery address, contact name and contact phone are required when we manage logistics." };
+    }
+  } else {
+    if (!logistics.transporterName || !logistics.transporterContact || !logistics.vehicleNumber || !logistics.pickupDateTime) {
+      return { logistics: null, error: "Transporter name, transporter contact, vehicle number and pickup date/time are required when the customer manages logistics." };
+    }
+  }
+
+  return { logistics, error: null };
+}
 
 /** GET from GPSCPANEL's MES-integration API using the shared key. */
 async function cpanelGet(path, params) {
@@ -79,6 +236,50 @@ async function cpanelGet(path, params) {
   const r = await fetch(url, { headers: { "x-api-key": process.env.CPANEL_API_KEY || "" } });
   if (!r.ok) throw new Error(`CPanel responded ${r.status}`);
   return r.json();
+}
+
+/**
+ * POs raised before skuCode/serialNumberFormat/cartonType/stickerFormat/
+ * fgBomNumber/tranzactId were captured at PO-creation time have none of them
+ * stored. Best-effort fill for DISPLAY ONLY (mutates the given lean objects,
+ * never persisted) by matching each one back to the approved SKU it was
+ * almost certainly raised against — one batched query for the whole list.
+ */
+async function fillMissingSkuSnapshot(pos) {
+  const missing = (pos || []).filter((po) => !po.skuCode && !po.fgBomNumber && !po.serialNumberFormat);
+  if (!missing.length) return;
+
+  const orClauses = missing
+    .filter((po) => po.raisedBy?.cpanelUserId && po.deviceCategory?.id && po.firmware?.id)
+    .map((po) => ({
+      "raisedBy.cpanelUserId": po.raisedBy.cpanelUserId,
+      "deviceCategory.id": po.deviceCategory.id,
+      "firmware.id": po.firmware.id,
+      modelName: po.modelName || "",
+      vendorId: po.vendorId || "",
+      status: "Completed",
+    }));
+  if (!orClauses.length) return;
+
+  const skus = await SkuRequest.find({ $or: orClauses })
+    .select("raisedBy.cpanelUserId deviceCategory.id firmware.id modelName vendorId skuCode serialNumberFormat cartonType stickerFormat fgBomNumber tranzactId createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const keyOf = (o) => [o.raisedBy?.cpanelUserId, o.deviceCategory?.id, o.firmware?.id, o.modelName || "", o.vendorId || ""].join("|");
+  const byKey = {};
+  skus.forEach((s) => { const k = keyOf(s); if (!byKey[k]) byKey[k] = s; }); // first = most recent (sorted desc)
+
+  missing.forEach((po) => {
+    const sku = byKey[keyOf(po)];
+    if (!sku) return;
+    po.skuCode = sku.skuCode || "";
+    po.serialNumberFormat = sku.serialNumberFormat || "";
+    po.cartonType = sku.cartonType || "";
+    po.stickerFormat = sku.stickerFormat || { id: null, name: "" };
+    po.fgBomNumber = sku.fgBomNumber || "";
+    po.tranzactId = sku.tranzactId || "";
+  });
 }
 
 module.exports = {
@@ -94,12 +295,72 @@ module.exports = {
       const requiredQuantity = parseInt(b.requiredQuantity, 10);
       const esimRechargePeriod = String(b.esimRechargePeriod || "").trim();
 
+      // Defense-in-depth: CPanel already gates PO creation on KYC approval,
+      // but MES re-checks so the integration endpoint can't be used to bypass it.
+      if (b.kycApproved !== true) {
+        return res.status(403).json({ status: 403, message: "Customer KYC is not approved. Cannot raise a Purchase Order." });
+      }
+
+      // A PO inherits its eSIM fields straight from the SKU it's raised
+      // against — a Device Category with no eSIM at all has none of them set
+      // (make/profile1/profile2/rechargePeriod all blank), so a recharge
+      // period is only required when there's actually eSIM data to go with it.
+      const hasEsimData = Boolean(
+        String(b.esim?.make || "").trim() ||
+        String(b.esim?.profile1 || "").trim() ||
+        String(b.esim?.profile2 || "").trim() ||
+        esimRechargePeriod
+      );
+      // Recharge period only applies to a JSD-managed eSIM (same rule as the
+      // SKU): a customer-supplied eSIM isn't recharged through JSD. The provider
+      // comes with the request, or from the SKU the PO is raised against.
+      let esimProvider = String(b.esim?.provider || "").trim();
+      if (!esimProvider && hasEsimData && String(b.skuCode || "").trim()) {
+        const sku = await SkuRequest.findOne({ skuCode: String(b.skuCode).trim() }).select("esim.provider").lean();
+        esimProvider = String(sku?.esim?.provider || "").trim();
+      }
+      const needsRecharge = hasEsimData && esimProvider !== "customer";
+      // A PO is raised against a SKU NPD has completed — with its FG BOM Number
+      // and Tranzact ID (taken from the SKU, not the request).
+      let skuDoc = null;
+      if (String(b.skuCode || "").trim()) {
+        skuDoc = await SkuRequest.findOne({ skuCode: String(b.skuCode).trim() }).select("status fgBomNumber tranzactId esim.provider").lean();
+        if (!skuDoc) return res.status(400).json({ status: 400, message: `SKU ${b.skuCode} was not found in MES.` });
+        if (skuDoc.status !== "Completed") return res.status(409).json({ status: 409, message: `SKU ${b.skuCode} isn't approved by NPD yet.` });
+        const missingRefs = [!String(skuDoc.fgBomNumber || "").trim() && "FG BOM Number", !String(skuDoc.tranzactId || "").trim() && "Tranzact ID"].filter(Boolean);
+        if (missingRefs.length) {
+          return res.status(409).json({ status: 409, message: `SKU ${b.skuCode} is missing its ${missingRefs.join(" and ")} — NPD must add them before a PO can be raised.` });
+        }
+        if (!esimProvider) esimProvider = String(skuDoc.esim?.provider || "").trim();
+      }
       // modelName is optional — a PO can be raised without a configured model.
-      if (!VALID_RECHARGE.includes(esimRechargePeriod)) {
+      if (needsRecharge && !VALID_RECHARGE.includes(esimRechargePeriod)) {
+        return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
+      }
+      if (!needsRecharge && esimRechargePeriod && !VALID_RECHARGE.includes(esimRechargePeriod)) {
         return res.status(400).json({ status: 400, message: "esimRechargePeriod must be 1_year or 2_year." });
       }
       if (!Number.isInteger(requiredQuantity) || requiredQuantity < 1) {
         return res.status(400).json({ status: 400, message: "requiredQuantity must be a positive integer." });
+      }
+
+      const { logistics, error: logisticsError } = buildLogistics(b.logistics);
+      if (logisticsError) {
+        return res.status(400).json({ status: 400, message: logisticsError });
+      }
+
+      // Accessories: validated against the Product Category mapping BEFORE a
+      // PO number is consumed (the mapping is authoritative, not the client).
+      let accessories = [];
+      try {
+        accessories = await poAcc.buildPoAccessories(
+          { id: b.deviceCategory?.id ?? null, name: b.deviceCategory?.name || "" },
+          b.accessories,
+          requiredQuantity
+        );
+      } catch (accErr) {
+        if (accErr.status) return res.status(accErr.status).json({ status: accErr.status, message: accErr.message });
+        throw accErr;
       }
 
       const poNumber = await nextPoNumber();
@@ -117,24 +378,42 @@ module.exports = {
         },
         deviceCategory: { id: b.deviceCategory?.id ?? null, name: b.deviceCategory?.name || "" },
         esim: {
+          provider: ["jsd", "customer"].includes(esimProvider) ? esimProvider : "",
           make: b.esim?.make || "",
           profile1: b.esim?.profile1 || "",
           profile2: b.esim?.profile2 || "",
         },
-        esimRechargePeriod,
+        esimRechargePeriod: needsRecharge ? esimRechargePeriod : "",
+        raisedByActual: {
+          cpanelUserId: Number.isFinite(Number(b.raisedByActual?.cpanelUserId)) ? Number(b.raisedByActual.cpanelUserId) : null,
+          name: String(b.raisedByActual?.name || ""),
+          role: String(b.raisedByActual?.role || ""),
+        },
         firmware: { id: b.firmware?.id ?? null, name: b.firmware?.name || "" },
         modelName,
         vendorId: b.vendorId || "",
+        skuCode: b.skuCode || "",
+        serialNumberFormat: b.serialNumberFormat || "",
+        cartonType: b.cartonType || "",
+        stickerFormat: { id: b.stickerFormat?.id ?? null, name: b.stickerFormat?.name || "" },
+        fgBomNumber: skuDoc ? skuDoc.fgBomNumber || "" : b.fgBomNumber || "",
+        tranzactId: skuDoc ? skuDoc.tranzactId || "" : b.tranzactId || "",
         configuration: b.configuration && typeof b.configuration === "object" ? b.configuration : {},
         expectedDeliveryDate: b.expectedDeliveryDate ? new Date(b.expectedDeliveryDate) : null,
         requiredQuantity,
+        logistics,
+        accessories,
         status: "Pending",
         statusHistory: [
           {
             fromStatus: null,
             toStatus: "Pending",
             actorType: "cpanel",
-            changedByName: raisedBy.name || "",
+            // An admin raising it for the customer is named as the one who did it.
+            changedByName:
+              b.raisedByActual?.name && Number(b.raisedByActual?.cpanelUserId) !== Number(raisedBy.cpanelUserId)
+                ? `${b.raisedByActual.name} (${b.raisedByActual.role || "admin"}) for ${raisedBy.name || "customer"}`
+                : raisedBy.name || "",
             remarks: "PO raised from GPS CPanel",
             changedAt: new Date(),
           },
@@ -167,10 +446,17 @@ module.exports = {
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
       const filter = {};
-      if (raisedBy && String(role).toLowerCase() !== "admin") {
-        filter["raisedBy.cpanelUserId"] = parseInt(raisedBy, 10);
+      // Only an explicit admin call may list every customer's POs — a missing
+      // raisedBy used to fall through to "no filter" and return them all.
+      if (String(role).toLowerCase() !== "admin") {
+        const uid = parseInt(raisedBy, 10);
+        if (!Number.isInteger(uid) || uid <= 0) {
+          return res.status(400).json({ status: 400, message: "raisedBy is required for a non-admin listing." });
+        }
+        filter["raisedBy.cpanelUserId"] = uid;
       }
-      if (status) filter.status = status;
+      // Plain string only — an object here (?status[$ne]=x) would reach Mongo as an operator.
+      if (typeof status === "string" && status) filter.status = status;
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [
@@ -188,6 +474,7 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+      await fillMissingSkuSnapshot(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -204,6 +491,7 @@ module.exports = {
     try {
       const po = await PurchaseOrder.findById(req.params.id).lean();
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      await fillMissingSkuSnapshot([po]);
       return res.status(200).json({ status: 200, data: po });
     } catch (error) {
       console.error("getForCpanel error:", error);
@@ -229,23 +517,41 @@ module.exports = {
 
       const b = req.body || {};
       if (b.deviceCategory) po.deviceCategory = { id: b.deviceCategory.id ?? null, name: b.deviceCategory.name || "" };
-      if (b.esim) po.esim = { make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
+      if (b.esim) po.esim = { provider: ["jsd", "customer"].includes(b.esim.provider) ? b.esim.provider : po.esim?.provider || "", make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
       if (b.esimRechargePeriod && VALID_RECHARGE.includes(b.esimRechargePeriod)) po.esimRechargePeriod = b.esimRechargePeriod;
       if (b.firmware) po.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
       if (typeof b.modelName === "string") po.modelName = b.modelName;
       if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
-      if (b.expectedDeliveryDate) po.expectedDeliveryDate = new Date(b.expectedDeliveryDate);
-      if (b.requiredQuantity != null) {
-        const q = parseInt(b.requiredQuantity, 10);
-        if (Number.isInteger(q) && q >= 1) po.requiredQuantity = q;
-      }
+      const qtyBefore = po.requiredQuantity;
+      const qtyErr = applyQuantityAndDate(po, b);
+      if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
+      // requiredQty is recomputed after the save, under the PO lock (applyRequiredQty) —
+      // never saved from this unlocked copy, which would overwrite issued/reserved counts.
+      const accQtyChanged = po.requiredQuantity !== qtyBefore && (po.accessories || []).length > 0;
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
+
+      // Delivery / pickup details corrected on resubmit.
+      if (b.logistics) {
+        const { logistics, error: logisticsError } = buildLogistics(b.logistics);
+        if (logisticsError) return res.status(400).json({ status: 400, message: logisticsError });
+        po.logistics = logistics;
+      }
 
       const prev = po.status;
       po.status = "Pending";
       po.resubmissionAllowed = false; // consumed
       po.approvedBy = { userId: null, name: "" };
       po.approvedAt = null;
+      // A resubmitted PO starts the whole review again — clear everything the
+      // previous round's PPC / Accounts steps left behind, or it shows stale
+      // dispatch dates, lands in the wrong tabs, and a leftover ocNumber makes
+      // the next OC link a "rename" that never creates the Product.
+      po.ppcDispatchDate = null;
+      po.ppcReviewedAt = null;
+      po.ppcReviewedBy = { userId: null, name: "" };
+      po.ocNumber = "";
+      po.fulfilment = { state: "awaiting" };
+      po.salesRemarks = "";
       po.statusHistory.push({
         fromStatus: prev,
         toStatus: "Pending",
@@ -255,7 +561,10 @@ module.exports = {
         changedAt: new Date(),
       });
 
-      const saved = await po.save();
+      let saved = await po.save();
+      if (accQtyChanged) {
+        try { saved = (await poAcc.applyRequiredQty(saved._id)) || saved; } catch (accErr) { console.error("purchaseOrder resubmit accessory requiredQty error:", accErr); }
+      }
       return res.status(200).json({ status: 200, message: "Purchase Order resubmitted for approval.", po_number: saved.poNumber, id: saved._id, data: saved });
     } catch (error) {
       console.error("resubmitFromCpanel error:", error);
@@ -281,6 +590,46 @@ module.exports = {
       return res.status(200).json({ status: 200, makes, profiles: flatProfiles });
     } catch (error) {
       console.error("esimOptions error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * Dynamic "PO Field (source)" suggestions for Slug Management, derived from
+   * the actual configuration.schema snapshots already stored on Purchase Orders
+   * - each device category defines its own custom fields in GPSCPANEL (frozen
+   * onto the PO at creation time as configuration.schema/configuration.values),
+   * so there's no single fixed schema MES owns to hardcode; this aggregates the
+   * distinct field keys that have genuinely appeared across real POs instead.
+   */
+  configurationFieldHints: async (req, res) => {
+    try {
+      const docs = await PurchaseOrder.find({ "configuration.schema.0": { $exists: true } })
+        .select("configuration.schema")
+        .lean();
+
+      const normalizeKey = (key) =>
+        String(key || "")
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, "_");
+
+      const byValue = new Map();
+      docs.forEach((po) => {
+        (po.configuration?.schema || []).forEach((field) => {
+          const norm = normalizeKey(field?.key);
+          if (!norm) return;
+          const value = `configuration.values.${norm}.value`;
+          if (!byValue.has(value)) {
+            byValue.set(value, { label: `Config: ${field.key}`, value });
+          }
+        });
+      });
+
+      const hints = Array.from(byValue.values()).sort((a, b) => a.label.localeCompare(b.label));
+      return res.status(200).json({ status: 200, hints });
+    } catch (error) {
+      console.error("configurationFieldHints error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
   },
@@ -329,17 +678,26 @@ module.exports = {
   listForAccounts: async (req, res) => {
     try {
       const { search } = req.query;
-      const view = req.query.view === "cancelled" ? "cancelled" : "approved";
+      const view = req.query.view === "ocCreated" ? "ocCreated" : "pendingOc";
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
-      const filter = view === "cancelled"
-        ? { status: "Rejected", "statusHistory.toStatus": "Approved" }
-        : { status: "Approved" };
+      // Both tabs are Approved POs — the split is purely on whether an OC
+      // number has been linked yet, not on PO status. Cancelled (Rejected)
+      // POs are no longer surfaced here at all.
+      // A handful of legacy POs predate the ocNumber field entirely (missing,
+      // not just empty) — treat "missing" the same as "" on both sides.
+      const filter = { status: "Approved" };
+      const andClauses = [
+        view === "ocCreated"
+          ? { ocNumber: { $exists: true, $ne: "" } }
+          : { $or: [{ ocNumber: { $exists: false } }, { ocNumber: "" }] },
+      ];
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }];
+        andClauses.push({ $or: [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }] });
       }
+      filter.$and = andClauses;
 
       const total = await PurchaseOrder.countDocuments(filter);
       const data = await PurchaseOrder.find(filter)
@@ -349,7 +707,7 @@ module.exports = {
         .lean();
 
       // Attach available finished-goods stock per model (one carton fetch for the page).
-      if (view === "approved" && data.length) {
+      if (view === "pendingOc" && data.length) {
         try {
           const readyCartons = await dispatchService.getReadyCartons();
           const stockByModel = new Map();
@@ -379,56 +737,102 @@ module.exports = {
    * back so the Accounts view can show which OC each approved PO produced.
    */
   setOcNumber: async (req, res) => {
+    let claimed = false;
     try {
       const oc = String(req.body?.ocNumber || "").trim();
       if (!oc) {
         return res.status(400).json({ status: 400, message: "OC number is required." });
       }
-      const po = await PurchaseOrder.findById(req.params.id);
+      let po = await PurchaseOrder.findById(req.params.id);
       if (!po) {
         return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       }
       if (po.status !== "Approved") {
         return res.status(409).json({ status: 409, message: `An OC number can only be linked to an Approved PO (this one is ${po.status}).` });
       }
+
+      // A PO already carrying an OC number (i.e. this is Accounts correcting a
+      // typo, not the initial link) must NOT re-run product auto-creation —
+      // doing so would spawn a second Product/Process and orphan the first,
+      // regardless of how far fulfilment has already progressed.
+      const isRename = !!po.ocNumber;
+      // OC already linked but product auto-creation failed (state oc_raised, no
+      // product): linking again retries the product creation instead of being
+      // treated as a rename — otherwise the PO could never reach Engineering.
+      const retryProduct = isRename && po.fulfilment?.state === "oc_raised" && !po.fulfilment?.productId;
+      if (retryProduct) {
+        po = await claimPoLock(req.params.id, { status: "Approved", "fulfilment.state": "oc_raised", "fulfilment.productId": null });
+        if (!po) {
+          return res.status(409).json({ status: 409, message: "This PO is already being processed — refresh and try again." });
+        }
+        claimed = true;
+      }
+
+      if (!isRename) {
+        // First link only from the undecided state (or after a failed product
+        // auto-creation) — never on a PO already fulfilled from stock.
+        const linkable = ["awaiting", "oc_raised"];
+        if (!linkable.includes(po.fulfilment?.state || "awaiting")) {
+          return res.status(409).json({ status: 409, message: `An OC can't be linked to this PO — it is already ${po.fulfilment.state}.` });
+        }
+        // Claim it so a double click can't auto-create two Products.
+        po = await claimPoLock(req.params.id, { status: "Approved", ocNumber: { $in: ["", null] }, "fulfilment.state": { $in: [...linkable, null] } });
+        if (!po) {
+          return res.status(409).json({ status: 409, message: "This PO is already being processed — refresh and try again." });
+        }
+        claimed = true;
+      }
+
       po.ocNumber = oc;
       po.fulfilment = po.fulfilment || {};
-      po.fulfilment.decidedAt = new Date();
+      if (!isRename) {
+        po.fulfilment.decidedAt = new Date();
+      }
       po.statusHistory.push({
         fromStatus: po.status,
         toStatus: po.status,
         actorType: "mes",
         changedBy: req.user?._id || null,
         changedByName: req.user?.name || req.user?.email || "",
-        remarks: `OC number ${oc} linked by Accounts`,
+        remarks: retryProduct ? `OC number ${oc} linked again — retrying product creation` : isRename ? `OC number corrected to ${oc}` : `OC number ${oc} linked by Accounts`,
         changedAt: new Date(),
       });
+      // A corrected OC number must reach the Process too (dispatch looks models up by it).
+      if (isRename && po.fulfilment?.processId) {
+        await ProcessModel.updateOne({ _id: po.fulfilment.processId }, { $set: { orderConfirmationNo: oc } }).catch((e) =>
+          console.error("setOcNumber process OC sync error:", e.message)
+        );
+      }
 
       // OC raised → auto-create the Product from the PO and move to Engineering.
       // Product creation must not break OC linking, so fall back to oc_raised on error.
       let productNote = "";
-      try {
-        const product = await createProductFromPO(po, req.user || {});
-        productNote = ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
-        po.statusHistory.push({
-          fromStatus: po.status,
-          toStatus: po.status,
-          actorType: "mes",
-          changedByName: req.user?.name || req.user?.email || "system",
-          remarks: `Auto-created product "${product.name}" from PO → Engineering pending approval`,
-          changedAt: new Date(),
-        });
-      } catch (prodErr) {
-        console.error("createProductFromPO failed:", prodErr.message);
-        po.fulfilment.state = "oc_raised";
-        productNote = " (product auto-creation skipped: " + prodErr.message + ")";
+      if (!isRename || retryProduct) {
+        try {
+          const product = await createProductFromPO(po, req.user || {});
+          productNote = ` Product "${po.fulfilment.productName}" created (draft) → Engineering pending.`;
+          po.statusHistory.push({
+            fromStatus: po.status,
+            toStatus: po.status,
+            actorType: "mes",
+            changedByName: req.user?.name || req.user?.email || "system",
+            remarks: `Auto-created product "${product.name}" from PO → Engineering pending approval`,
+            changedAt: new Date(),
+          });
+        } catch (prodErr) {
+          console.error("createProductFromPO failed:", prodErr.message);
+          po.fulfilment.state = "oc_raised";
+          productNote = " (product auto-creation skipped: " + prodErr.message + ")";
+        }
       }
 
       const saved = await po.save();
-      return res.status(200).json({ status: 200, message: "OC number linked to Purchase Order." + productNote, data: saved });
+      return res.status(200).json({ status: 200, message: (isRename && !retryProduct ? "OC number updated." : "OC number linked to Purchase Order.") + productNote, data: saved });
     } catch (error) {
       console.error("purchaseOrder setOcNumber error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -455,13 +859,17 @@ module.exports = {
    * it invoiced (it now appears in the Store/dispatch queue).
    */
   createInvoiceForAccounts: async (req, res) => {
+    let claimed = false;
     try {
       const b = req.body || {};
       const invoiceNumber = String(b.invoiceNumber || "").trim();
       if (!invoiceNumber) return res.status(400).json({ status: 400, message: "Invoice number is required." });
       if (!b.dispatchDate) return res.status(400).json({ status: 400, message: "Dispatch date is required." });
+      if (Number.isNaN(new Date(b.dispatchDate).getTime())) {
+        return res.status(400).json({ status: 400, message: "Dispatch date is not a valid date." });
+      }
 
-      const po = await PurchaseOrder.findById(req.params.id);
+      let po = await PurchaseOrder.findById(req.params.id);
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       if (po.status !== "Approved") {
         return res.status(409).json({ status: 409, message: `An invoice can only be raised for an Approved PO (this one is ${po.status}).` });
@@ -469,6 +877,17 @@ module.exports = {
       if (po.fulfilment?.state === "invoiced" || po.fulfilment?.state === "dispatched") {
         return res.status(409).json({ status: 409, message: "This PO has already been invoiced." });
       }
+      // Stock invoicing is the alternative to the OC route — once an OC is
+      // linked (Product/Engineering/Production under way) it can't also be
+      // invoiced from stock, or it would silently drop out of those queues.
+      if (po.ocNumber || (po.fulfilment?.state && po.fulfilment.state !== "awaiting")) {
+        return res.status(409).json({ status: 409, message: `This PO is already on the OC route (${po.fulfilment?.state || "oc linked"}) — it can't be invoiced from stock.` });
+      }
+      po = await claimPoLock(req.params.id, { status: "Approved", ocNumber: { $in: ["", null] }, "fulfilment.state": { $in: ["awaiting", null] } });
+      if (!po) {
+        return res.status(409).json({ status: 409, message: "This PO is already being processed — refresh and try again." });
+      }
+      claimed = true;
 
       const required = Number(po.requiredQuantity || 0);
       const { available, cartons } = await modelStock(po.modelName);
@@ -513,11 +932,18 @@ module.exports = {
       });
       await po.save();
 
-      return res.status(200).json({ status: 200, message: "Invoice created and order moved to the store for dispatch.", data: { invoice, po } });
+      // Warn (not block) when tracked accessories for this PO aren't in hand.
+      const accessoryShortage = poAcc.shortageOf(po);
+      const shortNote = accessoryShortage.length
+        ? ` Note: accessories not yet issued/reserved — ${accessoryShortage.map((x) => `${x.name} (${x.short})`).join(", ")}.`
+        : "";
+      return res.status(200).json({ status: 200, message: `Invoice created and order moved to the store for dispatch.${shortNote}`, data: { invoice, po, accessoryShortage } });
     } catch (error) {
       const code = error.status || 500;
       console.error("purchaseOrder createInvoiceForAccounts error:", error);
       return res.status(code).json({ status: code, message: error.message || "Internal server error" });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -534,10 +960,17 @@ module.exports = {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
-      const filter = { "fulfilment.state": view };
+      // A successful approval now lands in production_pending (Process
+      // auto-created); engineering_approved only remains when that failed —
+      // the Approved tab must show both, not just the failures.
+      const filter = {
+        "fulfilment.state": view === "engineering_approved" ? { $in: ["engineering_approved", "production_pending"] } : view,
+      };
       if (search) {
+        // No customer-name search — Engineering shouldn't be able to search
+        // by (or infer) customer identity, which is Sales & Accounts information.
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        filter.$or = [{ poNumber: rx }, { modelName: rx }, { "fulfilment.productName": rx }, { "raisedBy.name": rx }];
+        filter.$or = [{ poNumber: rx }, { modelName: rx }, { "fulfilment.productName": rx }];
       }
 
       const total = await PurchaseOrder.countDocuments(filter);
@@ -546,10 +979,95 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+      await fillMissingSkuSnapshot(data);
+      redactCustomer(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
       console.error("engineeringList error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * Production Manager queue: POs whose Process was auto-created on Engineering
+   * approval and is waiting to be planned/scheduled. fulfilment.processId/
+   * processName/productName are already denormalized onto the PO (see
+   * engineeringApprove), so this list needs no extra joins.
+   */
+  productionQueueList: async (req, res) => {
+    try {
+      const { search } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+      const filter = { "fulfilment.state": "production_pending" };
+      if (search) {
+        // No customer-name search — Production Manager shouldn't be able to
+        // search by (or infer) customer identity, which is Sales & Accounts
+        // information.
+        const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [
+          { poNumber: rx },
+          { modelName: rx },
+          { "fulfilment.productName": rx },
+          { "fulfilment.processName": rx },
+        ];
+      }
+
+      const total = await PurchaseOrder.countDocuments(filter);
+      const data = await PurchaseOrder.find(filter)
+        .sort({ "fulfilment.decidedAt": -1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: "fulfilment.processId", select: "processID name quantity status" })
+        .lean();
+      redactCustomer(data);
+
+      return res.status(200).json({ status: 200, data, total, page, limit });
+    } catch (error) {
+      console.error("productionQueueList error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * Production Manager sets the real PID (Process ID) on the auto-created
+   * Process before it can be planned/scheduled. The Process is auto-created
+   * with a system-generated placeholder (PRC-YYYY-NNNNNN, see nextProcessId)
+   * so it satisfies the schema's required processID immediately - this lets
+   * Production Manager overwrite it with their own real identifier.
+   */
+  productionQueueSetPid: async (req, res) => {
+    try {
+      const processID = String(req.body?.processID || "").trim();
+      if (!processID) {
+        return res.status(400).json({ status: 400, message: "PID is required." });
+      }
+      const po = await PurchaseOrder.findById(req.params.id).lean();
+      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      const processId = po.fulfilment?.processId;
+      if (!processId) {
+        return res.status(409).json({ status: 409, message: "No Process linked to this PO." });
+      }
+
+      const duplicate = await ProcessModel.findOne({ processID, _id: { $ne: processId } }).select("_id").lean();
+      if (duplicate) {
+        return res.status(409).json({ status: 409, message: `PID "${processID}" is already used by another process.` });
+      }
+
+      const updatedProcess = await ProcessModel.findByIdAndUpdate(
+        processId,
+        { processID },
+        { new: true, runValidators: true }
+      ).lean();
+      if (!updatedProcess) {
+        return res.status(404).json({ status: 404, message: "Linked process not found." });
+      }
+
+      return res.status(200).json({ status: 200, message: "PID updated.", data: { process: updatedProcess } });
+    } catch (error) {
+      console.error("productionQueueSetPid error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
     }
   },
@@ -559,15 +1077,21 @@ module.exports = {
     try {
       const po = await PurchaseOrder.findById(req.params.id).lean();
       if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      await fillMissingSkuSnapshot([po]);
+      redactCustomer(po);
       let product = null;
       if (po.fulfilment?.productId) {
         product = await Product.findById(po.fulfilment.productId).lean();
       }
-      // Show the effective plan: product's own, else the category plan resolved
-      // against the PO (so a plan added after product creation is previewed).
+      // Show the effective plan, always LIVE-resolved against current
+      // SlugMapping docs (product.stages stores the raw ${slug} template, not a
+      // frozen snapshot - see poProductService.js) so this preview reflects any
+      // slug correction made after the product was created, not just at
+      // creation time. Falls back to the category's plan if the product has
+      // none yet (e.g. category plan was added after product creation).
       const productHadPlan = !!(product && Array.isArray(product.stages) && product.stages.length);
       const plan = await resolvedPlanForPo(po, product);
-      if (product && !productHadPlan) product = { ...product, stages: plan };
+      if (product) product = { ...product, stages: plan };
       return res.status(200).json({ status: 200, data: { po, product, planFromCategory: !productHadPlan && plan.length > 0 } });
     } catch (error) {
       console.error("engineeringDetail error:", error);
@@ -577,12 +1101,30 @@ module.exports = {
 
   /** Engineering approves the auto-created product → activate it + create inventory. */
   engineeringApprove: async (req, res) => {
+    let claimed = false;
     try {
-      const po = await PurchaseOrder.findById(req.params.id);
-      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
-      if (po.fulfilment?.state !== "engineering_pending" && po.fulfilment?.state !== "engineering_hold") {
-        return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${po.fulfilment?.state}).` });
+      const found = await PurchaseOrder.findById(req.params.id);
+      if (!found) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      if (found.fulfilment?.state !== "engineering_pending" && found.fulfilment?.state !== "engineering_hold") {
+        return res.status(409).json({ status: 409, message: `PO is not pending engineering approval (state: ${found.fulfilment?.state}).` });
       }
+      // Claim it so a concurrent approval can't create a second Process.
+      // Device serials: generate with the confirmed format (default: the SKU's),
+      // or skip for now. A bad format is refused before anything is activated.
+      const serialOpt = req.body?.serials || {};
+      let serialOverride = null;
+      if (!serialOpt.skip && serialOpt.format) {
+        try {
+          serialOverride = require("../services/deviceSerialFormatSync").readCustomPattern(serialOpt.format);
+        } catch (fmtErr) {
+          return res.status(400).json({ status: 400, message: fmtErr.message });
+        }
+      }
+      const po = await claimPoLock(req.params.id, { "fulfilment.state": { $in: ["engineering_pending", "engineering_hold"] } });
+      if (!po) {
+        return res.status(409).json({ status: 409, message: "This PO is already being approved by someone else — refresh and try again." });
+      }
+      claimed = true;
       const productId = po.fulfilment?.productId;
       if (!productId) return res.status(409).json({ status: 409, message: "No product linked to this PO." });
 
@@ -590,10 +1132,27 @@ module.exports = {
       if (!product) return res.status(404).json({ status: 404, message: "Linked product not found." });
 
       // If the product has no testing plan (e.g. the category plan was added after
-      // the product was auto-created), apply the resolved category plan now.
+      // the product was auto-created), backfill it with the category's RAW plan -
+      // NOT the resolved one. This is a save path: persisting resolvedPlanForPo's
+      // output here would bake ${slug} tokens into literal values and freeze this
+      // product exactly like the old behavior, defeating live resolution for it
+      // going forward. Raw ${slug} tokens are harmless if a category has none.
+      // Still following the category (not edited by hand): approve with the
+      // category's CURRENT plan, then freeze it — an approved product no
+      // longer changes when the category plan is edited.
+      // Read the stored flag raw: a product auto-created before the flag existed
+      // has no field (the schema default would say false) and still follows the plan.
+      const storedFlag = (await Product.findById(productId).select("stagesFromCategory").lean())?.stagesFromCategory;
+      if (storedFlag !== false) {
+        const liveCat = await resolveProductCategory(po);
+        if (liveCat && Array.isArray(liveCat.testingPlan) && liveCat.testingPlan.length) product.stages = liveCat.testingPlan;
+        product.stagesFromCategory = false;
+      }
       if (!Array.isArray(product.stages) || !product.stages.length) {
-        const plan = await resolvedPlanForPo(po, product);
-        if (plan.length) product.stages = plan;
+        const backfillCat = await resolveProductCategory(po);
+        if (backfillCat && Array.isArray(backfillCat.testingPlan) && backfillCat.testingPlan.length) {
+          product.stages = backfillCat.testingPlan;
+        }
       }
       // Refuse to activate a product with zero testing stages - that would put a
       // device into production with nothing to validate it against. Engineering
@@ -605,6 +1164,9 @@ module.exports = {
             "This product has no testing plan (0 stages) — configure a testing plan for its category before approving, or pass force to override.",
           code: "NO_TESTING_PLAN",
         });
+      }
+      if (!Array.isArray(product.commonStages) || !product.commonStages.length) {
+        product.commonStages = require("../services/poProductService").DEFAULT_COMMON_STAGES.map((s) => ({ ...s }));
       }
       if (String(product.status || "").toLowerCase() !== "active") {
         product.status = "active";
@@ -622,7 +1184,47 @@ module.exports = {
       // Reuse the existing product→inventory logic.
       await createInventoryForProduct(product, req.user || {});
 
-      po.fulfilment.state = "engineering_approved";
+      // NEW: Auto-create the Process from the now-active product and route the
+      // PO on to Production Manager, instead of stopping at engineering_approved.
+      // Process creation failure must NOT block the approval itself (the
+      // product is already activated with inventory by this point) - it just
+      // falls back to the old resting state so nothing is lost, and the
+      // remark makes the gap visible for a manual Process creation instead.
+      let createdProcess = null;
+      let processCreationError = "";
+      try {
+        createdProcess = await createProcessForApprovedPo(po, product, req.user || {});
+      } catch (procErr) {
+        console.error("createProcessForApprovedPo error:", procErr);
+        processCreationError = procErr.message || String(procErr);
+      }
+
+      if (createdProcess) {
+        po.fulfilment.processId = createdProcess._id;
+        po.fulfilment.processName = createdProcess.name;
+      }
+
+      // Devices + serial numbers for the new Process, from the SKU's serial
+      // format. Like process creation, a failure here never blocks the
+      // approval — Planning can still generate serials by hand.
+      let serialNote = "";
+      let serialResult = null;
+      if (createdProcess && serialOpt.skip) {
+        serialNote = " Device serials not generated (Engineering chose to generate them later from Planning).";
+      } else if (createdProcess) {
+        try {
+          serialResult = await require("../services/deviceSerialAutoGen").generateDevicesForProcess({ po, product, process: createdProcess, format: serialOverride });
+          serialNote = serialResult.created
+            ? ` ${serialResult.created} device serial(s) generated (${serialResult.first}${serialResult.created > 1 ? ` … ${serialResult.last}` : ""}).`
+              + (serialResult.skipped ? ` ${serialResult.skipped} number(s) skipped because they were already in use.` : "")
+              + (serialResult.reason ? ` ${serialResult.reason}` : "")
+            : ` Device serials not auto-generated: ${serialResult.reason}`;
+        } catch (serialErr) {
+          console.error("auto device serial generation error:", serialErr);
+          serialNote = ` Device serial auto-generation failed (${serialErr.message}) — generate them from Planning.`;
+        }
+      }
+      po.fulfilment.state = createdProcess ? "production_pending" : "engineering_approved";
       po.statusHistory.push({
         fromStatus: po.status,
         toStatus: po.status,
@@ -631,15 +1233,115 @@ module.exports = {
         changedByName: req.user?.name || req.user?.email || "",
         remarks: `Engineering approved product "${product.name}"${categoryName ? ` under category "${categoryName}"` : ""} — activated with inventory${
           !product.stages?.length ? " (approved with 0 testing stages, forced)" : ""
+        }${
+          createdProcess
+            ? `. Process "${createdProcess.processID}" auto-created — routed to Production Manager for planning/scheduling.${serialNote}`
+            : `. Process auto-creation failed (${processCreationError || "unknown error"}) — create it manually.`
         }`,
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
-      return res.status(200).json({ status: 200, message: "Product approved and activated with inventory.", data: { po, product } });
+      return res.status(200).json({
+        status: 200,
+        message: createdProcess
+          ? `Product approved, activated with inventory, and Process created — routed to Production Manager.${serialNote}`
+          : "Product approved and activated with inventory. Process auto-creation failed - create it manually.",
+        data: { po, product, process: createdProcess, serials: serialResult },
+      });
     } catch (error) {
       console.error("engineeringApprove error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
+    }
+  },
+
+  /**
+   * GET /engineering/purchase-orders/:id/serial-plan
+   * The device serials approving would generate. Optional query
+   * prefix/suffix/enableZero/noOfZeroRequired previews an edited format.
+   */
+  engineeringSerialPlan: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id).select("poNumber skuCode serialNumberFormat requiredQuantity").lean();
+      if (!po) return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      let override = null;
+      if (req.query.prefix !== undefined) {
+        try {
+          override = require("../services/deviceSerialFormatSync").readCustomPattern(req.query);
+        } catch (fmtErr) {
+          return res.status(200).json({ status: 200, data: { format: null, quantity: po.requiredQuantity, reason: fmtErr.message } });
+        }
+      }
+      const plan = await require("../services/deviceSerialAutoGen").previewForPo({ po, override });
+      return res.status(200).json({ status: 200, data: plan });
+    } catch (error) {
+      console.error("engineeringSerialPlan error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * PUT /engineering/purchase-orders/:id/create-process
+   * The product was approved but Process creation failed (state
+   * engineering_approved): create the Process (+ device serials) now and send
+   * the PO on to Production Manager. Body: same `serials` option as approve.
+   */
+  engineeringCreateProcess: async (req, res) => {
+    let claimed = false;
+    try {
+      const serialOpt = req.body?.serials || {};
+      let serialOverride = null;
+      if (!serialOpt.skip && serialOpt.format) {
+        try {
+          serialOverride = require("../services/deviceSerialFormatSync").readCustomPattern(serialOpt.format);
+        } catch (fmtErr) {
+          return res.status(400).json({ status: 400, message: fmtErr.message });
+        }
+      }
+      const po = await claimPoLock(req.params.id, { "fulfilment.state": "engineering_approved" });
+      if (!po) {
+        const exists = await PurchaseOrder.exists({ _id: req.params.id });
+        return res.status(exists ? 409 : 404).json({ status: exists ? 409 : 404, message: exists ? "This PO isn't waiting for a Process (or is being processed) — refresh." : "Purchase Order not found." });
+      }
+      claimed = true;
+      const product = po.fulfilment?.productId ? await Product.findById(po.fulfilment.productId) : null;
+      if (!product) return res.status(409).json({ status: 409, message: "No product linked to this PO." });
+      if (!Array.isArray(product.commonStages) || !product.commonStages.length) {
+        product.commonStages = require("../services/poProductService").DEFAULT_COMMON_STAGES.map((s) => ({ ...s }));
+        await product.save();
+      }
+      const createdProcess = await createProcessForApprovedPo(po, product, req.user || {});
+      po.fulfilment.processId = createdProcess._id;
+      po.fulfilment.processName = createdProcess.name;
+      po.fulfilment.state = "production_pending";
+      let serialNote = "";
+      if (serialOpt.skip) {
+        serialNote = " Device serials not generated (to be generated from Planning).";
+      } else {
+        try {
+          const r = await require("../services/deviceSerialAutoGen").generateDevicesForProcess({ po, product, process: createdProcess, format: serialOverride });
+          serialNote = r.created ? ` ${r.created} device serial(s) generated (${r.first}${r.created > 1 ? ` … ${r.last}` : ""}).` : ` Device serials not auto-generated: ${r.reason}`;
+        } catch (serialErr) {
+          serialNote = ` Device serial auto-generation failed (${serialErr.message}) — generate them from Planning.`;
+        }
+      }
+      po.statusHistory.push({
+        fromStatus: po.status, toStatus: po.status, actorType: "mes",
+        changedBy: req.user?._id || null, changedByName: req.user?.name || req.user?.email || "",
+        remarks: `Process "${createdProcess.processID}" created by Engineering — routed to Production Manager.${serialNote}`,
+        changedAt: new Date(),
+      });
+      await po.save();
+      redactCustomer(po);
+      return res.status(200).json({ status: 200, message: `Process created — routed to Production Manager.${serialNote}`, data: { po, process: createdProcess } });
+    } catch (error) {
+      console.error("engineeringCreateProcess error:", error);
+      return res.status(500).json({ status: 500, message: "Could not create the Process: " + error.message });
+    } finally {
+      if (claimed) await releasePoLock(req.params.id);
     }
   },
 
@@ -667,6 +1369,7 @@ module.exports = {
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
       return res.status(200).json({ status: 200, message: "PO put on hold.", data: { po } });
     } catch (error) {
@@ -695,6 +1398,7 @@ module.exports = {
         changedAt: new Date(),
       });
       await po.save();
+      redactCustomer(po);
 
       return res.status(200).json({ status: 200, message: "PO moved back to pending.", data: { po } });
     } catch (error) {
@@ -709,8 +1413,16 @@ module.exports = {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
 
+      // Sales's "Pending" tab covers both gates it acts on: the initial
+      // approval (Pending) and the final dispatch-date confirmation
+      // (PendingSalesConfirm) — PendingPpc (with PPC) also surfaces here,
+      // read-only, so Sales can see where each PO currently sits.
       const filter = {};
-      if (status) filter.status = status;
+      if (status === "Pending") {
+        filter.status = { $in: ["Pending", "PendingPpc", "PendingSalesConfirm"] };
+      } else if (status) {
+        filter.status = status;
+      }
       if (search) {
         const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
         filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { "raisedBy.name": rx }];
@@ -722,6 +1434,8 @@ module.exports = {
         .skip((page - 1) * limit)
         .limit(limit)
         .lean();
+
+      await fillMissingSkuSnapshot(data);
 
       return res.status(200).json({ status: 200, data, total, page, limit });
     } catch (error) {
@@ -740,6 +1454,9 @@ module.exports = {
       if (!po) {
         return res.status(404).json({ status: 404, message: "Purchase Order not found." });
       }
+
+      await fillMissingSkuSnapshot([po]);
+
       return res.status(200).json({ status: 200, data: po });
     } catch (error) {
       console.error("purchaseOrder getOne error:", error);
@@ -763,26 +1480,61 @@ module.exports = {
       if (!["Pending", "Approved"].includes(po.status)) {
         return res.status(409).json({ status: 409, message: `A ${po.status} PO cannot be edited.` });
       }
+      // Once Accounts has linked an OC or invoiced it, the Product / Process /
+      // reserved cartons were built from these values — editing now would
+      // change a product mid-production or mismatch the reserved stock.
+      if (fulfilmentStarted(po)) {
+        return res.status(409).json({ status: 409, message: `This PO can no longer be edited — fulfilment is already under way (${po.fulfilment?.state || "OC linked"}).` });
+      }
 
       const b = req.body || {};
-      if (b.deviceCategory) {
-        po.deviceCategory = { id: b.deviceCategory.id ?? po.deviceCategory?.id ?? null, name: b.deviceCategory.name || "" };
+      // A PO raised from a SKU takes its device category, eSIM, firmware, model
+      // and vendor from that SKU (with its serial format, sticker, FG BOM and
+      // accessories) — changing them here would mix two SKUs on one PO.
+      if (po.skuCode) {
+        const differs = [
+          b.deviceCategory && String(b.deviceCategory.name || "") !== String(po.deviceCategory?.name || "") && "device category",
+          b.firmware && String(b.firmware.name || "") !== String(po.firmware?.name || "") && "firmware",
+          typeof b.modelName === "string" && b.modelName !== (po.modelName || "") && "model",
+          typeof b.vendorId === "string" && b.vendorId !== (po.vendorId || "") && "vendor ID",
+          b.esim && ["make", "profile1", "profile2"].some((k) => String(b.esim[k] || "") !== String(po.esim?.[k] || "")) && "eSIM",
+        ].filter(Boolean);
+        if (differs.length) {
+          return res.status(400).json({ status: 400, message: `The ${differs.join(", ")} come from SKU ${po.skuCode} and can't be changed on the PO — raise the PO against the right SKU instead.` });
+        }
+      } else {
+        if (b.deviceCategory) po.deviceCategory = { id: b.deviceCategory.id ?? po.deviceCategory?.id ?? null, name: b.deviceCategory.name || "" };
+        if (b.esim) po.esim = { provider: po.esim?.provider || "", make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
+        if (b.firmware) po.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
+        if (typeof b.modelName === "string") po.modelName = b.modelName;
+        if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
       }
-      if (b.esim) {
-        po.esim = { make: b.esim.make || "", profile1: b.esim.profile1 || "", profile2: b.esim.profile2 || "" };
+      // Recharge period only for a JSD eSIM (older POs: provider from the SKU).
+      let provider = po.esim?.provider || "";
+      if (!provider && po.skuCode) {
+        provider = (await SkuRequest.findOne({ skuCode: po.skuCode }).select("esim.provider").lean())?.esim?.provider || "";
       }
-      if (b.esimRechargePeriod && VALID_RECHARGE.includes(b.esimRechargePeriod)) {
+      if (provider === "customer" || (provider === "" && po.skuCode)) {
+        po.esimRechargePeriod = "";
+      } else if (b.esimRechargePeriod && VALID_RECHARGE.includes(b.esimRechargePeriod)) {
         po.esimRechargePeriod = b.esimRechargePeriod;
       }
-      if (b.firmware) {
-        po.firmware = { id: b.firmware.id ?? null, name: b.firmware.name || "" };
-      }
-      if (typeof b.modelName === "string") po.modelName = b.modelName;
-      if (typeof b.vendorId === "string") po.vendorId = b.vendorId;
-      if (b.expectedDeliveryDate) po.expectedDeliveryDate = new Date(b.expectedDeliveryDate);
-      if (b.requiredQuantity != null) {
-        const q = parseInt(b.requiredQuantity, 10);
-        if (Number.isInteger(q) && q >= 1) po.requiredQuantity = q;
+      const qtyBefore = po.requiredQuantity;
+      const wasApproved = po.status === "Approved";
+      const qtyErr = applyQuantityAndDate(po, b);
+      if (qtyErr) return res.status(400).json({ status: 400, message: qtyErr });
+      // requiredQty is recomputed after the save, under the PO lock (applyRequiredQty) —
+      // never saved from this unlocked copy, which would overwrite issued/reserved counts.
+      const accQtyChanged = po.requiredQuantity !== qtyBefore && (po.accessories || []).length > 0;
+      // PPC planned the dispatch date for the old quantity: a quantity change on
+      // an Approved PO goes back to PPC for a new date (then Sales confirms again).
+      let backToPpc = false;
+      if (wasApproved && po.requiredQuantity !== qtyBefore) {
+        backToPpc = true;
+        po.status = "PendingPpc";
+        po.ppcDispatchDate = null;
+        po.ppcReviewedAt = null;
+        po.ppcReviewedBy = { userId: null, name: "" };
       }
       if (b.configuration && typeof b.configuration === "object") po.configuration = b.configuration;
 
@@ -792,12 +1544,20 @@ module.exports = {
         actorType: "mes",
         changedBy: req.user?._id || null,
         changedByName: req.user?.name || req.user?.email || "",
-        remarks: b.remarks || "PO edited by Sales",
+        remarks: (b.remarks || "PO edited by Sales") + (backToPpc ? ` — quantity changed ${qtyBefore} → ${po.requiredQuantity}, sent back to PPC for a new dispatch date` : ""),
         changedAt: new Date(),
       });
 
-      const saved = await po.save();
-      return res.status(200).json({ status: 200, message: "Purchase Order updated.", data: saved });
+      let saved = await po.save();
+      if (accQtyChanged) {
+        try { saved = (await poAcc.applyRequiredQty(saved._id)) || saved; } catch (accErr) { console.error("purchaseOrder update accessory requiredQty error:", accErr); }
+      }
+      // A quantity change on an Approved PO changes how much it must hold
+      // (sent back to PPC: its reservation is released until it's Approved again).
+      if ((saved.status === "Approved" || backToPpc) && (saved.accessories || []).length) {
+        try { await poAcc.syncReservations(saved._id, req.user); } catch (accErr) { console.error("purchaseOrder update accessory reservation error:", accErr); }
+      }
+      return res.status(200).json({ status: 200, message: backToPpc ? "Purchase Order updated — quantity changed, so it went back to PPC for a new dispatch date." : "Purchase Order updated.", data: saved });
     } catch (error) {
       console.error("purchaseOrder update error:", error);
       return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
@@ -806,9 +1566,11 @@ module.exports = {
 
   /**
    * PUT /purchase-orders/:id/approve  (JWT + PURCHASE_ORDER update)
+   * Sales's first-gate approval — sends the PO to PPC for a dispatch date,
+   * not straight to Approved.
    */
   approve: async (req, res) => {
-    return transition(req, res, "Approved");
+    return transition(req, res, "PendingPpc");
   },
 
   /**
@@ -819,10 +1581,143 @@ module.exports = {
     if (!String(req.body?.remarks || "").trim()) {
       return res.status(400).json({ status: 400, message: "Remarks are required when rejecting a PO." });
     }
-    // Cancellation stays available even after approval (PO may already be with Accounts).
-    return transition(req, res, "Rejected", ["Pending", "Approved"]);
+    // Cancellation stays available even after approval (PO may already be with
+    // Accounts) AND while it's mid-flight between Sales and PPC — otherwise a
+    // PO with PPC or awaiting Sales' final confirm has no way out at all.
+    return transition(req, res, "Rejected", ["Pending", "PendingPpc", "PendingSalesConfirm", "Approved"]);
+  },
+
+  /**
+   * PUT /purchase-orders/:id/confirm-dispatch  (JWT + PURCHASE_ORDER update)
+   * Sales's second gate: confirms the dispatch date PPC set and finalizes
+   * the PO — same terminal "Approved" state Accounts already watches.
+   */
+  confirmDispatch: async (req, res) => {
+    return transition(req, res, "Approved", ["PendingSalesConfirm"]);
+  },
+
+  // ============================== PPC stage ===============================
+
+  /**
+   * GET /ppc/purchase-orders  (JWT + PPC_PURCHASE_ORDERS read)
+   * `view=pending` (default) -> awaiting a dispatch date; `view=done` -> PPC
+   * has already set one (regardless of what Sales/Accounts did since).
+   */
+  ppcList: async (req, res) => {
+    try {
+      const { search, view } = req.query;
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+      const filter = view === "done" ? { ppcReviewedAt: { $ne: null } } : { status: "PendingPpc" };
+      if (search) {
+        // No customer-name search here — PPC shouldn't be able to search by
+        // (or infer) customer identity, which is Sales & Accounts information.
+        const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        filter.$or = [{ poNumber: rx }, { modelName: rx }, { vendorId: rx }, { skuCode: rx }];
+      }
+
+      const total = await PurchaseOrder.countDocuments(filter);
+      const data = await PurchaseOrder.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean();
+      redactCustomer(data);
+
+      return res.status(200).json({ status: 200, data, total, page, limit });
+    } catch (error) {
+      console.error("purchaseOrder ppcList error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * GET /ppc/purchase-orders/:id  (JWT + PPC_PURCHASE_ORDERS read)
+   */
+  ppcGetOne: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id).lean();
+      if (!po) {
+        return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      }
+      redactCustomer(po);
+      return res.status(200).json({ status: 200, data: po });
+    } catch (error) {
+      console.error("purchaseOrder ppcGetOne error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
+  },
+
+  /**
+   * PUT /ppc/purchase-orders/:id/set-dispatch-date  (JWT + PPC_PURCHASE_ORDERS update)
+   * Body: { dispatchDate }. PPC never rejects — this is the only action it
+   * can take, and it always hands the PO back to Sales for final confirmation.
+   */
+  ppcSetDispatchDate: async (req, res) => {
+    try {
+      const po = await PurchaseOrder.findById(req.params.id);
+      if (!po) {
+        return res.status(404).json({ status: 404, message: "Purchase Order not found." });
+      }
+      if (po.status !== "PendingPpc") {
+        return res.status(409).json({ status: 409, message: `PO is ${po.status}; this action is not allowed.` });
+      }
+
+      // Parse as calendar-date components (not `new Date(string)`, which
+      // treats a bare "YYYY-MM-DD" as UTC midnight) and compare against
+      // "today" built the same way — both sides now live in the SAME frame
+      // (the server's local calendar), so no UTC-vs-local mismatch can make
+      // a genuinely upcoming date look like today/yesterday or vice versa.
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(req.body?.dispatchDate || ""));
+      if (!m) {
+        return res.status(400).json({ status: 400, message: "A valid dispatchDate (YYYY-MM-DD) is required." });
+      }
+      const dispatchDate = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (Number.isNaN(dispatchDate.getTime())) {
+        return res.status(400).json({ status: 400, message: "A valid dispatchDate is required." });
+      }
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      if (dispatchDate.getTime() <= startOfToday.getTime()) {
+        return res.status(400).json({ status: 400, message: "Dispatch date must be an upcoming date." });
+      }
+
+      po.ppcDispatchDate = dispatchDate;
+      po.ppcReviewedBy = { userId: req.user?._id || null, name: req.user?.name || req.user?.email || "" };
+      po.ppcReviewedAt = new Date();
+      po.status = "PendingSalesConfirm";
+      po.statusHistory.push({
+        fromStatus: "PendingPpc",
+        toStatus: "PendingSalesConfirm",
+        actorType: "mes",
+        changedBy: req.user?._id || null,
+        changedByName: req.user?.name || req.user?.email || "",
+        remarks: `Estimated dispatch date set: ${m[1]}-${m[2]}-${m[3]}`,
+        changedAt: new Date(),
+      });
+
+      const saved = await po.save();
+      redactCustomer(saved);
+      return res.status(200).json({ status: 200, message: "Dispatch date set and sent back to Sales.", data: saved });
+    } catch (error) {
+      console.error("purchaseOrder ppcSetDispatchDate error:", error);
+      return res.status(500).json({ status: 500, message: "Internal server error", error: error.message });
+    }
   },
 };
+
+// Once fulfilment has reached any of these, a Product and/or Process may
+// already exist (or inventory/invoicing may be underway) — cancelling the PO
+// at this point would orphan that work rather than undo it, so it's blocked.
+const FULFILMENT_LOCKED_STATES = [
+  "engineering_pending",
+  "engineering_hold",
+  "engineering_approved",
+  "production_pending",
+  "invoiced",
+  "dispatched",
+];
 
 /**
  * Shared approve/reject transition with history append.
@@ -837,12 +1732,33 @@ async function transition(req, res, toStatus, allowedFrom = ["Pending"]) {
     if (!allowedFrom.includes(po.status)) {
       return res.status(409).json({ status: 409, message: `PO is ${po.status}; this action is not allowed.` });
     }
+    if (toStatus === "Rejected" && FULFILMENT_LOCKED_STATES.includes(po.fulfilment?.state)) {
+      return res.status(409).json({
+        status: 409,
+        message: `This PO's fulfilment has already progressed (${po.fulfilment.state}) — it can no longer be cancelled here. Manage it through Accounts/Engineering instead.`,
+      });
+    }
+
+    if (toStatus === "Rejected") {
+      const out = (po.accessories || []).filter((l) => (l.issuedQty || 0) - (l.returnedQty || 0) > 0);
+      if (out.length) {
+        return res.status(409).json({
+          status: 409,
+          message: `Accessories issued to this PO are still out (${out.map((l) => `${l.name} × ${(l.issuedQty || 0) - (l.returnedQty || 0)}`).join(", ")}) — return them to the store (PO Accessory Requirements) before cancelling it.`,
+        });
+      }
+    }
 
     const remarks = String(req.body?.remarks || "").trim();
     const fromStatus = po.status;
 
     po.status = toStatus;
-    po.salesRemarks = remarks;
+    // Only overwrite salesRemarks when new remarks were actually given — an
+    // approval/confirm with a blank remarks field shouldn't erase a prior
+    // rejection reason that's otherwise only visible in statusHistory.
+    if (remarks) {
+      po.salesRemarks = remarks;
+    }
     // On rejection, capture whether the customer may edit & resubmit.
     if (toStatus === "Rejected") {
       po.resubmissionAllowed = !!req.body?.resubmissionAllowed;
@@ -864,9 +1780,23 @@ async function transition(req, res, toStatus, allowedFrom = ["Pending"]) {
     });
 
     const saved = await po.save();
+
+    // Accessory stock follows the PO: an Approved PO reserves what it needs,
+    // a Rejected one releases it. A stock shortfall never blocks the status
+    // change — it shows on the PO Accessory Requirements page instead.
+    let accessoryNote = "";
+    if ((toStatus === "Approved" || toStatus === "Rejected") && (saved.accessories || []).length) {
+      try {
+        const notes = await poAcc.syncReservations(saved._id, req.user);
+        if (notes.length) accessoryNote = ` Accessories short: ${notes.join(", ")}.`;
+      } catch (accErr) {
+        console.error("purchaseOrder transition accessory reservation error:", accErr);
+        accessoryNote = " (Accessory reservation could not be updated — retry from PO Accessory Requirements.)";
+      }
+    }
     return res.status(200).json({
       status: 200,
-      message: `Purchase Order ${toStatus.toLowerCase()} successfully.`,
+      message: `Purchase Order ${toStatus.toLowerCase()} successfully.${accessoryNote}`,
       data: saved,
     });
   } catch (error) {

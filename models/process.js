@@ -58,6 +58,7 @@ const processSchema = new mongoose.Schema({
           default: false,
         },
         isPackagingStatus: { type: Boolean, required: false, default: false },
+        requireAccessoryScan: { type: Boolean, required: false, default: false },
         packagingData: {
           packagingType: { type: String, required: false, default: "" },
           cartonLength: { type: Number, required: false, default: 0 },
@@ -162,7 +163,11 @@ const processSchema = new mongoose.Schema({
     {
       stageName: { type: String, required: true },
       managedBy: { type: String, required: false },
-      requiredSkill: { type: String, required: true },
+      // NEW: Not unconditionally required - matches the same relaxation on the
+      // Product model (models/Products.js). Dispatch/Delivery common stages
+      // aren't in active use yet and are copied from the product as-is
+      // (including a blank skill) when a Process is auto-created on PO approval.
+      requiredSkill: { type: String, required: false },
     },
   ],
   dispatchStatus: {

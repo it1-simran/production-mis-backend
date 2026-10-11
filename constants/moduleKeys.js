@@ -35,10 +35,15 @@ const MODULE_KEYS = {
   OC_MANAGEMENT: "oc_management",
 
   ACCOUNTS_PO: "accounts_po_management",
+  ACCOUNTS_KYC: "accounts_kyc_management",
   SLUG_MANAGEMENT: "slug_management",
   ENGINEERING_APPROVALS: "engineering_approvals",
+  PRODUCTION_QUEUE: "production_queue",
+  NPD_SKU_REQUESTS: "npd__sku_requests",
+  SALES_SKU_REQUESTS: "sales__sku_requests",
 
   PURCHASE_ORDER: "purchase_order_management",
+  PPC_PURCHASE_ORDERS: "ppc__purchase_orders",
 
   PROCESS_MANAGEMENT: "process_management",
   VIEW_PROCESS: "process_management__view",
@@ -59,6 +64,7 @@ const MODULE_KEYS = {
   BULK_DELETE_DEVICES: "device_management__bulk_delete",
   DELETION_HISTORY: "device_management__deletion_history",
   FIND_DEVICE: "device_management__find_device",
+  DEVICE_SERIAL_FORMATS: "device_management__serial_formats",
 
   ROOM_MANAGEMENT: "room_management",
   VIEW_ROOMS: "room_management__view",
@@ -119,6 +125,16 @@ const MODULE_KEYS = {
   ESIM_MASTER_MAKES: "esim_master_data__makes",
   ESIM_MASTER_PROFILES: "esim_master_data__profiles",
   ESIM_MASTER_APNS: "esim_master_data__apns",
+
+  // Accessories Management — master, per-category mapping (edited under
+  // Product Category), stock ledger, and PO-wise requirement/issue/return.
+  ACCESSORIES_MANAGEMENT: "accessories_management",
+  ACCESSORY_MASTER: "accessories_management__master",
+  ACCESSORY_STOCK: "accessories_management__stock",
+  ACCESSORY_REQUIREMENTS: "accessories_management__requirements",
+
+  RS232_MASTER_DATA: "rs232_master_data",
+  RS232_MASTER_MANAGE: "rs232_master_data__manage",
 };
 
 module.exports = MODULE_KEYS;

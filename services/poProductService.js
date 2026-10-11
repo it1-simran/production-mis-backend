@@ -1,7 +1,6 @@
 const Product = require("../models/Products");
 const ProductCategory = require("../models/productCategory");
-const SlugMapping = require("../models/slugMapping");
-const { resolveTestingPlan } = require("./slugResolver");
+const { nextProductCode } = require("./productCodeService");
 
 // eSIM provider -> single-letter code for the product name (Airtel→A, BSNL→B, Vi→V).
 const PROVIDER_LETTER = { airtel: "A", bsnl: "B", vi: "V", vodafone: "V", jio: "J" };
@@ -18,6 +17,15 @@ function profilePair(po) {
   const b = providerLetter(po?.esim?.profile2);
   return [a, b].filter(Boolean).join("+");
 }
+
+// PDI / FG to Store seed for products created by the PO path (the product
+// editor's COMMON_STAGE_DEFAULTS); Dispatch/Delivery reserved, left unassigned.
+const DEFAULT_COMMON_STAGES = [
+  { stageName: "PDI", managedBy: "QC", requiredSkill: "PDI" },
+  { stageName: "FG to Store", managedBy: "Store", requiredSkill: "FG to Store" },
+  { stageName: "Dispatch", managedBy: "", requiredSkill: "" },
+  { stageName: "Delivery", managedBy: "", requiredSkill: "" },
+];
 
 function isActiveCategory(cat) {
   return cat && String(cat.status) !== "0" && String(cat.status).toLowerCase() !== "inactive";
@@ -68,17 +76,30 @@ async function createProductFromPO(po, user = {}) {
 
   if (!name) throw new Error("Cannot build product name from PO (missing model/eSIM/category).");
 
-  // Resolve the category testing plan with this PO's own slug values.
-  let stages = [];
-  if (cat && Array.isArray(cat.testingPlan) && cat.testingPlan.length) {
-    const slugMaps = await SlugMapping.find({ isActive: true }).lean();
-    const poObj = typeof po.toObject === "function" ? po.toObject() : po;
-    stages = resolveTestingPlan(cat.testingPlan, poObj, slugMaps);
-  }
+  // NEW: Store the category testing plan RAW (with ${slug} tokens intact)
+  // instead of resolving+freezing it here. Baking slug values in at creation
+  // time meant a later fix in Slug Management (e.g. correcting which PO field
+  // a slug points at) could never reach already-created products - resolution
+  // now happens live at read time (see productController.getProductByID's
+  // resolveSlugs option) against whatever SlugMapping docs are active *now*.
+  const stages = cat && Array.isArray(cat.testingPlan) ? cat.testingPlan : [];
 
+  // NEW: Same PDI/FG to Store defaults as the product editor's
+  // COMMON_STAGE_DEFAULTS (components/product/edit/page.tsx) - a product
+  // created here (the automated PO path) never passes through that UI, so it
+  // needs the same seed applied directly, or it's created with commonStages: []
+  // and both the product editor and any auto-created Process silently inherit
+  // that empty array. Dispatch/Delivery intentionally left unset (not in
+  // active use yet), matching the frontend.
+  const commonStages = DEFAULT_COMMON_STAGES.map((s) => ({ ...s }));
+
+  const productCode = await nextProductCode();
   const product = await new Product({
     name,
+    productCode,
     stages,
+    stagesFromCategory: true, // later edits to the category's testing plan reach it until approval
+    commonStages,
     status: "draft", // Engineering approval activates it (and creates inventory).
     createdBy: user.id || null,
     department: user.department || "",
@@ -95,4 +116,30 @@ async function createProductFromPO(po, user = {}) {
   return product;
 }
 
-module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory };
+/**
+ * The category's testing plan changed: products auto-created from POs that are
+ * still waiting for Engineering (pending / on hold) take the new plan, unless
+ * their stages were edited by hand. Returns how many products were updated.
+ */
+async function syncPendingProductsForCategory(category) {
+  if (!category || !Array.isArray(category.testingPlan)) return 0;
+  const PurchaseOrder = require("../models/PurchaseOrder");
+  const pos = await PurchaseOrder.find({
+    "fulfilment.state": { $in: ["engineering_pending", "engineering_hold"] },
+    "fulfilment.productId": { $ne: null },
+  }).select("deviceCategory fulfilment.productId").lean();
+  const productIds = [];
+  for (const po of pos) {
+    const cat = await resolveProductCategory(po);
+    if (cat && String(cat._id) === String(category._id)) productIds.push(po.fulfilment.productId);
+  }
+  if (!productIds.length) return 0;
+  const r = await Product.updateMany(
+    // Field missing = auto-created before the flag existed: still following the plan.
+    { _id: { $in: productIds }, status: "draft", stagesFromCategory: { $ne: false } },
+    { $set: { stages: category.testingPlan, updatedAt: new Date() } }
+  );
+  return r.modifiedCount || 0;
+}
+
+module.exports = { createProductFromPO, profilePair, providerLetter, resolveProductCategory, syncPendingProductsForCategory, DEFAULT_COMMON_STAGES };

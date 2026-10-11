@@ -10,6 +10,22 @@ const productCategorySchema = new mongoose.Schema({
   testingPlan: { type: mongoose.Schema.Types.Mixed, default: [] },
   // Optional link to a GPSCPANEL device category id, so PO device categories map here.
   deviceCategoryId: { type: Number, default: null },
+  // Accessories offered on POs for this category (Accessories Management).
+  // qtyMode per_device: defaultQty per device × PO quantity; per_po: fixed
+  // quantity for the whole PO. Mandatory ones are always on the PO.
+  accessories: {
+    type: [
+      {
+        _id: false,
+        accessoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Accessory", required: true },
+        mandatory: { type: Boolean, default: false },
+        qtyMode: { type: String, enum: ["per_device", "per_po"], default: "per_device" },
+        defaultQty: { type: Number, default: 1, min: 1 },
+        allowQtyChange: { type: Boolean, default: false },
+      },
+    ],
+    default: [],
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",

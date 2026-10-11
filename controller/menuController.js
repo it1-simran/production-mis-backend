@@ -218,7 +218,6 @@ module.exports = {
           moduleKey: "ng_devices",
           children: [
             { label: "View NG Devices", route: "/ng-devices", moduleKey: "ng_devices__view" },
-            { label: "NG Issue Master", route: "/ng-issue-master/view", moduleKey: "ng_devices__issue_master" },
           ],
         },
         {
@@ -313,6 +312,7 @@ module.exports = {
           "bulk delete devices": "device_management__bulk_delete",
           "deletion history": "device_management__deletion_history",
           "find device": "device_management__find_device",
+          "device serial formats": "device_management__serial_formats",
           "room management": "room_management",
           "view rooms": "room_management__view",
           "add room": "room_management__add",
@@ -330,6 +330,10 @@ module.exports = {
           "view product": "product_management__view",
           "add product": "product_management__add",
           "product category": "product_management__category",
+          "accessories management": "accessories_management",
+          "accessory master": "accessories_management__master",
+          "accessory stock": "accessories_management__stock",
+          "po accessory requirements": "accessories_management__requirements",
           "shift management": "shift_management",
           "shift mangement": "shift_management", // live top-level label has a typo (missing "e") — same module as the correctly-spelled entry
           "holiday management": "shift_management__holiday",
@@ -499,6 +503,7 @@ module.exports = {
         const deviceManagementChildrenToAdd = [
           { label: "Bulk Delete Devices", route: "/device/bulk-delete", moduleKey: "device_management__bulk_delete" },
           { label: "Deletion History", route: "/device/deleted-devices", moduleKey: "device_management__deletion_history" },
+          { label: "Device Serial Formats", route: "/device/serial-formats", moduleKey: "device_management__serial_formats" },
         ];
         const deviceMenuIndex = menus.findIndex(
           (m) => String(m?.label || "").toLowerCase() === "device management",
@@ -662,7 +667,11 @@ module.exports = {
           { label: "ESIM Removal Requests", route: "/store-portal/ccid-transfer-requests", moduleKey: "esim_removal__requests", icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h8M8 10h8M8 14h5" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/><path d="M6 3h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2z" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>` },
           { label: "Accounts Purchase Orders", route: "/accounts-portal/view", moduleKey: "accounts_po_management", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1V23M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
           { label: "Engineering Approvals", route: "/engineering/view", moduleKey: "engineering_approvals", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="#ffffff" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="#ffffff" stroke-width="2"/></svg>` },
-          { label: "Slug Management", route: "/slug-management/view", moduleKey: "slug_management", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` }
+          { label: "Slug Management", route: "/slug-management/view", moduleKey: "slug_management", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "Production Queue", route: "/production-queue/view", moduleKey: "production_queue", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="#ffffff" stroke-width="2"/></svg>` },
+          { label: "NPD SKU Requests", route: "/npd/sku-requests", moduleKey: "npd__sku_requests", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "Sales SKU Requests", route: "/sales/sku-requests", moduleKey: "sales__sku_requests", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1V23M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` },
+          { label: "PPC Purchase Orders", route: "/ppc/purchase-orders", moduleKey: "ppc__purchase_orders", icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="18" rx="2" stroke="#ffffff" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>` }
         ];
 
         // A moduleKey can already exist either as a top-level item or nested
@@ -709,6 +718,35 @@ module.exports = {
               moduleKey: "reports__ccid_reassignment_log",
             });
             changed = true;
+          }
+        }
+
+        // Accessories Management: parent + children, added (or completed with
+        // any missing child) on menu load, same as the other nested modules.
+        {
+          const accessoryChildren = [
+            { label: "Accessory Master", route: "/accessories/master", moduleKey: "accessories_management__master" },
+            { label: "Accessory Stock", route: "/accessories/stock", moduleKey: "accessories_management__stock" },
+            { label: "PO Accessory Requirements", route: "/accessories/requirements", moduleKey: "accessories_management__requirements" },
+          ];
+          const accParent = doc.menus.find((m) => m?.moduleKey === "accessories_management");
+          if (!accParent) {
+            doc.menus.push({
+              icon: `<svg fill="none" width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 7h-4V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2H4a1 1 0 0 0-1 1v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a1 1 0 0 0-1-1ZM10 5h4v2h-4V5Z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/><path d="M3 12h18" stroke="#ffffff" stroke-width="2"/></svg>`,
+              label: "Accessories Management",
+              route: "#",
+              moduleKey: "accessories_management",
+              children: accessoryChildren,
+            });
+            changed = true;
+          } else {
+            if (!Array.isArray(accParent.children)) accParent.children = [];
+            for (const child of accessoryChildren) {
+              if (!accParent.children.some((c) => c?.moduleKey === child.moduleKey)) {
+                accParent.children.push(child);
+                changed = true;
+              }
+            }
           }
         }
 
@@ -831,11 +869,6 @@ module.exports = {
                 moduleKey: "ng_devices",
                 children: [
                   { label: "View NG Devices", route: ngMenu.route === "#" ? "/ng-devices" : ngMenu.route, moduleKey: "ng_devices__view" },
-                  {
-                    label: "NG Issue Master",
-                    route: looseNgIssueMaster?.route || "/ng-issue-master/view",
-                    moduleKey: "ng_devices__issue_master",
-                  },
                 ],
               };
               if (looseNgIssueMaster) {
@@ -848,6 +881,13 @@ module.exports = {
               // labeled exactly "NG Devices" (same as its parent), which made
               // the generic label-sync correction above collapse its moduleKey
               // back onto the parent's — fix that specific collision here.
+              // NG Issue Master has no page (its route 404s) — drop it from the menu.
+              const before = ngMenu.children.length;
+              ngMenu.children = ngMenu.children.filter((c) => c?.moduleKey !== "ng_devices__issue_master");
+              if (ngMenu.children.length !== before) {
+                changed = true;
+                console.log("Auto-migrated: Removed NG Issue Master (no page) from NG Devices.");
+              }
               const viewChild = ngMenu.children.find((c) => c?.route === "/ng-devices");
               if (viewChild && (viewChild.label !== "View NG Devices" || viewChild.moduleKey !== "ng_devices__view")) {
                 viewChild.label = "View NG Devices";
@@ -881,6 +921,57 @@ module.exports = {
             });
             changed = true;
             console.log("Auto-migrated: Added ESIM Master Data menu group.");
+          }
+        }
+
+        // Auto-migration: Add "Manage RS232 Commands" — master data mapping
+        // Customer + Device Type + Model Name + Vendor ID to the RS232
+        // command used to read that model. Single page, so it's a flat item
+        // (no parent/child pair repeating the same label).
+        {
+          const rs232Icon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="7" width="20" height="10" rx="2" stroke="#ffffff" stroke-width="1.5"/><path d="M6 12h.01M10 12h4" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+          const rs232MasterIndex = doc.menus.findIndex(
+            (m) => m?.moduleKey === "rs232_master_data" || m?.moduleKey === "rs232_master_data__manage"
+          );
+          if (rs232MasterIndex === -1) {
+            doc.menus.push({
+              icon: rs232Icon,
+              label: "Manage Manufacturer",
+              route: "/rs232-command-master",
+              moduleKey: "rs232_master_data__manage",
+            });
+            changed = true;
+            console.log("Auto-migrated: Added Manage Manufacturer menu item.");
+          } else {
+            const existing = doc.menus[rs232MasterIndex];
+            const isNestedGroup = existing.route === "#" || (Array.isArray(existing.children) && existing.children.length > 0);
+            if (isNestedGroup || existing.label !== "Manage Manufacturer") {
+              doc.menus[rs232MasterIndex] = {
+                icon: existing.icon || rs232Icon,
+                label: "Manage Manufacturer",
+                route: "/rs232-command-master",
+                moduleKey: "rs232_master_data__manage",
+              };
+              changed = true;
+              console.log("Auto-migrated: Renamed to Manage Manufacturer menu item.");
+            }
+          }
+        }
+
+        // Auto-migration: Add "KYC Requests" for the Accounts team — customer
+        // KYC (organization/GSTIN/PAN) submitted from GPS CPanel is now
+        // reviewed here instead of in CPanel itself.
+        {
+          const kycExists = doc.menus.some((m) => m?.moduleKey === "accounts_kyc_management");
+          if (!kycExists) {
+            doc.menus.push({
+              icon: `<svg width="18" height="19" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 12l2 2 4-4" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.5 12a8.5 8.5 0 1 1-8.5-8.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/></svg>`,
+              label: "KYC Requests",
+              route: "/accounts-portal/kyc-requests",
+              moduleKey: "accounts_kyc_management",
+            });
+            changed = true;
+            console.log("Auto-migrated: Added KYC Requests menu item.");
           }
         }
 

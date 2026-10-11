@@ -68,12 +68,19 @@ function getPerm(permissions, moduleKey) {
  * the stale legacy grant (never cleared, since migration is additive-only)
  * would keep silently winning.
  */
+// Keys whose menu parent isn't their "x__" prefix: Planning & Scheduling sits
+// under its own group, so View Process permission must not cascade into it.
+const PARENT_OVERRIDE = {
+  process_management__view_planning_scheduling: "process_management__planning_scheduling",
+  process_management__add_planning_scheduling: "process_management__planning_scheduling",
+};
+
 function hasModuleLabelAction(permissions, moduleKey, action) {
   const direct = getPerm(permissions, moduleKey);
   if (direct && direct[action] === true) return true;
 
   if (moduleKey.includes("__")) {
-    const parentKey = moduleKey.split("__")[0];
+    const parentKey = PARENT_OVERRIDE[moduleKey] || moduleKey.split("__")[0];
     const parentPerm = getPerm(permissions, parentKey);
     if (parentPerm && parentPerm[action] === true) return true;
   }
@@ -240,8 +247,10 @@ module.exports = {
 
         const permissions = role.permissions || new Map();
 
+        // action may be a list: any one of them is enough (e.g. create OR update).
+        const actions = Array.isArray(action) ? action : [action];
         const hasPermission = modules.some((moduleKey) =>
-          hasModuleLabelAction(permissions, moduleKey, action)
+          actions.some((a) => hasModuleLabelAction(permissions, moduleKey, a))
         );
 
         if (!hasPermission) {

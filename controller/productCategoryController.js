@@ -87,11 +87,23 @@ module.exports = {
         existingCategory.updatedAt = Date.now();
 
         await existingCategory.save();
+        // Products auto-created from POs still awaiting Engineering pick up the new plan.
+        let synced = 0;
+        if (plan !== undefined) {
+          try {
+            synced = await require("../services/poProductService").syncPendingProductsForCategory(existingCategory);
+          } catch (syncErr) {
+            console.error("productCategory testing plan sync to pending PO products failed:", syncErr.message);
+          }
+        }
         const populatedCategory = await ProductCategory.findById(id).populate("products", "name status").lean();
         return res.status(200).json({
           status: 200,
-          message: "Product Category updated successfully!",
+          message: synced
+            ? `Product Category updated successfully! Testing plan applied to ${synced} product(s) awaiting Engineering approval.`
+            : "Product Category updated successfully!",
           productCategory: populatedCategory,
+          syncedProducts: synced,
         });
       } else {
         const newCategory = new ProductCategory({
