@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { isCrashedStatus } = require("../constants/crashStatus");
 const { getDataAccessFilter } = require("../utils/accessControl");
 const KitTransferRequest = require("../models/kitTransferRequest");
 const ProcessModel = require("../models/process");
@@ -73,6 +74,14 @@ const assertDestinationKitCapacity = (processDoc, transferQuantity) => {
     return `Quantity cannot exceed destination remaining capacity (${remaining} of ${requiredKits} required kits)`;
   }
   return "";
+};
+
+// Units trashed by TRC are out of production for good.
+const findTrashedDeviceSerial = (devices = []) => {
+  const trashed = (Array.isArray(devices) ? devices : []).find(
+    (device) => isCrashedStatus(device?.status),
+  );
+  return trashed ? trashed.serialNo : "";
 };
 
 const findDispatchedDeviceSerial = (devices = []) => {
@@ -303,6 +312,14 @@ module.exports = {
           });
         }
 
+        const trashedSerial = findTrashedDeviceSerial(devices);
+        if (trashedSerial) {
+          return res.status(400).json({
+            status: 400,
+            message: `Device ${trashedSerial} has been crashed and cannot be transferred`,
+          });
+        }
+
         const targetStageIndex = getStageIndex(destinationStageSequence, targetStage);
         if (targetStageIndex === -1) {
           console.log(">>> [DEBUG_TRACE] 17: Stage index -1");
@@ -424,6 +441,7 @@ module.exports = {
         return res.status(400).json({ status: 400, message: "Invalid request ID" });
       }
       let updatedRequest;
+      let approvalSkippedSerials = [];
       await session.withTransaction(async () => {
         const request = await KitTransferRequest.findById(req.params.id).session(session);
         if (!request) {
@@ -453,28 +471,41 @@ module.exports = {
           throw new Error(sourceEligibilityError);
         }
 
-        if (Number(fromProcess.issuedKits || 0) < Number(request.quantity || 0)) {
-          throw new Error("Source process no longer has enough allocated kits");
-        }
+        const requestedSerials = Array.isArray(request.serials) ? request.serials : [];
 
-        const destinationCapacityError = assertDestinationKitCapacity(toProcess, request.quantity);
-        if (destinationCapacityError) {
-          throw new Error(destinationCapacityError);
-        }
-
-        const sourceDevices = Array.isArray(request.serials) && request.serials.length > 0
+        // Devices can drift out of the source process between request creation
+        // and approval — e.g. an overlapping transfer request for some of the
+        // same serials got approved first. Resolve against what's actually
+        // there now instead of hard-failing the whole batch over stale serials.
+        const sourceDevices = requestedSerials.length > 0
           ? await DeviceModel.find({
-            serialNo: { $in: request.serials },
+            serialNo: { $in: requestedSerials },
             processID: fromProcess._id,
           }).session(session)
           : [];
 
-        const transferContext = [];
-        if (Array.isArray(request.serials) && request.serials.length > 0) {
-          if (sourceDevices.length !== request.serials.length) {
-            throw new Error("Some devices are no longer available in the source process");
-          }
+        const foundSerialSet = new Set(sourceDevices.map((d) => normalizeSerial(d.serialNo)));
+        const skippedSerials = requestedSerials.filter((s) => !foundSerialSet.has(normalizeSerial(s)));
 
+        if (requestedSerials.length > 0 && sourceDevices.length === 0) {
+          throw new Error(
+            "None of the requested devices remain in the source process — they were likely already transferred elsewhere. Reject this request instead.",
+          );
+        }
+
+        const effectiveQuantity = requestedSerials.length > 0 ? sourceDevices.length : Number(request.quantity || 0);
+
+        if (Number(fromProcess.issuedKits || 0) < effectiveQuantity) {
+          throw new Error("Source process no longer has enough allocated kits");
+        }
+
+        const destinationCapacityError = assertDestinationKitCapacity(toProcess, effectiveQuantity);
+        if (destinationCapacityError) {
+          throw new Error(destinationCapacityError);
+        }
+
+        const transferContext = [];
+        if (sourceDevices.length > 0) {
           const dispatchedSerial = findDispatchedDeviceSerial(sourceDevices);
           if (dispatchedSerial) {
             throw new Error(`Device ${dispatchedSerial} is dispatched and cannot be transferred`);
@@ -489,6 +520,11 @@ module.exports = {
             throw new Error(
               `Device(s) ${withAccessories.slice(0, 5).join(", ")} carry packed accessory serials — remove the accessories from them before transferring`,
             );
+          }
+
+          const trashedSerial = findTrashedDeviceSerial(sourceDevices);
+          if (trashedSerial) {
+            throw new Error(`Device ${trashedSerial} has been crashed and cannot be transferred`);
           }
 
           const destinationStageSequence = await resolveTransferStageSequence(toProcess, fromProcess);
@@ -514,8 +550,8 @@ module.exports = {
           }
         }
 
-        fromProcess.issuedKits = Number(fromProcess.issuedKits || 0) - Number(request.quantity || 0);
-        toProcess.issuedKits = Number(toProcess.issuedKits || 0) + Number(request.quantity || 0);
+        fromProcess.issuedKits = Number(fromProcess.issuedKits || 0) - effectiveQuantity;
+        toProcess.issuedKits = Number(toProcess.issuedKits || 0) + effectiveQuantity;
         if (String(toProcess.status || "").toLowerCase() !== "active") {
           toProcess.status = "waiting_for_line_feeding";
         }
@@ -596,12 +632,22 @@ module.exports = {
         request.approverId = getActorId(req.user) || null;
         request.approverName = getActorLabel(approver) || getActorLabel(req.user);
         request.approvedAt = new Date();
+        if (requestedSerials.length > 0) {
+          request.quantity = sourceDevices.length;
+          request.serials = sourceDevices.map((d) => d.serialNo);
+        }
+        if (skippedSerials.length > 0) {
+          request.skippedSerials = skippedSerials;
+        }
         updatedRequest = await request.save({ session });
+        approvalSkippedSerials = skippedSerials;
       });
 
       return res.status(200).json({
         status: 200,
-        message: "Kit transfer request approved successfully",
+        message: approvalSkippedSerials.length > 0
+          ? `Kit transfer request approved for ${updatedRequest.serials.length} of ${updatedRequest.serials.length + approvalSkippedSerials.length} devices — ${approvalSkippedSerials.length} were already transferred elsewhere and were skipped.`
+          : "Kit transfer request approved successfully",
         request: shapeRequest(updatedRequest),
       });
     } catch (error) {

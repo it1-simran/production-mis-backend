@@ -23,6 +23,7 @@ const {
   findDevicesByScanTokensStrict,
 } = require("../services/deviceScanMatcher");
 const { normalizeForCompare, stripCcidValuesFromObject } = require("../utils/customFieldsCcid");
+const { CRASHED_STATUS, CRASHED_STATUS_VALUES, isCrashedStatus } = require("../constants/crashStatus");
 const { getCachedProcess } = require("../utils/cacheManager");
 const { invalidateOperatorTaskSummaryCache } = require("../utils/queryCache");
 const { cachedCompute, invalidatePrefix } = require("../utils/ttlCache");
@@ -113,6 +114,20 @@ const normalizeDeviceTestTiming = (data = {}) => {
 };
 
 const isResolvedStatusValue = (status) => normalizeKey(status).includes("resolved");
+// Crashed (scrapped) units: new writes use "Crashed"; old "Trashed" data is read the same way.
+const TRASHED_STATUS = CRASHED_STATUS;
+const isTrashedStatus = isCrashedStatus;
+// _ids of trashed devices (optionally one process), used to drop their old NG
+// test records from the NG-open lists - a trashed unit is no longer open NG.
+const getTrashedDeviceIds = (processId) =>
+  deviceModel.distinct("_id", {
+    status: { $in: CRASHED_STATUS_VALUES },
+    ...(processId ? { processID: processId } : {}),
+  });
+const trashedDeviceRejection = (serialNo) => ({
+  status: 409,
+  message: `Device ${serialNo} has been crashed and cannot be updated.`,
+});
 
 const applyPlanCountersOnResolve = async ({ planId, seatKey, stageName }) => {
   if (!planId || !mongoose.Types.ObjectId.isValid(String(planId))) return;
@@ -741,7 +756,8 @@ module.exports = {
 
       const targetQuantity = Number.parseInt(processDoc?.quantity, 10) || 0;
       if (targetQuantity > 0) {
-        const existingCount = await deviceModel.countDocuments({ processID });
+        // Trashed devices free up their slot so replacements can be generated.
+        const existingCount = await deviceModel.countDocuments({ processID, status: { $nin: CRASHED_STATUS_VALUES } });
         const remaining = targetQuantity - existingCount;
         if (remaining <= 0) {
           return res.status(400).json({
@@ -925,7 +941,8 @@ module.exports = {
   getDeviceCountByProcessId: async (req, res) => {
     try {
       const { processId } = req.params;
-      const count = await deviceModel.countDocuments({ processID: processId });
+      // Trashed devices free their slot (same rule as the create() capacity check).
+      const count = await deviceModel.countDocuments({ processID: processId, status: { $nin: CRASHED_STATUS_VALUES } });
       return res.status(200).json({
         status: 200,
         message: "Device Count Fetched Successfully",
@@ -943,15 +960,22 @@ module.exports = {
       const defaultLimit = limitRaw === "all" || limitRaw === "0" ? 50000 : 50000;
       const deviceLimit = Math.min(Math.max(parseInt(limitRaw) || defaultLimit, 1), 50000);
       const deviceSkip = Math.max((parseInt(pageRaw) || 1) - 1, 0) * deviceLimit;
+      // Trashed devices are out of the flow and must not show up in WIP / stage
+      // lists. The serial generator passes includeTrashed=1 because their serials
+      // still exist and must never be generated again.
+      const includeTrashed = String(req.query.includeTrashed || "") === "1";
+      const processDeviceFilter = includeTrashed
+        ? { processID: processId }
+        : { processID: processId, status: { $nin: CRASHED_STATUS_VALUES } };
 
       const [devices, totalDevices] = await Promise.all([
         deviceModel
-          .find({ processID: processId }, null, { sort: { createdAt: -1 } })
+          .find(processDeviceFilter, null, { sort: { createdAt: -1 } })
           .select("_id serialNo imei imeiNo ccid currentStage status cartonSerial modelName createdAt updatedAt")
           .skip(deviceSkip)
           .limit(deviceLimit)
           .lean(),
-        deviceModel.countDocuments({ processID: processId }),
+        deviceModel.countDocuments(processDeviceFilter),
       ]);
 
       const deviceIds = devices.map((device) => device?._id).filter(Boolean);
@@ -1019,9 +1043,12 @@ module.exports = {
         });
       }
 
+      const trashedIds = await getTrashedDeviceIds(new mongoose.Types.ObjectId(processId));
       const filter = {
         processId: new mongoose.Types.ObjectId(processId),
         status: { $regex: /^NG$|RESOLVED/i },
+        // Old NG rows of trashed devices are no longer open NG.
+        ...(trashedIds.length ? { $nor: [{ status: { $regex: /^NG$/i }, deviceId: { $in: trashedIds } }] } : {}),
       };
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
@@ -1375,7 +1402,7 @@ module.exports = {
           {
             $match: {
               $or: [
-                { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+                { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED", ...CRASHED_STATUS_VALUES] } },
                 { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
               ]
             }
@@ -1388,7 +1415,7 @@ module.exports = {
 
         return deviceModel.find({
           productType: new mongoose.Types.ObjectId(id),
-          status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework"] },
+          status: { $nin: ["completed", "ng", "fail", "qc", "trc", "rework", "Completed", "NG", "Fail", "QC", "TRC", "Rework", "trashed", "Trashed", "crashed", "Crashed"] },
           _id: { $nin: excludedIds }
         }).sort({ _id: -1 }).lean();
       });
@@ -1524,6 +1551,12 @@ module.exports = {
         return res.status(404).json({
           status: 404,
           message: "Device not found",
+        });
+      }
+      if (isTrashedStatus(deviceSnapshot.status)) {
+        return res.status(409).json({
+          status: 409,
+          message: `Device ${deviceSnapshot.serialNo} has been crashed by TRC and cannot be tested.`,
         });
       }
 
@@ -2578,7 +2611,7 @@ module.exports = {
         statusFilter = { status: { $in: ["NG", "ng", "Fail"] } };
       } else if (modeRaw === "ngportal" || statusLower === "ngportal") {
         // NG queue + resolution outcomes only — excludes unrelated station "Pass" rows
-        statusFilter = { status: { $in: ["NG", "ng", "Fail", "Resolved", "RESOLVED", "QC Resolved"] } };
+        statusFilter = { status: { $in: ["NG", "ng", "Fail", "Resolved", "RESOLVED", "QC Resolved", ...CRASHED_STATUS_VALUES] } };
       }
       const projection = {
         deviceId: 1,
@@ -2604,7 +2637,7 @@ module.exports = {
       if (deviceRefFilter) {
         DeviceTestEntry = await deviceTestRecords
           .find(queryFilter, projection, { sort: { createdAt: -1 } })
-          .populate({ path: "deviceId", select: "serialNo modelName status currentStage" })
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage trash" })
           .populate({ path: "processId", select: "name processName" })
           .lean();
       } else if (shouldPaginate) {
@@ -2667,19 +2700,30 @@ module.exports = {
 
       const ngStatuses = ["NG", "ng", "Fail"];
       const resolvedStatuses = ["Resolved", "RESOLVED", "QC Resolved"];
-      const allNgPortalStatuses = [...ngStatuses, ...resolvedStatuses];
+      const trashedStatuses = [...CRASHED_STATUS_VALUES];
+      const allNgPortalStatuses = [...ngStatuses, ...resolvedStatuses, ...trashedStatuses];
 
       let statusCondition = {};
-      if (statusFilterRaw === "ng") {
+      // The frontend sends "unresolved" / "ngopen" for the NG-only filters.
+      if (statusFilterRaw === "ng" || statusFilterRaw === "unresolved" || statusFilterRaw === "ngopen") {
         statusCondition = { status: { $in: ngStatuses } };
       } else if (statusFilterRaw === "resolved") {
         statusCondition = { status: { $in: resolvedStatuses } };
+      } else if (statusFilterRaw === "trashed" || statusFilterRaw === "crashed") {
+        statusCondition = { status: { $in: trashedStatuses } };
       } else {
         // "all" or default NG portal queue scope: NG devices + resolution outcomes only
         statusCondition = { status: { $in: allNgPortalStatuses } };
       }
 
-      const queryFilter = { ...baseFilter, ...statusCondition };
+      // A trashed device's old NG row stays status "NG"; it is not open NG any
+      // more, so keep it out of the NG / all lists and the NG-open count. The
+      // device still shows under "Crashed" via its own crash record.
+      const trashedIds = await getTrashedDeviceIds(baseFilter.processId);
+      const excludeTrashedNg = trashedIds.length
+        ? { $nor: [{ status: { $in: ngStatuses }, deviceId: { $in: trashedIds } }] }
+        : {};
+      const queryFilter = { ...baseFilter, ...statusCondition, ...excludeTrashedNg };
 
       const projection = {
         deviceId: 1,
@@ -2698,28 +2742,30 @@ module.exports = {
       };
 
       const dbQueryStart = Date.now();
-      const [rows, total, statsResolved, statsNgOpen] = await Promise.all([
+      const [rows, total, statsResolved, statsNgOpen, statsTrashed] = await Promise.all([
         deviceTestRecords
           .find(queryFilter, projection)
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
-          .populate({ path: "deviceId", select: "serialNo modelName status currentStage imeiNo ccid" })
+          .populate({ path: "deviceId", select: "serialNo modelName status currentStage imeiNo ccid trash" })
           .populate({ path: "processId", select: "name processName" })
           .populate({ path: "operatorId", select: "name employeeCode" })
           .lean(),
         deviceTestRecords.countDocuments(queryFilter),
         deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: resolvedStatuses } }),
-        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: ngStatuses } }),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: ngStatuses }, ...excludeTrashedNg }),
+        deviceTestRecords.countDocuments({ ...baseFilter, status: { $in: trashedStatuses } }),
       ]);
       const dbQueryDuration = Date.now() - dbQueryStart;
 
-      const totalOverall = statsResolved + statsNgOpen;
+      const totalOverall = statsResolved + statsNgOpen + statsTrashed;
       const stats = {
         total: totalOverall,
         resolved: statsResolved,
         unresolved: statsNgOpen,
         ngOpen: statsNgOpen,
+        trashed: statsTrashed,
         processCount: 0,
       };
 
@@ -3050,6 +3096,8 @@ module.exports = {
       const query = {
         ...(processId ? { processID: processId } : {}),
         ...(stageName ? { currentStage: stageName } : {}),
+        // Trashed units must never be matched by a jig/sticker scan.
+        status: { $nin: CRASHED_STATUS_VALUES },
       };
 
       const devices = await deviceModel.find(query)
@@ -3316,10 +3364,13 @@ module.exports = {
     try {
       const serialNo = req.params.serialNo || req.body.serialNo;
       const body = req.body || {};
-      const device = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage customFields processID modelName imeiNo ccid").lean();
+      const device = await deviceModel.findOne({ serialNo }).select("_id serialNo currentStage customFields processID modelName imeiNo ccid status").lean();
 
       if (!device?._id) {
         return res.status(404).json({ message: "Device with serial number not found" });
+      }
+      if (isTrashedStatus(device.status)) {
+        return res.status(409).json(trashedDeviceRejection(device.serialNo));
       }
 
       const warnings = [];
@@ -3440,9 +3491,12 @@ module.exports = {
     try {
       const deviceId = req.params.deviceId;
       const updates = req.body || {};
-      const device = await deviceModel.findById(deviceId).select("_id serialNo currentStage customFields processID modelName").lean();
+      const device = await deviceModel.findById(deviceId).select("_id serialNo currentStage customFields processID modelName status").lean();
       if (!device?._id) {
         return res.status(404).json({ message: "Device not found" });
+      }
+      if (isTrashedStatus(device.status)) {
+        return res.status(409).json(trashedDeviceRejection(device.serialNo));
       }
 
       // Root-level identification fields persistence
@@ -3563,6 +3617,10 @@ module.exports = {
       const incomingSerial = serialNumber || serialNo;
       if (device.serialNo !== incomingSerial) {
         return res.status(400).json({ message: "Serial number does not match the device" });
+      }
+      // Resolving would set status "" and send a trashed unit back into WIP.
+      if (isTrashedStatus(device.status)) {
+        return res.status(409).json({ message: "Device has been crashed and cannot be resolved" });
       }
 
       const process = await processModel.findById(device.processID);
@@ -3702,6 +3760,142 @@ module.exports = {
         },
       });
     } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  // TRC trashes an NG device (e.g. built on the wrong PCB). The device and its
+  // serial stay, status becomes "Crashed", and its IMEI/CCID are unlinked so
+  // they can go on a replacement device. Old values are kept in device.trash.
+  trashDevice: async (req, res) => {
+    try {
+      const { deviceId, serialNumber, serialNo } = req.body;
+      const reason = String(req.body.reason || "").trim();
+
+      if (!deviceId || !(serialNumber || serialNo)) {
+        return res.status(400).json({ message: "deviceId and serialNumber are required" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(deviceId)) {
+        return res.status(400).json({ message: "Invalid deviceId" });
+      }
+      if (!reason) {
+        return res.status(400).json({ message: "Crash reason is required" });
+      }
+      if (reason.length > 500) {
+        return res.status(400).json({ message: "Crash reason must be 500 characters or less" });
+      }
+
+      const device = await deviceModel.findById(deviceId);
+      if (!device) {
+        return res.status(404).json({ message: "Device not found" });
+      }
+      if (device.serialNo !== (serialNumber || serialNo)) {
+        return res.status(400).json({ message: "Serial number does not match the device" });
+      }
+      if (isTrashedStatus(device.status)) {
+        return res.status(409).json({ message: "Device is already crashed" });
+      }
+      if (device.dispatchStatus || normalizeText(device.cartonSerial)) {
+        return res.status(409).json({
+          message: "Device is already packed in a carton or dispatched and cannot be crashed",
+        });
+      }
+      const isInNg =
+        /^(ng|fail|rework)$/i.test(normalizeText(device.status)) ||
+        /^(qc|trc)$/i.test(normalizeText(device.currentStage));
+      if (!isInNg) {
+        return res.status(409).json({ message: "Only NG devices in QC/TRC can be crashed" });
+      }
+
+      const ngContext = await findLatestNgContextForDevice({
+        deviceId: device._id,
+        serialNo: device.serialNo,
+        processId: device.processID,
+      });
+
+      const oldImei = normalizeText(device.imeiNo);
+      const oldCcid = normalizeText(device.ccid);
+      const previousStatus = normalizeText(device.status);
+      const previousStage = normalizeText(device.currentStage);
+
+      // Same deep-clone reasoning as the CCID auto-clear in
+      // validateDeviceIdentityAtConnection: strip matching leaves by value.
+      const customFields = structuredClone(device.customFields || {});
+      // The device model's update hook refills imeiNo from customFields.Functional.IMEI
+      // when imeiNo is empty, so that value must be stripped too even if it differs.
+      const functionalCf = customFields.Functional || customFields.functional || {};
+      const cfImei = normalizeText(functionalCf.IMEI || functionalCf.imei);
+      const stripTargets = new Set(
+        [oldImei, oldCcid, cfImei].filter(Boolean).map((v) => normalizeForCompare(v)),
+      );
+      const removedCustomFields = stripCcidValuesFromObject(customFields, stripTargets);
+
+      const operatorId = req.user?.id || req.user?._id || null;
+
+      const trashRecord = await new deviceTestRecords({
+        deviceId: device._id,
+        processId: device.processID,
+        operatorId,
+        serialNo: device.serialNo,
+        planId: ngContext?.planId || null,
+        stageName: "TRC",
+        status: TRASHED_STATUS,
+        assignedDeviceTo: "Trash",
+        seatNumber: normalizeText(ngContext?.seatNumber || ngContext?.assignedSeatKey || ""),
+        reason,
+        ngDescription: reason,
+        flowVersion: Number(device.flowVersion || 1),
+        flowBoundary: false,
+        flowType: "trash",
+        previousFlowVersion: null,
+        logData: {
+          transition: "NG → Crashed",
+          previousStatus,
+          previousStage,
+          sourceStage: normalizeText(ngContext?.stageName || ""),
+          imeiNo: oldImei,
+          ccid: oldCcid,
+        },
+      }).save();
+
+      const updatedDevice = await deviceModel.findByIdAndUpdate(
+        device._id,
+        {
+          $set: {
+            status: TRASHED_STATUS,
+            imeiNo: "",
+            ccid: "",
+            customFields,
+            trash: {
+              reason,
+              trashedBy: req.trashActor?.id || operatorId,
+              trashedByName: req.trashActor?.name || "",
+              trashedAt: new Date(),
+              previousStatus,
+              previousStage,
+              imeiNo: oldImei,
+              ccid: oldCcid,
+              removedCustomFields,
+            },
+            updatedAt: new Date(),
+          },
+        },
+        { new: true },
+      );
+      invalidateOperatorTaskDeviceCaches(device.processID);
+
+      return res.status(200).json({
+        status: 200,
+        message: "Device crashed. IMEI/CCID unlinked and free for reuse.",
+        data: {
+          deviceId: device._id,
+          serialNo: device.serialNo,
+          status: TRASHED_STATUS,
+          device: updatedDevice,
+          testRecord: trashRecord,
+        },
+      });
+    } catch (error) {
+      console.error("[ERROR] trashDevice:", error);
       return res.status(500).json({ status: 500, error: error.message });
     }
   },

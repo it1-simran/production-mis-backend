@@ -355,6 +355,35 @@ module.exports = {
     }
   },
   /**
+   * POST /devices/trash — NG Devices detail. Only TRC (plus admin)
+   * may trash a device; QC, operators and NG-portal module grants are not enough.
+   */
+  authorizeTrashDevice: async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({ error: "Unauthorized - No user identity" });
+      }
+      const user = await User.findById(req.user.id).lean();
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      const t = normalizeUserTypeKey(user.userType);
+      if (t !== "trc" && !ADMIN_ONLY_BYPASS.has(t)) {
+        logToFile(`[AUTH] trashDevice denied for ${user.email} (${user.userType})`);
+        return res.status(403).json({
+          error: "Forbidden",
+          message: "Only TRC can crash devices.",
+          requestId: req.requestId,
+        });
+      }
+      req.trashActor = { id: user._id, name: user.name || user.email || "" };
+      return next();
+    } catch (error) {
+      console.error("[AUTH] authorizeTrashDevice error:", error);
+      return res.status(500).json({ error: "Internal Server Authorization Error" });
+    }
+  },
+  /**
    * PATCH /updateStageByDeviceId — operators may send full payloads; TRC/QC/NG-read users
    * only allowlisted fields (same write policy as markAsResolved).
    */

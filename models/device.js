@@ -37,6 +37,26 @@ const deviceSchemas = new mongoose.Schema({
   fgIapNo: { type: String, required: false, default: "" },
   flowVersion: { type: Number, required: false, default: 1 },
   flowStartedAt: { type: Date, required: false, default: null },
+  // Set when TRC crashes an NG device (status "Crashed"; older data: "Trashed"). The serial stays on the
+  // device; imeiNo/ccid are cleared so they can be reused, and kept here for audit.
+  trash: {
+    type: new mongoose.Schema(
+      {
+        reason: { type: String, default: "" },
+        trashedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        trashedByName: { type: String, default: "" },
+        trashedAt: { type: Date, default: null },
+        previousStatus: { type: String, default: "" },
+        previousStage: { type: String, default: "" },
+        imeiNo: { type: String, default: "" },
+        ccid: { type: String, default: "" },
+        removedCustomFields: { type: Array, default: [] },
+      },
+      { _id: false }
+    ),
+    required: false,
+    default: undefined,
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
@@ -129,6 +149,8 @@ deviceSchemas.index({ dispatchStatus: 1, dispatchInvoiceId: 1 });
 deviceSchemas.index({ imeiNo: 1 });
 deviceSchemas.index({ ccid: 1 });
 deviceSchemas.index({ productType: 1, processID: 1, currentStage: 1, status: 1 });
+// Crashed-device lookups (View Planning crashed list, NG queue crashed ids). Not built automatically (autoIndex is off) - create it on the DB if those lists get slow.
+deviceSchemas.index({ status: 1, "trash.trashedAt": -1 });
 
 const device = mongoose.model("devices", deviceSchemas);
 module.exports = device;

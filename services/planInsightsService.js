@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { CRASHED_STATUS_VALUES, isCrashedStatus } = require("../constants/crashStatus");
 const moment = require("moment-timezone");
 const deviceModel = require("../models/device");
 const deviceTestRecordModel = require("../models/deviceTestModel");
@@ -158,7 +159,7 @@ const reconcileCommonStageMetrics = ({
   const passCounts = new Map(stageNames.map((name) => [normalizeKey(name), 0]));
 
   (Array.isArray(devices) ? devices : []).forEach((device) => {
-    if (isDeviceTerminalNg(device)) return;
+    if (isDeviceTerminalNg(device) || isDeviceTrashed(device)) return;
     const currentStage = normalizeValue(device?.currentStage || "");
     if (!currentStage) return;
 
@@ -374,6 +375,10 @@ const isKitConfirmedProcessStatus = (processStatus) => {
   return !PRE_KIT_CONFIRMATION_PROCESS_STATUSES.has(normalized);
 };
 
+// TRC trashed the unit (wrong PCB etc.): it is out of the flow for good and
+// must never count as WIP/NG at its old stage.
+const isDeviceTrashed = (device = {}) => isCrashedStatus(device?.status);
+
 const isDeviceTerminalNg = (device = {}) => {
   const status = normalizeKey(device?.status);
   const stage = normalizeKey(device?.currentStage);
@@ -524,6 +529,9 @@ const computeStageFlowSnapshot = ({
       line: Array.from({ length: stageCount }, () => []),
       // trc[i] = NG units waiting in TRC/QC that failed at stage i
       trc: Array.from({ length: stageCount }, () => []),
+      // trashed[i] = units TRC scrapped while at stage i (informational only -
+      // not part of wip/trcWip, see the "rejected" branch below).
+      trashed: Array.from({ length: stageCount }, () => []),
       afterLast: [],
       rejected: [],
       // devices whose bucket depends on their test records (TRC source stage,
@@ -594,10 +602,32 @@ const computeStageFlowSnapshot = ({
     });
 
     const status = normalizeKey(device?.status);
-    if (status === "rejected") {
+    // Trashed units are scrapped like rejected ones - out of the flow, not
+    // counted in any stage's wip/trcWip. Still attributed to the stage they
+    // actually failed at (membership.trashed), purely so that stage's WIP
+    // popup can list them with their trash reason; this never feeds snapshot
+    // counts. device.trash.previousStage is usually just "TRC" (the generic
+    // rework queue, not the originating stage) so this resolves the real
+    // stage the same way an active TRC/NG unit does: via its last NG test
+    // record (entry.ngIndex), falling back to just after its last pass.
+    if (status === "rejected" || isCrashedStatus(status)) {
       snapshot.rejected += 1;
       if (maxPassIndex >= 0) rejectedConsumed += 1;
-      if (membership) membership.rejected.push(deviceKey);
+      if (membership) {
+        membership.rejected.push(deviceKey);
+        if (isCrashedStatus(status)) {
+          let trashedStageIndex = entry ? entry.ngIndex : -1;
+          if (trashedStageIndex < 0) membership.needsRecords.push(deviceKey);
+          if (trashedStageIndex < 0) trashedStageIndex = Math.min(maxPassIndex + 1, stageCount - 1);
+          if (trashedStageIndex >= 0 && trashedStageIndex < stageCount) {
+            membership.trashed[trashedStageIndex].push({
+              id: deviceKey,
+              reason: normalizeValue(device?.trash?.reason),
+              trashedAt: device?.trash?.trashedAt || null,
+            });
+          }
+        }
+      }
       return;
     }
     if (status === "dispatched" || status === "completed") {
@@ -1132,6 +1162,18 @@ const computePlanInsightsUncached = async ({
 
   const latestByDeviceStage = new Map();
   const latestBySerial = new Map();
+  // Same two maps restricted to THIS plan's records. Records are fetched by
+  // process (the stage-flow WIP is process-wide), but a process can run several
+  // plans on the same room / seats, so the tested / pass / ng counters must only
+  // count this plan's tests or an earlier plan's passes show up on these seats.
+  // Records without a planId (older / migrated data) are kept as before.
+  const planIdKey = normalizeValue(planId);
+  const isThisPlanRecord = (record) => {
+    const recordPlanId = normalizeValue(record?.planId);
+    return !recordPlanId || recordPlanId === planIdKey;
+  };
+  const planLatestByDeviceStage = new Map();
+  const planLatestBySerial = new Map();
 
   await forEachChunked(scopedLatestRecords, (record) => {
     const deviceId = String(record?.deviceId?._id || record?.deviceId || record?.serialNo || "");
@@ -1150,9 +1192,15 @@ const computePlanInsightsUncached = async ({
     if (!latestBySerial.has(serial)) {
       latestBySerial.set(serial, record);
     }
+
+    if (isThisPlanRecord(record)) {
+      if (!planLatestByDeviceStage.has(dsKey)) planLatestByDeviceStage.set(dsKey, record);
+      if (!planLatestBySerial.has(serial)) planLatestBySerial.set(serial, record);
+    }
   });
 
   const dedupedRecords = Array.from(latestByDeviceStage.values());
+  const planDedupedRecords = Array.from(planLatestByDeviceStage.values());
   const processedDeviceIds = new Set();
 
   const planSerialsEarly = Array.from(latestBySerial.keys());
@@ -1186,12 +1234,19 @@ const computePlanInsightsUncached = async ({
     }
   });
 
+  // Devices with any (flow-current) test record in this process are "tested";
+  // the Device-doc fallbacks below must not count them again - including devices
+  // that were only tested under another plan.
   await forEachChunked(dedupedRecords, (record) => {
     if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
-
     const deviceId = String(record?.deviceId?._id || record?.deviceId || "");
-    const deviceKey = getRecordDeviceKey(record);
     if (deviceId) processedDeviceIds.add(deviceId);
+  });
+
+  await forEachChunked(planDedupedRecords, (record) => {
+    if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
+
+    const deviceKey = getRecordDeviceKey(record);
 
     const stageName = normalizeValue(record?.stageName || record?.currentStage || "");
     if (!stageName) return;
@@ -1286,7 +1341,7 @@ const computePlanInsightsUncached = async ({
     {
       $match: {
         $or: [
-          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED", ...CRASHED_STATUS_VALUES] } },
           { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
         ]
       }
@@ -1300,7 +1355,8 @@ const computePlanInsightsUncached = async ({
       .find({
         productType: selectedProduct,
         processID: new mongoose.Types.ObjectId(String(processId)),
-        _id: { $nin: excludedIds }
+        _id: { $nin: excludedIds },
+        status: { $nin: CRASHED_STATUS_VALUES },
       })
       .select("_id serialNo status currentStage processID imei imeiNo ccid flowVersion")
       .lean()
@@ -1348,9 +1404,12 @@ const computePlanInsightsUncached = async ({
   // per-stage rows instead, which counted the same device once per stage it
   // cleared — and the live-WIP augmentation below then inflated `tested` with
   // devices never tested in the range, making "today" totals exceed "overall".
-  latestBySerial.forEach((record, serial) => {
+  planLatestBySerial.forEach((record, serial) => {
     if (shouldSkipRecordForFlowVersion(record, deviceFlowVersions)) return;
     const status = normalizeKey(record?.status);
+    // A trashed unit's latest record is its trash row - it is out of the flow,
+    // so it must not land in tested / WIP (it was falling into the WIP bucket).
+    if (isCrashedStatus(status)) return;
     if (isResolvedStatus(status)) {
       incrementUniqueTotals(serial, "wip");
       return;
@@ -1688,7 +1747,7 @@ const computeProcessInsights = async ({
     {
       $match: {
         $or: [
-          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED"] } },
+          { latestStatus: { $in: ["NG", "Fail", "QC", "TRC", "Rework", "REJECTED", ...CRASHED_STATUS_VALUES] } },
           { latestAssignedTo: { $in: ["QC", "TRC", "qc", "trc"] } }
         ]
       }
@@ -1702,7 +1761,8 @@ const computeProcessInsights = async ({
       .find({
         productType: selectedProduct,
         processID: new mongoose.Types.ObjectId(String(processId)),
-        _id: { $nin: excludedIds }
+        _id: { $nin: excludedIds },
+        status: { $nin: CRASHED_STATUS_VALUES },
       })
       .select("_id serialNo status currentStage processID imei imeiNo ccid")
       .lean()
@@ -2110,7 +2170,7 @@ const computeStageWipDevices = async ({
 
   const flowDevices = await deviceModel
     .find({ processID: processObjectId })
-    .select("_id serialNo status currentStage flowVersion")
+    .select("_id serialNo status currentStage flowVersion trash")
     .lean();
   const base = { stageNames, aliasLookup, devices: flowDevices, collectDevices: true };
 
@@ -2138,6 +2198,7 @@ const computeStageWipDevices = async ({
   let stageIndex = -1;
   let lineIds = [];
   let trcEntries = [];
+  let trashedEntries = [];
   let wip = 0;
   let lineWip = 0;
   let trcWip = 0;
@@ -2155,6 +2216,7 @@ const computeStageWipDevices = async ({
     label = stageNames[stageIndex];
     lineIds = snapshot.membership.line[stageIndex];
     trcEntries = snapshot.membership.trc[stageIndex];
+    trashedEntries = snapshot.membership.trashed[stageIndex] || [];
     ({ wip, lineWip, trcWip } = flow.stages[stageIndex]);
     // The FIRST stage's WIP comes from the kit allocation (allocated - passed -
     // ...), not from how many serials exist: Serial Generator creates every
@@ -2169,7 +2231,8 @@ const computeStageWipDevices = async ({
   }
 
   const trcInfo = new Map(trcEntries.map((entry) => [entry.id, entry]));
-  const wantedIds = [...trcEntries.map((entry) => entry.id), ...lineIds];
+  const trashedInfo = new Map(trashedEntries.map((entry) => [entry.id, entry]));
+  const wantedIds = [...trcEntries.map((entry) => entry.id), ...trashedEntries.map((entry) => entry.id), ...lineIds];
   const truncated = wantedIds.length > STAGE_WIP_LIST_LIMIT;
   const listedIds = wantedIds.slice(0, STAGE_WIP_LIST_LIMIT);
 
@@ -2185,6 +2248,7 @@ const computeStageWipDevices = async ({
   const devices = listedIds.map((id) => {
     const device = details.get(id) || {};
     const trc = trcInfo.get(id);
+    const trashed = trashedInfo.get(id);
     return {
       id,
       serialNo: normalizeValue(device.serialNo),
@@ -2195,19 +2259,23 @@ const computeStageWipDevices = async ({
       status: normalizeValue(device.status),
       currentStage: normalizeValue(device.currentStage),
       updatedAt: device.updatedAt || null,
-      wipType: bucket === "delivered" ? "delivered" : trc ? "trc" : "line",
+      wipType: bucket === "delivered" ? "delivered" : trashed ? "trashed" : trc ? "trc" : "line",
       // NG units waiting in TRC (or QC) are shown with the stage they failed at.
-      assignedTo: trc ? (normalizeKey(device.currentStage) === "qc" ? "QC" : "TRC") : "",
-      failedAt: trc ? label : "",
-      ngAt: trc && trc.ngTime ? new Date(trc.ngTime).toISOString() : null,
+      // Trashed units (scrapped by TRC) are shown the same way, with their reason.
+      assignedTo: trashed ? "Crashed" : trc ? (normalizeKey(device.currentStage) === "qc" ? "QC" : "TRC") : "",
+      failedAt: trashed || trc ? label : "",
+      ngAt: trc && trc.ngTime ? new Date(trc.ngTime).toISOString() : trashed && trashed.trashedAt ? new Date(trashed.trashedAt).toISOString() : null,
+      reason: trashed ? trashed.reason || "" : "",
     };
   });
+  const wipTypeRank = { trc: 0, trashed: 1, line: 2, delivered: 0 };
   devices.sort((left, right) => {
-    if (left.wipType !== right.wipType) return left.wipType === "trc" ? -1 : 1;
+    if (left.wipType !== right.wipType) return (wipTypeRank[left.wipType] ?? 9) - (wipTypeRank[right.wipType] ?? 9);
     return STAGE_WIP_SERIAL_COLLATOR.compare(left.serialNo, right.serialNo);
   });
 
   const listedTrc = devices.filter((device) => device.wipType === "trc").length;
+  const listedTrashed = devices.filter((device) => device.wipType === "trashed").length;
   return {
     found: true,
     stageName: label,
@@ -2217,8 +2285,9 @@ const computeStageWipDevices = async ({
     lineWip,
     trcWip,
     listed: devices.length,
-    listedLine: devices.length - listedTrc,
+    listedLine: devices.length - listedTrc - listedTrashed,
     listedTrc,
+    listedTrashed,
     // The first stage is derived from the kit allocation: kits that are issued
     // but have no serial yet are WIP without a row to list.
     missingUnits: truncated ? 0 : Math.max(wip - devices.length, 0),

@@ -22,6 +22,10 @@ const kitTransferRequestSchema = new mongoose.Schema(
     productName: { type: String, default: "" },
     quantity: { type: Number, required: true },
     serials: { type: [String], default: [] },
+    // Serials that were requested but no longer in the source process at
+    // approval time (e.g. moved by an earlier overlapping request) — trimmed
+    // out automatically instead of blocking the whole approval.
+    skippedSerials: { type: [String], default: [] },
     targetStage: { type: String, default: "" },
     remarks: { type: String, default: "" },
     rejectionReason: { type: String, default: "" },

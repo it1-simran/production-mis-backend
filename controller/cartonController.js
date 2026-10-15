@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { CRASHED_STATUS_VALUES, isCrashedStatus } = require("../constants/crashStatus");
 const processLogModel = require("../models/ProcessLogs");
 const cartonModel = require("../models/cartonManagement");
 const cartonHistoryModel = require("../models/cartonHistory");
@@ -1173,6 +1174,21 @@ module.exports = {
         return res.status(400).json({
           status: 400,
           message: "At least one device is required.",
+        });
+      }
+
+      // A unit trashed by TRC must never be packed.
+      const trashedInRequest = await deviceModel
+        .find({
+          _id: { $in: deviceIds.filter((id) => mongoose.Types.ObjectId.isValid(id)) },
+          status: { $in: CRASHED_STATUS_VALUES },
+        })
+        .select("serialNo")
+        .lean();
+      if (trashedInRequest.length > 0) {
+        return res.status(400).json({
+          status: 400,
+          message: `Crashed device(s) cannot be packed: ${trashedInRequest.map((d) => d.serialNo).join(", ")}`,
         });
       }
 
@@ -3873,6 +3889,12 @@ module.exports = {
 
       if (!device) {
         return res.status(404).json({ status: 404, message: "Device not found." });
+      }
+      if (isCrashedStatus(device.status)) {
+        return res.status(400).json({
+          status: 400,
+          message: `Device ${device.serialNo} has been crashed and cannot be repackaged.`,
+        });
       }
 
       const currentStage = normalizeStageToken(device.currentStage);
