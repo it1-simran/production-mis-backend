@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { CRASHED_STATUS_VALUES, isCrashedStatus } = require("../constants/crashStatus");
 const moment = require("moment");
 const assignedOperatorsToPlanModel = require("../models/assignOperatorToPlan");
 const assignedJigToPlanModel = require("../models/assignJigToPlan");
@@ -491,7 +492,7 @@ const buildActiveWipDeviceKeys = (devices = [], targetStageNames = new Set()) =>
         (targetStage) => targetStage && (stageName === targetStage || stageName.includes(targetStage)),
       );
     const deviceStatus = normalizeKey(device?.status || "");
-    const isActiveWip = deviceStatus !== "ng" && deviceStatus !== "fail";
+    const isActiveWip = deviceStatus !== "ng" && deviceStatus !== "fail" && !isCrashedStatus(deviceStatus);
     if (!isAtTargetStage || !isActiveWip) return;
 
     const deviceId = String(device?._id || "").trim();
@@ -636,6 +637,7 @@ const isDeviceVisibleToSeat = ({ device = {}, operatorStageName = "", processId 
     deviceProcessId === String(processId) &&
     deviceStatus !== "ng" &&
     deviceStatus !== "fail" &&
+    !isCrashedStatus(deviceStatus) &&
     stageMatches
   );
 };
@@ -1388,7 +1390,7 @@ const buildOperatorTaskSummary = async ({ planId, operatorId, includeHistory = f
             deviceModel
               .find({
                 processID: process._id,
-                status: { $nin: ["NG"] },
+                status: { $nin: ["NG", ...CRASHED_STATUS_VALUES] },
                 ...(buildProductTypeMatch(process?.selectedProduct)
                   ? { productType: buildProductTypeMatch(process?.selectedProduct) }
                   : {}),
@@ -1981,6 +1983,14 @@ module.exports = {
           message: scanTokens.length > 0
             ? "No device matched the scanned sticker values."
             : "Device not found",
+        });
+      }
+
+      if (isCrashedStatus(device?.status)) {
+        return res.status(409).json({
+          status: 409,
+          message: `Device ${device?.serialNo || ""} has been crashed by TRC and cannot be processed.`,
+          data: { device },
         });
       }
 

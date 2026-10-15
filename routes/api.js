@@ -16,6 +16,7 @@ const holidayController = require('../controller/holidayController');
 const assignedOperatorsToPlan = require('../controller/operatorTaskController');
 const operatorWorkController = require('../controller/operatorWorkController');
 const deviceController = require(`../controller/deviceController`);
+const trashedDevicesController = require('../controller/trashedDevicesController');
 const multer = require('multer');
 const connectDB = require('../config/db');
 const RoomPlan = require('../models/roomPlan');
@@ -368,6 +369,7 @@ router.patch('/updateStageBySerialNo/:serialNo', authController.authenticateToke
 router.post('/devices/searchByJigFields', authController.authenticateToken, authController.authorize([MODULE_KEYS.FIND_DEVICE, MODULE_KEYS.VIEW_TASK], "read"), deviceController.searchByJigFields);
 router.post('/devices/validate-identity-at-connection', authController.authenticateToken, deviceController.validateDeviceIdentityAtConnection);
 router.post('/devices/markAsResolved', authController.authenticateToken, authController.authorizeMarkDeviceResolved, deviceController.markAsResolved);
+router.post('/devices/trash', authController.authenticateToken, authController.authorizeTrashDevice, deviceController.trashDevice);
 router.post('/devices/seed-stage-history', authController.authenticateToken, deviceController.seedStageHistory);
 router.get('/devices/search-history', authController.authenticateToken, authController.authorize(MODULE_KEYS.FIND_DEVICE, "read"), deviceController.getDeviceComprehensiveHistory);
 router.post('/devices/sticker-reprint-log', authController.authenticateToken, deviceController.createStickerReprintLog);
@@ -397,6 +399,8 @@ router.delete('/devices/deleteIMEI/:id', authController.authenticateToken, authC
 router.post('/devices/deleteIMEI/multiple', authController.authenticateToken, authController.authorize(MODULE_KEYS.VIEW_IMEI, "delete"), deviceController.deleteMultipleIMEI);
 router.post('/devices/bulk-delete-by-imei', authController.authenticateToken, authController.authorize(MODULE_KEYS.BULK_DELETE_DEVICES, "delete"), deviceController.bulkDeleteByImei);
 router.get('/devices/deleted-devices', authController.authenticateToken, authController.authorize([MODULE_KEYS.DELETION_HISTORY, MODULE_KEYS.BULK_DELETE_DEVICES], "read"), deviceController.viewDeletedDevices);
+// View Planning "Trashed" tile: one process's trashed serials, readable by planning users.
+router.get('/devices/trashed-by-process/:processId', authController.authenticateToken, authController.authorize(PROCESS_AND_PLANNING_READ_MODULES, "read"), trashedDevicesController.listTrashedDevicesByProcess);
 router.get('/analytics/device-test/trends', authController.authenticateToken, deviceController.getDeviceTestTrends);
 router.get('/analytics/device-test/ng-reasons', authController.authenticateToken, deviceController.getNGReasonDistribution);
 router.get('/inventory/view', authController.authenticateToken, authController.authorize([MODULE_KEYS.INVENTORY_STORE, MODULE_KEYS.VIEW_PRODUCT_INVENTORY, MODULE_KEYS.VIEW_PROCESS_INVENTORY],"read"), inventoryController.view);
