@@ -17,6 +17,8 @@ const deviceSchemas = new mongoose.Schema({
   ccid: { type: String, required: false, default: "" },
   status: { type: String, required: false, default: "" },
   currentStage: { type: String, required: false, default: "" },
+  // Set the first time this device's kit is counted as consumed (the first move to PDI, see services/kitConsumption.js). Null until then.
+  kitConsumedAt: { type: Date, required: false, default: null },
   dispatchStatus: {
     type: String,
     required: false,

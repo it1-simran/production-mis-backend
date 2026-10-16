@@ -10,6 +10,7 @@ const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber"
 const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
+const { claimKitConsumption } = require("../services/kitConsumption");
 // const ProcessModel = require("../models/process");
 
 const PDI_CARTON_NG_REASONS = {
@@ -2805,6 +2806,20 @@ module.exports = {
         { $set: { currentStage: "PDI" } }
       );
 
+      // A device's kit is consumed the first time it reaches PDI. Counted once per device (a carton sent back after a PDI NG and
+      // shifted again adds nothing). A failure here must not undo the shift: the log shows it and the backfill script can repair it.
+      try {
+        const devicesByProcess = new Map();
+        affectedCartons.forEach((carton) => {
+          const key = String(carton.processId || "");
+          if (!key) return;
+          devicesByProcess.set(key, [...(devicesByProcess.get(key) || []), ...(Array.isArray(carton.devices) ? carton.devices : [])]);
+        });
+        await Promise.all(Array.from(devicesByProcess, ([processKey, deviceIds]) => claimKitConsumption({ deviceIds, processId: processKey, latestPlan: true })));
+      } catch (consumeError) {
+        console.error("shiftToPDI: could not count consumed kits:", consumeError);
+      }
+
       return res.status(200).json({
         success: true,
         shifted: affectedCartons.length,
@@ -3168,9 +3183,11 @@ module.exports = {
       const lockedProcessFgIapNo = String(process?.fgIapNo || "").trim();
       const finalFgIapNo = lockedProcessFgIapNo || effectiveFgIapNo;
 
-      // 4. Update the count for the consumed kits into the process
+      // 4. Kits are consumed when a device first reaches PDI (shiftToPDI). Here only devices that somehow were not counted yet (cartons
+      // that never went through PDI, or shifted before this rule) are added, so nothing is counted twice. The process and plan totals are
+      // raised atomically inside; the process document below is saved WITHOUT touching consumedKits.
+      await claimKitConsumption({ deviceIds: devices.map((d) => d._id), processId, planId });
       if (process) {
-        process.consumedKits = (process.consumedKits || 0) + deviceCount;
         process.fgToStore = (process.fgToStore || 0) + deviceCount;
         if (finalFgIapNo && !process.fgIapNo) {
           process.fgIapNo = finalFgIapNo;
@@ -3178,14 +3195,7 @@ module.exports = {
         await process.save();
       }
 
-      // 5. Update the count for the consumed kits into the planning if planId is provided
-      if (planId) {
-        const planing = await planingModel.findById(planId);
-        if (planing) {
-          planing.consumedKit = (planing.consumedKit || 0) + deviceCount;
-          await planing.save();
-        }
-      }
+      // 5. (the plan's consumedKit is raised by claimKitConsumption above)
 
       // 6. Update the inventory of the store
       if (process && process.selectedProduct) {

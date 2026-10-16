@@ -1,3 +1,4 @@
+const { claimKitConsumption } = require("../services/kitConsumption");
 const deviceModel = require("../models/device");
 const deviceTestModel = require("../models/deviceTestModel");
 const processModel = require("../models/process");
@@ -1019,9 +1020,17 @@ module.exports = {
         });
       }
 
+      // A case-insensitive, unanchored regex can't use the status index, so it
+      // scanned every test record of the process. Resolve it once into the exact
+      // stored status values (cheap distinct over the status index) and match
+      // with $in instead — same rows, index-backed.
+      const ngStatusValues = await cachedCompute("ng-status-values", 5 * 60 * 1000, async () => {
+        const all = await deviceTestRecords.distinct("status");
+        return all.filter((value) => /^NG$|RESOLVED/i.test(String(value || "")));
+      });
       const filter = {
         processId: new mongoose.Types.ObjectId(processId),
-        status: { $regex: /^NG$|RESOLVED/i },
+        status: { $in: ngStatusValues },
       };
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
@@ -1473,7 +1482,7 @@ module.exports = {
 
       const deviceLookupStart = Date.now();
       const devicePromise = data.deviceId && mongoose.Types.ObjectId.isValid(data.deviceId)
-        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName").lean().lean().then((result) => {
+        ? deviceModel.findById(data.deviceId).select("_id serialNo currentStage status flowVersion flowStartedAt processID modelName kitConsumedAt").lean().lean().then((result) => {
             markTiming("deviceLookupMs", deviceLookupStart);
             return result;
           })
@@ -1617,11 +1626,9 @@ module.exports = {
       data.serialNo = serialNo || normalizeText(deviceSnapshot.serialNo);
       data.processId = resolvedProcessId;
 
-      const payloadFlowVersion = Number(data.flowVersion);
-      const hasFlowVersion = Number.isFinite(payloadFlowVersion) && payloadFlowVersion > 0;
-      const hasFlowStartedAt = Object.prototype.hasOwnProperty.call(data, "flowStartedAt");
-      data.flowVersion = hasFlowVersion ? payloadFlowVersion : Number(deviceSnapshot?.flowVersion || 1);
-      data.flowStartedAt = hasFlowStartedAt ? (data.flowStartedAt || null) : (deviceSnapshot?.flowStartedAt || null);
+      // The flow tag comes from the device itself: a page loaded before a Kit Transfer reset still holds the old version.
+      data.flowVersion = Number(deviceSnapshot?.flowVersion || 1);
+      data.flowStartedAt = deviceSnapshot?.flowStartedAt || null;
       data.flowBoundary = false;
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
@@ -2002,7 +2009,11 @@ module.exports = {
       rawSeatStages[targetStageIdx] = currentSeatStageEntry;
       rawAssignedStages[currentIndex] = rawSeatStages;
       if (currentStageName === "FG to Store") {
-        planing.consumedKit = Number(planing.consumedKit || 0) + 1;
+        // The kit is consumed when the device first reaches PDI; this only counts a device that was not counted yet. The process total is
+        // raised inside; the plan figure stays in this request's own copy of the plan, which is saved below.
+        // The device was already loaded above: a device carrying the marker is skipped without another database call.
+        const { counted } = deviceSnapshot?.kitConsumedAt ? { counted: 0 } : await claimKitConsumption({ deviceIds: [data.deviceId], processId: planing.selectedProcess });
+        if (counted > 0) planing.consumedKit = Number(planing.consumedKit || 0) + counted;
       }
       if (currentStageName === lastStage && rawAssignedStages[currentIndex]?.[0]) {
         rawAssignedStages[currentIndex][0].totalUPHA = Number(rawAssignedStages[currentIndex][0]?.totalUPHA || 0) - 1;

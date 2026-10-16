@@ -36,6 +36,11 @@ const connectDB = async () => {
             maxIdleTimeMS: 30000,
             socketTimeoutMS: 45000,
             serverSelectionTimeoutMS: 10000,
+            // Atlas bills every byte it sends to the app (the app server and the
+            // cluster are in different AWS regions). zlib is built into Node, needs
+            // no extra dependency, and shrinks typical query results ~10-15x on the wire.
+            compressors: ['zlib'],
+            zlibCompressionLevel: 6,
         });
         console.log('Connected !!');
     } catch (err) {

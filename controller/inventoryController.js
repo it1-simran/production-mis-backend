@@ -4,6 +4,7 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 const KitAllocationTransactionModel = require("../models/kitAllocationTransaction");
+const { createInventoryForProduct } = require("../services/inventoryService");
 
 const toPositiveInt = (value) => Math.max(parseInt(value, 10) || 0, 0);
 
@@ -395,14 +396,8 @@ module.exports = {
       }).lean();
 
       if (!Inventory) {
-        Inventory = new InventoryModel({
-          productName: process.productName || "Unknown",
-          productType: process.selectedProduct,
-          quantity: 0,
-          cartonQuantity: 0,
-          status: "Out of Stock",
-        });
-        await Inventory.save();
+        // find-or-create in one step: two requests at once must not make two inventory rows for one product
+        Inventory = await createInventoryForProduct({ _id: process.selectedProduct, name: process.productName || "Unknown" }, req.user || {});
       }
 
       const kitQty = toPositiveInt(req?.body?.issuedKits);
