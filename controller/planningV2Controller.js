@@ -35,8 +35,8 @@ const { diffPlans } = require("../services/planning/planDiff");
 const { loadFootprint, summarizeFootprint } = require("../services/planning/planFootprint");
 const { formatPlanDate, dayKeyLocal, buildHolidayKeys, dayNumber } = require("../utils/planDates");
 const UserModel = require("../models/User");
-const { loadActuals } = require("../services/planning/planActuals");
-const { buildOverview, buildBoardPlan, lastStageName } = require("../services/planning/planOverview");
+const { loadActuals, loadActualsPerPlan } = require("../services/planning/planActuals");
+const { buildOverview, buildBoardPlan, boardSummary, mergeDayFigures, lastStageName } = require("../services/planning/planOverview");
 const { loadOperations } = require("../services/planning/planOperations");
 const { loadStageSummary, loadStageDevices, loadStageHistory } = require("../services/planning/planStageDetail");
 const { loadHourly } = require("../services/planning/planHourly");
@@ -597,23 +597,25 @@ module.exports = {
       const shiftById = new Map(shiftDocs.map((s) => [String(s._id), s]));
       const holidayKeys = buildHolidayKeys(holidays);
       const lastStageByPlan = new Map(plans.map((p) => [String(p._id), lastStageName(processById.get(String(p.selectedProcess)))]));
-      const actuals = await loadActuals({ planIds: plans.filter((p) => Number(p.isDrafted) !== 1).map((p) => String(p._id)), lastStageByPlan, fromKey: from, toKey: to });
+      // The calendar also asks for each plan's progress. That compares output through yesterday with the plan, so it needs the
+      // plan's whole history and not just the days in view. The board does not ask, and keeps the cheaper windowed query.
+      const withProgress = String(req.query?.withProgress || "") === "1";
+      const publishedIds = plans.filter((p) => Number(p.isDrafted) !== 1).map((p) => String(p._id));
+      const actuals = withProgress ? await loadActualsPerPlan({ planIds: publishedIds, lastStageByPlan }) : await loadActuals({ planIds: publishedIds, lastStageByPlan, fromKey: from, toKey: to });
       const todayKey = dayKeyLocal(new Date());
 
-      const rows = plans.map((plan) =>
-        buildBoardPlan({
-          plan,
-          process: processById.get(String(plan.selectedProcess)),
-          shift: shiftById.get(String(plan.selectedShift)) || null,
-          holidayKeys,
-          actuals: actuals.get(String(plan._id)),
-          fromKey: from,
-          toKey: to,
-          todayKey,
-        }),
-      );
+      const rows = plans.map((plan) => {
+        const process = processById.get(String(plan.selectedProcess));
+        const shift = shiftById.get(String(plan.selectedShift)) || null;
+        const planActuals = actuals.get(String(plan._id));
+        const row = buildBoardPlan({ plan, process, shift, holidayKeys, actuals: planActuals, fromKey: from, toKey: to, todayKey });
+        if (!withProgress) return row;
+        const { dayFigures, extraFigures, ...summary } = boardSummary({ plan, process, shift, holidayKeys, actuals: planActuals, todayKey });
+        return { ...mergeDayFigures(row, dayFigures, extraFigures), ...summary };
+      });
       const rooms = roomDocs.map((r) => ({ _id: String(r._id), floorName: r.floorName, lines: (r.lines || []).map((l) => ({ rowName: l.rowName || "", seats: (l.seats || []).map((st) => ({ seatNumber: st.seatNumber })) })) }));
-      return res.status(200).json({ status: 200, from, to, today: todayKey, room: room || null, rooms, plans: rows, truncated: plans.length === PLAN_LIMIT });
+      const holidaysInRange = [...holidayKeys].filter((k) => k >= from && k <= to).sort();
+      return res.status(200).json({ status: 200, from, to, today: todayKey, room: room || null, rooms, holidays: holidaysInRange, plans: rows, truncated: plans.length === PLAN_LIMIT });
     } catch (error) {
       console.error("[planning-v2] schedule board failed:", error);
       return fail(res, 500, error.message);

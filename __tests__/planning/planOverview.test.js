@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { summarizeActuals } = require("../../services/planning/planActuals");
-const { buildOverview, buildBoardPlan, progressOf, lastStageName } = require("../../services/planning/planOverview");
+const { summarizeActuals, loadActualsPerPlan } = require("../../services/planning/planActuals");
+const { buildOverview, buildBoardPlan, boardSummary, mergeDayFigures, achievedUph, elapsedMinutesToday, progressOf, lastStageName } = require("../../services/planning/planOverview");
 const { buildHolidayKeys } = require("../../utils/planDates");
 const { DAY_SHIFT, PROCESS, stageEntry } = require("./helpers");
 
@@ -152,6 +152,89 @@ test("the board row keeps only the days inside the window, with planned and actu
   const unscheduled = buildBoardPlan({ plan: shiftPlan({ estimatedEndDate: null }), process: PROCESS, shift: DAY_SHIFT, holidayKeys: NO_HOLIDAYS, fromKey: "2026-10-05", toKey: "2026-10-09", todayKey: "2026-10-08" });
   assert.equal(unscheduled.scheduled, false);
   assert.deepEqual(unscheduled.days, []);
+});
+
+test("the planned total is added up from the unrounded daily targets, not from the rounded days", () => {
+  // 40.4 units an hour over an 8 hour day is 323.2 a day: each day shows 323, and rounding first would lose a unit
+  const process = { ...PROCESS, stages: [PROCESS.stages[0], { ...PROCESS.stages[1], upha: "40.4" }] };
+  const o = overview({ process, todayKey: "2026-10-09", actuals: actualsOf([["2026-10-06", "Functional", "Pass", 550], ["2026-10-07", "Functional", "Pass", 550]]) });
+  assert.deepEqual(o.days.map((d) => d.plannedUnits), [0, 323, 323, 323, 30], "each day is rounded for display");
+  assert.equal(o.totals.planned, 1000, "the total is not 999");
+  assert.equal(o.days[4].cumulativePlanned, 1000);
+  assert.match(o.progress.detail, /^130 units ahead/, "the plan through yesterday is 970, not 969");
+});
+
+test("a board row summary carries the plan's totals and the overview's progress chip, and no progress for a draft", () => {
+  const actuals = actualsOf([["2026-10-06", "Functional", "Pass", 310], ["2026-10-07", "Functional", "Pass", 330]]);
+  const args = { plan: shiftPlan(), process: PROCESS, shift: DAY_SHIFT, holidayKeys: NO_HOLIDAYS, actuals, todayKey: "2026-10-08" };
+  const s = boardSummary(args);
+  assert.deepEqual([s.quantity, s.plannedTotal, s.finishedTotal], [1000, 1000, 640]);
+  assert.equal(s.shiftName, "Day");
+  assert.deepEqual(s.progress, (({ state, label, detail }) => ({ state, label, detail }))(overview({ actuals }).progress), "the same chip as the overview");
+  assert.equal(boardSummary({ ...args, plan: shiftPlan({ isDrafted: 1 }) }).progress, null);
+});
+
+test("whole-history actuals are loaded one plan at a time, a few at once, and merged", async () => {
+  let running = 0;
+  let peak = 0;
+  const asked = [];
+  const load = async ({ planIds }) => {
+    asked.push(planIds);
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((r) => setTimeout(r, 5));
+    running -= 1;
+    return new Map(planIds.map((id) => [id, { totals: { finished: Number(id.slice(1)) } }]));
+  };
+  const ids = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"];
+  const out = await loadActualsPerPlan({ planIds: ids, lastStageByPlan: new Map(), concurrency: 3, load });
+  assert.deepEqual(asked.map((a) => a.length), ids.map(() => 1), "never more than one plan per query");
+  assert.ok(peak > 1 && peak <= 3, `at most 3 queries at once (saw ${peak})`);
+  assert.deepEqual([...out.keys()].sort(), ids);
+  assert.equal(out.get("p6").totals.finished, 6);
+  assert.equal((await loadActualsPerPlan({ planIds: [], lastStageByPlan: new Map(), load })).size, 0, "nothing to load");
+});
+
+test("each overview day carries the rate it is planned at and the minutes that rate applies to", () => {
+  const o = overview();
+  assert.deepEqual(o.days.map((d) => d.targetUph), [40, 40, 40, 40, 40], "the line runs at its slowest stage, Functional at 40 an hour");
+  assert.deepEqual(o.days.map((d) => d.capacityMinutes), [480, 480, 480, 480, 480], "8 productive hours: 9 to 6 less the lunch hour");
+});
+
+test("achieved UPH needs half an hour of work time and is null for a coming day", () => {
+  const base = { finished: 100, capacityMinutes: 480, todayKey: "2026-10-08" };
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-07" }), 12.5, "a finished day is judged over its whole 8 hours");
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-09" }), null, "a coming day");
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-08", elapsedMinutes: 20 }), null, "twenty minutes in is too early to judge");
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-08", elapsedMinutes: 120 }), 50, "today is judged over the hours gone");
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-08", elapsedMinutes: null }), null);
+  assert.equal(achievedUph({ ...base, dayKey: "2026-10-07", capacityMinutes: 0 }), null, "a day with no work time");
+});
+
+test("the hours gone today are read on the plant's clock, capped at the day's capacity, and unknown across midnight", () => {
+  const day = { startTime: "09:00", endTime: "18:00", capacityMinutes: 480 };
+  assert.equal(elapsedMinutesToday(day, new Date("2026-10-08T04:30:00Z")), 60, "10:00 in Asia/Kolkata is an hour into the 09:00 shift");
+  assert.equal(elapsedMinutesToday(day, new Date("2026-10-08T02:00:00Z")), 0, "07:30, before the shift");
+  assert.equal(elapsedMinutesToday(day, new Date("2026-10-08T14:00:00Z")), 480, "19:30, after the shift: all of the capacity, not the 540 clock minutes");
+  assert.equal(elapsedMinutesToday({ startTime: "21:00", endTime: "05:00", capacityMinutes: 480 }, new Date("2026-10-08T04:30:00Z")), null, "a night shift");
+});
+
+test("the board summary carries each day's target rate, the rate achieved and the running totals, and a row can take them in", () => {
+  const actuals = actualsOf([["2026-10-06", "Functional", "Pass", 310], ["2026-10-07", "Functional", "Pass", 330]]);
+  const now = new Date("2026-10-08T04:30:00Z"); // 10:00 at the plant, an hour into the shift
+  const s = boardSummary({ plan: shiftPlan(), process: PROCESS, shift: DAY_SHIFT, holidayKeys: NO_HOLIDAYS, actuals, todayKey: "2026-10-08", now });
+  const f = s.dayFigures;
+  assert.deepEqual(Object.keys(f), ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]);
+  assert.equal(f["2026-10-05"].targetUph, null, "no target on the set-up day");
+  assert.deepEqual([f["2026-10-06"].targetUph, f["2026-10-06"].achievedUph], [40, 38.8], "310 in 8 hours");
+  assert.deepEqual([f["2026-10-07"].achievedUph, f["2026-10-07"].completedToDate], [41.3, 640]);
+  assert.deepEqual([f["2026-10-08"].achievedUph, f["2026-10-08"].uphSoFar], [0, true], "today: nothing finished in the first hour");
+  assert.deepEqual([f["2026-10-09"].achievedUph, f["2026-10-09"].uphSoFar], [null, false], "a coming day");
+  const row = buildBoardPlan({ plan: shiftPlan(), process: PROCESS, shift: DAY_SHIFT, holidayKeys: NO_HOLIDAYS, actuals, fromKey: "2026-10-06", toKey: "2026-10-07", todayKey: "2026-10-08" });
+  const merged = mergeDayFigures(row, f);
+  assert.deepEqual(merged.days.map((d) => [d.dayKey, d.finished, d.achievedUph, d.completedToDate]), [["2026-10-06", 310, 38.8, 310], ["2026-10-07", 330, 41.3, 640]]);
+  assert.equal(merged.planId, row.planId, "the rest of the row is untouched");
+  assert.deepEqual(mergeDayFigures(row, undefined).days, row.days, "with no figures the days are as they were");
 });
 
 test("progressOf handles an empty schedule", () => {

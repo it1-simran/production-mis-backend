@@ -35,7 +35,7 @@ const main = async () => {
   const HolidayModel = require("../models/holidayModel");
   const loader = require("../services/planning/planLoader");
   const { loadActuals } = require("../services/planning/planActuals");
-  const { buildOverview, buildBoardPlan, lastStageName } = require("../services/planning/planOverview");
+  const { buildOverview, buildBoardPlan, boardSummary, lastStageName } = require("../services/planning/planOverview");
   const { buildHolidayKeys, dayKeyLocal } = require("../utils/planDates");
 
   const onlyPlan = argValue("--plan");
@@ -44,7 +44,7 @@ const main = async () => {
   const todayKey = dayKeyLocal(new Date());
   console.log(`${plans.length} published plan(s), today is ${todayKey}\n`);
 
-  const stats = { ok: 0, threw: 0, noSchedule: 0, odd: 0, outside: 0 };
+  const stats = { ok: 0, threw: 0, noSchedule: 0, odd: 0, outside: 0, calendarOff: 0 };
   const byProgress = {};
   for (const plan of plans) {
     const id = String(plan._id);
@@ -63,6 +63,19 @@ const main = async () => {
       if (o.totals.quantity > 0 && o.totals.finished > o.totals.quantity) notes.push(`finished ${o.totals.finished} is above the quantity ${o.totals.quantity}`);
       if (Math.abs(o.totals.planned - o.totals.quantity) > 1 && o.days.length) notes.push(`planned ${o.totals.planned} differs from quantity ${o.totals.quantity}`);
       if (row.days.length !== o.days.length) notes.push("board row and overview disagree on the days");
+      // what the calendar shows must be what the overview shows: every day's hours and figures, the totals and the progress chip
+      const sum = boardSummary({ plan, process, shift, holidayKeys, actuals: actuals.get(id), todayKey });
+      const calendar = [];
+      row.days.forEach((d, i) => {
+        const x = o.days[i];
+        if (!x || d.dayKey !== x.dayKey || d.startTime !== x.startTime || d.endTime !== x.endTime || d.plannedUnits !== x.plannedUnits || d.finished !== x.finished || d.failed !== x.failed) calendar.push(`day ${d.dayKey}`);
+      });
+      if (sum.quantity !== o.totals.quantity || sum.plannedTotal !== o.totals.planned || sum.finishedTotal !== o.totals.finished) calendar.push("totals");
+      if (!sum.progress || sum.progress.state !== o.progress.state || sum.progress.label !== o.progress.label) calendar.push("progress");
+      if (calendar.length) {
+        stats.calendarOff += 1;
+        notes.push(`CALENDAR DIFFERS from the overview: ${calendar.join(", ")}`);
+      }
       if (o.outside.length) stats.outside += 1;
       byProgress[o.progress.state] = (byProgress[o.progress.state] || 0) + 1;
       stats.ok += 1;
@@ -75,10 +88,10 @@ const main = async () => {
       console.log(`!!  ${id} ${plan.processName}: ${error.message}`);
     }
   }
-  console.log(`\nbuilt ${stats.ok}, threw ${stats.threw}, no schedule ${stats.noSchedule}, worth a look ${stats.odd}, with work outside the schedule ${stats.outside}`);
+  console.log(`\nbuilt ${stats.ok}, threw ${stats.threw}, no schedule ${stats.noSchedule}, worth a look ${stats.odd}, with work outside the schedule ${stats.outside}, calendar differs from overview ${stats.calendarOff}`);
   console.log("progress:", byProgress);
   await mongoose.disconnect();
-  process.exit(stats.threw ? 1 : 0);
+  process.exit(stats.threw || stats.calendarOff ? 1 : 0);
 };
 
 main().catch((error) => {

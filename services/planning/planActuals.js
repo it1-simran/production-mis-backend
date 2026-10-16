@@ -79,4 +79,20 @@ const loadActuals = async ({ planIds, lastStageByPlan, fromKey = "", toKey = "" 
   return summarizeActuals(filtered, lastStageByPlan);
 };
 
-module.exports = { summarizeActuals, loadActuals, emptyPlan };
+// Whole-history figures for several plans: one query per plan, a few at a time. One query over many plan ids with no date range
+// can make the database pick a poor index (7 plans took 42 s that way and 0.5 s as separate queries).
+const loadActualsPerPlan = async ({ planIds, lastStageByPlan, concurrency = 6, load = loadActuals }) => {
+  const queue = (planIds || []).slice();
+  const out = new Map();
+  const worker = async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      const one = await load({ planIds: [id], lastStageByPlan });
+      one.forEach((value, key) => out.set(key, value));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), queue.length) }, worker));
+  return out;
+};
+
+module.exports = { summarizeActuals, loadActuals, loadActualsPerPlan, emptyPlan };

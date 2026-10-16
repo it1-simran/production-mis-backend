@@ -6,7 +6,7 @@
 // a custom-schedule plan therefore look the same to the screens.
 
 const { normalizeDraft, safeParse, toList } = require("./draft");
-const { parsePlanDate, dayKeyLocal } = require("../../utils/planDates");
+const { parsePlanDate, dayKeyLocal, TZ } = require("../../utils/planDates");
 const { expandPlanToDays } = require("./dayGenerator");
 const { computeDayPlan } = require("./dayCapacity");
 const { normName } = require("./capacity");
@@ -77,7 +77,9 @@ const progressOf = ({ days, todayKey, processStatus, quantity, finishedTotal }) 
   if (days.length === 0) return { state: "unknown", label: "No schedule", detail: "This plan has no scheduled days to compare with." };
   if (todayKey < days[0].dayKey) return { state: "not_started", label: "Not started", detail: `Starts ${days[0].dayKey}.` };
   const through = days.filter((d) => d.dayKey < todayKey);
-  const plannedThrough = through.reduce((s, d) => s + d.plannedUnits, 0);
+  // planned through yesterday comes from the unrounded running total, not from adding up rounded days
+  const lastThrough = through[through.length - 1];
+  const plannedThrough = lastThrough && Number.isFinite(lastThrough.cumulativePlanned) ? lastThrough.cumulativePlanned : through.reduce((s, d) => s + d.plannedUnits, 0);
   const finishedThrough = through.reduce((s, d) => s + d.finished, 0);
   if (plannedThrough <= 0) return { state: "on_track", label: "On schedule", detail: "The first full day has not finished yet." };
   const ratio = finishedThrough / plannedThrough;
@@ -116,6 +118,10 @@ const buildOverview = ({ plan, process, room, shift, existingShiftName = "", hol
       startTime: d.window.startTime,
       endTime: d.window.endTime,
       productiveMinutes: d.productiveMinutes ?? p.capacityMinutes ?? 0,
+      // the minutes the day's target is worked out over: productive minutes plus overtime, less downtime
+      capacityMinutes: num(p.capacityMinutes ?? 0, 2),
+      // the line's rate the day is planned at (its slowest stage), in units per hour
+      targetUph: num(p.unitsPerHour ?? 0, 1),
       setupDay: !!p.setupDay,
       capacityUnits: num(p.capacityUnits, 0),
       plannedUnits: num(p.plannedUnits, 0),
@@ -135,7 +141,8 @@ const buildOverview = ({ plan, process, room, shift, existingShiftName = "", hol
     .map(([key, a]) => ({ dayKey: key, finished: a.finished, passedAny: a.passedAny, failed: a.failed }))
     .sort((x, y) => (x.dayKey < y.dayKey ? -1 : 1));
 
-  const plannedTotal = days.reduce((s, d) => s + d.plannedUnits, 0);
+  // the running sum is of the unrounded daily targets; rounding each day first and adding them up drifts (323.33 x 6 days came to 1998, not 2000)
+  const plannedTotal = cumulativePlanned;
   const finishedTotal = act.totals.finished;
   const stageCounts = {};
   Object.values(safeParse(plan?.assignedStages, {}) || {}).forEach((entries) => {
@@ -230,4 +237,85 @@ const buildBoardPlan = ({ plan, process, shift, holidayKeys, actuals, fromKey, t
   };
 };
 
-module.exports = { buildOverview, buildBoardPlan, planDayGrid, draftFromStored, progressOf, lastStageName };
+// ---- rates ------------------------------------------------------------------------------------------------
+
+const clockMinutes = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+};
+
+// The plant's wall clock as minutes since midnight (the plan's hours are in plant time, not the server's or the browser's).
+const plantMinutesNow = (now) => {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  return Number(parts.find((p) => p.type === "hour").value) * 60 + Number(parts.find((p) => p.type === "minute").value);
+};
+
+// Minutes of today's hours that have gone by, never more than the day's capacity minutes. Breaks are not taken out, so this is a
+// little generous early in the day. A window that crosses midnight (a night shift) has no clean answer, so it gives null.
+const elapsedMinutesToday = (day, now) => {
+  const start = clockMinutes(day.startTime);
+  const end = clockMinutes(day.endTime);
+  if (!(end > start)) return null;
+  const gone = Math.min(Math.max(plantMinutesNow(now) - start, 0), end - start);
+  return Math.min(gone, Number(day.capacityMinutes) > 0 ? Number(day.capacityMinutes) : gone);
+};
+
+// Units finished per productive hour. A finished day is judged over the whole day's capacity minutes (the same hours its target uses);
+// today over the hours gone so far; a coming day has nothing to judge. Under half an hour of work time a rate is noise, so no rate.
+const achievedUph = ({ finished, capacityMinutes, dayKey, todayKey, elapsedMinutes }) => {
+  if (dayKey > todayKey) return null;
+  const minutes = dayKey === todayKey ? elapsedMinutes : capacityMinutes;
+  if (!(Number(minutes) >= 30)) return null;
+  return num((Number(finished) || 0) / (minutes / 60), 1);
+};
+
+// What the calendar adds to a board row: the plan's totals and the same progress chip the overview shows. The progress
+// rule needs the plan's whole-life actuals (not just the days in view), so the caller passes unwindowed actuals.
+// dayFigures are per scheduled day, for the date-wise list: the target rate, the rate achieved, and completedToDate. extraFigures give
+// completedToDate for the days that had output without being scheduled. completedToDate counts EVERY day's output up to and including
+// that day, off-plan days too, so on any day it is the plan's real total so far (the overview's own running total only adds up the
+// scheduled days). It needs the whole history, since a month in view can start long after the plan did.
+const boardSummary = ({ plan, process, shift, holidayKeys, actuals, todayKey, now = new Date() }) => {
+  const o = buildOverview({ plan, process, room: null, shift, holidayKeys, actuals, todayKey });
+  const drafted = Number(plan?.isDrafted) === 1;
+  const outputDays = Array.from(actuals?.byDay instanceof Map ? actuals.byDay.entries() : []).map(([key, a]) => [key, Number(a.finished) || 0]);
+  const completedThrough = (dayKey) => outputDays.reduce((sum, [key, finished]) => (key <= dayKey ? sum + finished : sum), 0);
+  const dayFigures = {};
+  (o.days || []).forEach((d) => {
+    const isToday = d.dayKey === todayKey;
+    const elapsedMinutes = isToday ? elapsedMinutesToday(d, now) : null;
+    dayFigures[d.dayKey] = {
+      capacityMinutes: d.capacityMinutes,
+      // a set-up day plans nothing, so there is no target to be measured against
+      targetUph: d.setupDay || !(d.targetUph > 0) ? null : d.targetUph,
+      achievedUph: achievedUph({ finished: d.finished, capacityMinutes: d.capacityMinutes, dayKey: d.dayKey, todayKey, elapsedMinutes }),
+      uphSoFar: isToday,
+      completedToDate: completedThrough(d.dayKey),
+      plannedToDate: d.cumulativePlanned,
+    };
+  });
+  const extraFigures = {};
+  outputDays.forEach(([key]) => {
+    if (!dayFigures[key]) extraFigures[key] = { completedToDate: completedThrough(key) };
+  });
+  return {
+    shiftName: o.plan.shiftName,
+    quantity: o.totals.quantity,
+    plannedTotal: o.totals.planned,
+    finishedTotal: o.totals.finished,
+    // a draft has produced nothing, so "behind plan" would be meaningless
+    progress: drafted ? null : { state: o.progress.state, label: o.progress.label, detail: o.progress.detail },
+    dayFigures,
+    extraFigures,
+  };
+};
+
+// A board row with each of its scheduled days, and each off-plan day, given that day's figures (days the summary does not know are
+// left as they were).
+const mergeDayFigures = (row, dayFigures = {}, extraFigures = {}) => ({
+  ...row,
+  days: (row.days || []).map((d) => ({ ...d, ...(dayFigures[d.dayKey] || {}) })),
+  extraDays: (row.extraDays || []).map((d) => ({ ...d, ...(extraFigures[d.dayKey] || {}) })),
+});
+
+module.exports = { buildOverview, buildBoardPlan, boardSummary, mergeDayFigures, achievedUph, elapsedMinutesToday, planDayGrid, draftFromStored, progressOf, lastStageName };

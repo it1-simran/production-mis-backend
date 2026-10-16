@@ -1496,11 +1496,9 @@ module.exports = {
       data.serialNo = serialNo || normalizeText(deviceSnapshot.serialNo);
       data.processId = resolvedProcessId;
 
-      const payloadFlowVersion = Number(data.flowVersion);
-      const hasFlowVersion = Number.isFinite(payloadFlowVersion) && payloadFlowVersion > 0;
-      const hasFlowStartedAt = Object.prototype.hasOwnProperty.call(data, "flowStartedAt");
-      data.flowVersion = hasFlowVersion ? payloadFlowVersion : Number(deviceSnapshot?.flowVersion || 1);
-      data.flowStartedAt = hasFlowStartedAt ? (data.flowStartedAt || null) : (deviceSnapshot?.flowStartedAt || null);
+      // The flow tag comes from the device itself: a page loaded before a Kit Transfer reset still holds the old version.
+      data.flowVersion = Number(deviceSnapshot?.flowVersion || 1);
+      data.flowStartedAt = deviceSnapshot?.flowStartedAt || null;
       data.flowBoundary = false;
       data.flowType = data.flowType || "stage";
       data.previousFlowVersion = null;
