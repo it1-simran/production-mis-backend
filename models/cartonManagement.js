@@ -67,6 +67,14 @@ const cartonManagementSchema = new mongoose.Schema(
       default: null,
     },
     fgIapNo: { type: String, required: false, default: "" },
+    // IAP (FG IAP slot) this pending carton has been linked to before receipt.
+    // When set, Keep in Store must receive it against exactly this slot.
+    fgIapTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FgIapTransaction",
+      required: false,
+      default: null,
+    },
   },
   { timestamps: true }
 );

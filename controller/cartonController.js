@@ -3097,9 +3097,30 @@ module.exports = {
         .find({ processId: process._id, status: "Open" })
         .sort({ createdAt: 1, _id: 1 });
 
+      // A pending carton the store already linked to an IAP slot must be
+      // received against exactly that slot, whatever the client picked.
+      const cartonLink = await cartonModel
+        .findOne({ cartonSerial: selectedCarton, processId: processIdMatch })
+        .select("fgIapTransactionId")
+        .lean();
+      const assignedSlotId = cartonLink?.fgIapTransactionId ? String(cartonLink.fgIapTransactionId) : "";
+      if (assignedSlotId && allocationTransactionId && String(allocationTransactionId) !== assignedSlotId) {
+        return res.status(400).json({
+          success: false,
+          message: "This carton is already linked to a different IAP. Please refresh and try again.",
+        });
+      }
+      if (assignedSlotId && !openFgIapCandidates.some((f) => String(f._id) === assignedSlotId)) {
+        return res.status(400).json({
+          success: false,
+          message: "The IAP this carton is linked to is already fully received (Closed). Ask the store to re-link the carton to an open IAP.",
+        });
+      }
+      const selectedAllocationId = assignedSlotId || allocationTransactionId;
+
       let openFgIap = null;
       if (openFgIapCandidates.length > 1) {
-        if (!allocationTransactionId) {
+        if (!selectedAllocationId) {
           return res.status(400).json({
             success: false,
             message: "Multiple IAP allocations are open for this process — select which one this carton is being received against.",
@@ -3112,7 +3133,7 @@ module.exports = {
             })),
           });
         }
-        openFgIap = openFgIapCandidates.find((f) => String(f._id) === String(allocationTransactionId)) || null;
+        openFgIap = openFgIapCandidates.find((f) => String(f._id) === String(selectedAllocationId)) || null;
         if (!openFgIap) {
           return res.status(400).json({
             success: false,
@@ -3121,7 +3142,7 @@ module.exports = {
         }
       } else if (openFgIapCandidates.length === 1) {
         openFgIap = openFgIapCandidates[0];
-        if (allocationTransactionId && String(openFgIap._id) !== String(allocationTransactionId)) {
+        if (selectedAllocationId && String(openFgIap._id) !== String(selectedAllocationId)) {
           return res.status(400).json({
             success: false,
             message: "The selected IAP allocation is no longer open for this process. Please refresh and pick again.",
@@ -3720,6 +3741,7 @@ module.exports = {
             cartonSerial: 1,
             fgIapNo: 1,
             iapNo: 1,
+            fgIapTransactionId: 1,
             processFgIapNo: { $ifNull: ["$processInfo.fgIapNo", ""] },
             processIapNo: { $ifNull: ["$processInfo.iapNo", ""] },
             processName: { $ifNull: ["$processInfo.name", "Unknown Process"] },
@@ -3773,7 +3795,11 @@ module.exports = {
         new Set(enrichedCartons.map((c) => String(c.processId || "")).filter(Boolean))
       );
 
-      const [byFgIapNo, openByProcess] = await Promise.all([
+      const assignedSlotIds = Array.from(
+        new Set(enrichedCartons.map((c) => String(c.fgIapTransactionId || "")).filter((id) => mongoose.Types.ObjectId.isValid(id)))
+      );
+
+      const [byFgIapNo, openByProcess, assignedSlots] = await Promise.all([
         fgIapNos.length
           ? fgIapTransactionModel.find({ fgIapNo: { $in: fgIapNos } }).lean()
           : Promise.resolve([]),
@@ -3783,9 +3809,13 @@ module.exports = {
               .sort({ createdAt: 1, _id: 1 })
               .lean()
           : Promise.resolve([]),
+        assignedSlotIds.length
+          ? fgIapTransactionModel.find({ _id: { $in: assignedSlotIds } }).lean()
+          : Promise.resolve([]),
       ]);
 
       const fgIapByNo = new Map(byFgIapNo.map((f) => [f.fgIapNo, f]));
+      const assignedSlotById = new Map(assignedSlots.map((f) => [String(f._id), f]));
       const openCountByProcessId = new Map();
       const soleOpenByProcessId = new Map();
       openByProcess.forEach((f) => {
@@ -3817,6 +3847,25 @@ module.exports = {
         const isPendingReceipt = String(carton.status || "").toUpperCase() === "FG_TO_STORE";
         if (!isPendingReceipt) {
           carton.fgIap = null;
+          return;
+        }
+
+        // Pending carton the store has already linked to a specific IAP slot
+        // (cartonManagement.fgIapTransactionId) — show it under that IAP.
+        const assignedSlot = carton.fgIapTransactionId
+          ? assignedSlotById.get(String(carton.fgIapTransactionId))
+          : null;
+        if (assignedSlot) {
+          carton.iapNo = assignedSlot.iapNo;
+          carton.fgIap = {
+            fgIapNo: assignedSlot.fgIapNo || "",
+            iapNo: assignedSlot.iapNo,
+            approvedQuantity: assignedSlot.approvedQuantity,
+            receivedQuantity: assignedSlot.receivedQuantity,
+            status: assignedSlot.status,
+            pending: !assignedSlot.fgIapNo,
+            assigned: true,
+          };
           return;
         }
 
