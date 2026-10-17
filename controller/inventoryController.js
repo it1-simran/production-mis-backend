@@ -5,6 +5,7 @@ const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 const KitAllocationTransactionModel = require("../models/kitAllocationTransaction");
 const FgIapTransactionModel = require("../models/fgIapTransaction");
+const CartonModel = require("../models/cartonManagement");
 
 const toPositiveInt = (value) => Math.max(parseInt(value, 10) || 0, 0);
 
@@ -609,7 +610,18 @@ module.exports = {
       // apart from "every capped allocation is already fully received".
       const allClosed = transactions.length === 0 && Boolean(await FgIapTransactionModel.exists({ processId }));
 
-      return res.status(200).json({ status: 200, transactions, allClosed });
+      // Optional ?cartonSerial= — the IAP slot that carton is already linked
+      // to, so the popup can preselect (and lock) it.
+      let assignedTransactionId = null;
+      const cartonSerial = String(req.query?.cartonSerial || "").trim();
+      if (cartonSerial) {
+        const carton = await CartonModel.findOne({ cartonSerial, processId })
+          .select("fgIapTransactionId")
+          .lean();
+        assignedTransactionId = carton?.fgIapTransactionId || null;
+      }
+
+      return res.status(200).json({ status: 200, transactions, allClosed, assignedTransactionId });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }
