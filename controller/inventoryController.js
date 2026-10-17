@@ -4,6 +4,7 @@ const InventoryModel = require("../models/inventoryManagement");
 const ProcessModel = require("../models/process");
 const ProductModel = require("../models/Products");
 const KitAllocationTransactionModel = require("../models/kitAllocationTransaction");
+const FgIapTransactionModel = require("../models/fgIapTransaction");
 
 const toPositiveInt = (value) => Math.max(parseInt(value, 10) || 0, 0);
 
@@ -443,13 +444,18 @@ module.exports = {
           });
         }
 
-        const duplicateTransaction = await KitAllocationTransactionModel.findOne({ iapNo: inputIapNo }).lean();
-        if (duplicateTransaction) {
-          return res.status(400).json({
-            status: 400,
-            message: `IAP Number '${inputIapNo}' has already been used for a previous allocation. Please enter a unique IAP Number.`
-          });
-        }
+      }
+
+      // Checked for the fallback (process.iapNo) path too: each allocation gets
+      // its own FG IAP capacity slot keyed by IAP No., so reusing one would
+      // merge two capped batches under a single IAP on the FG to Store page.
+      const effectiveIapNoTrimmed = String(effectiveIapNo).trim();
+      const duplicateTransaction = await KitAllocationTransactionModel.findOne({ iapNo: effectiveIapNoTrimmed }).lean();
+      if (duplicateTransaction) {
+        return res.status(400).json({
+          status: 400,
+          message: `IAP Number '${effectiveIapNoTrimmed}' has already been used for a previous allocation. Please enter a unique IAP Number.`
+        });
       }
 
       const packagingData = await getPackagingDataByProductId(process.selectedProduct);
@@ -484,20 +490,54 @@ module.exports = {
         runValidators: true,
       });
 
-      const transaction = await KitAllocationTransactionModel.create({
-        processId: id,
-        inventoryId: Inventory._id,
-        iapNo: effectiveIapNo,
-        quantity: kitQty,
-        cartonQuantity: deriveCartonsFromQuantity(kitQty, maxCapacity),
-        allocatedBy: req.user?.id || null,
-      });
+      // The allocation record and its FG-IAP receiving slot must exist
+      // together or not at all — otherwise a batch could end up with a
+      // KitAllocationTransaction but no capacity tracking for it, silently
+      // falling back to the legacy per-process lock in cartonController.keepInStore.
+      let transaction;
+      let fgIapTransaction;
+      const txnSession = await mongoose.startSession();
+      try {
+        await txnSession.withTransaction(async () => {
+          const [createdTransaction] = await KitAllocationTransactionModel.create(
+            [{
+              processId: id,
+              inventoryId: Inventory._id,
+              iapNo: effectiveIapNo,
+              quantity: kitQty,
+              cartonQuantity: deriveCartonsFromQuantity(kitQty, maxCapacity),
+              allocatedBy: req.user?.id || null,
+            }],
+            { session: txnSession }
+          );
+          transaction = createdTransaction;
+
+          // Every IAP transaction gets its own capped receiving slot, but no FG
+          // IAP Number yet — the FG Store operator types that themselves on the
+          // first carton received against it (see cartonController.keepInStore).
+          const [createdFgIapTransaction] = await FgIapTransactionModel.create(
+            [{
+              allocationTransactionId: transaction._id,
+              processId: id,
+              iapNo: effectiveIapNo,
+              approvedQuantity: kitQty,
+              receivedQuantity: 0,
+              status: "Open",
+            }],
+            { session: txnSession }
+          );
+          fgIapTransaction = createdFgIapTransaction;
+        });
+      } finally {
+        await txnSession.endSession();
+      }
 
       return res.status(200).json({
         status: 200,
         status_msg: "Updated Process Sucessfully!!",
         updatedProcess,
         transaction,
+        fgIapTransaction,
       });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
@@ -515,7 +555,61 @@ module.exports = {
         .populate("allocatedBy", "name employeeCode")
         .lean();
 
-      return res.status(200).json({ status: 200, transactions });
+      const fgIapTransactions = await FgIapTransactionModel.find({ processId }).lean();
+      const fgIapByAllocationId = new Map(
+        fgIapTransactions.map((fg) => [String(fg.allocationTransactionId), fg])
+      );
+      const transactionsWithFgIap = transactions.map((t) => ({
+        ...t,
+        fgIap: fgIapByAllocationId.get(String(t._id)) || null,
+      }));
+
+      return res.status(200).json({ status: 200, transactions: transactionsWithFgIap });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getCurrentFgIapTransaction: async (req, res) => {
+    try {
+      const processId = req.params.processId;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process id" });
+      }
+
+      // Oldest still-open FG IAP transaction for this process. Kept for
+      // backward compatibility with callers that only want a single "best
+      // guess" — new code should use getOpenFgIapTransactions instead, since
+      // there is no physical/per-device way to know which allocation batch
+      // a carton's kits actually came from when more than one is open.
+      const current = await FgIapTransactionModel.findOne({ processId, status: "Open" })
+        .sort({ createdAt: 1, _id: 1 })
+        .lean();
+
+      return res.status(200).json({ status: 200, current });
+    } catch (error) {
+      return res.status(500).json({ status: 500, error: error.message });
+    }
+  },
+  getOpenFgIapTransactions: async (req, res) => {
+    try {
+      const processId = req.params.processId;
+      if (!mongoose.Types.ObjectId.isValid(processId)) {
+        return res.status(400).json({ status: 400, message: "Invalid process id" });
+      }
+
+      // Every still-open FG IAP transaction for this process, oldest first.
+      // There is no physical/per-device way to know in advance which one a
+      // given carton's kits actually came from (quantity-only tracking), so
+      // when more than one is open the FG Store operator picks explicitly —
+      // this list is what populates that choice.
+      const transactions = await FgIapTransactionModel.find({ processId, status: "Open" })
+        .sort({ createdAt: 1, _id: 1 })
+        .lean();
+      // Lets the Keep in Store popup tell "legacy process, free-text FG IAP"
+      // apart from "every capped allocation is already fully received".
+      const allClosed = transactions.length === 0 && Boolean(await FgIapTransactionModel.exists({ processId }));
+
+      return res.status(200).json({ status: 200, transactions, allClosed });
     } catch (error) {
       return res.status(500).json({ status: 500, error: error.message });
     }

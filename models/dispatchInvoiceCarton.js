@@ -18,6 +18,7 @@ const dispatchInvoiceCartonSchema = new mongoose.Schema(
     processId: { type: mongoose.Schema.Types.ObjectId, ref: "process", default: null },
     processName: { type: String, default: "" },
     modelName: { type: String, default: "", trim: true },
+    fgIapNo: { type: String, default: "", trim: true },
     deviceCount: { type: Number, default: 0 },
     statusAtDispatch: { type: String, default: "" },
     dispatchedAt: { type: Date, default: Date.now },

@@ -779,6 +779,7 @@ class DispatchService {
         processId: carton.processId?._id || carton.processId || null,
         processName: carton.processId?.name || "",
         modelName: carton.modelName || "",
+        fgIapNo: carton.fgIapNo || "",
         deviceCount: Array.isArray(carton.devices) ? carton.devices.length : 0,
         statusAtDispatch: carton.cartonStatus || carton.status || "",
         dispatchedAt: invoice.dispatchDate,
