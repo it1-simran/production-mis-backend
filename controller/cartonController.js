@@ -11,6 +11,7 @@ const OrderConfirmationNumberModel = require("../models/orderConfirmationNumber"
 const deviceTestModel = require("../models/deviceTestModel");
 const inventoryModel = require("../models/inventoryManagement");
 const planingModel = require("../models/planingAndSchedulingModel");
+const fgIapTransactionModel = require("../models/fgIapTransaction");
 // const ProcessModel = require("../models/process");
 
 const PDI_CARTON_NG_REASONS = {
@@ -3044,6 +3045,9 @@ module.exports = {
   },
 
   keepInStore: async (req, res) => {
+    // Set once this request has reserved quantity on an FgIapTransaction, so
+    // a failure in any later write can hand that capacity back.
+    let fgIapReservation = null;
     try {
       const { processId } = req.params;
       const {
@@ -3056,6 +3060,7 @@ module.exports = {
         timeConsumed,
         fgIapNo,
         iapNo,
+        allocationTransactionId,
       } = req.body;
       const effectiveFgIapNo = String(fgIapNo || iapNo || "").trim();
 
@@ -3079,21 +3084,125 @@ module.exports = {
           .json({ success: false, message: "Process not found." });
       }
 
-      const existingProcessFgIapNo = String(process?.fgIapNo || "").trim();
-      if (!existingProcessFgIapNo && effectiveFgIapNo) {
-        const duplicateProcess = await ProcessModel.findOne({
-          _id: { $ne: process._id },
-          $or: [
-            { fgIapNo: effectiveFgIapNo },
-            { iapNo: effectiveFgIapNo }
-          ]
-        }).lean();
+      // Each IAP (kit allocation) transaction has its own FG IAP Number,
+      // capped at that transaction's approved quantity. There is no
+      // physical/per-device way to know which allocation batch a given
+      // carton's kits actually came from (confirmed with the business — it's
+      // quantity-only tracking), so when more than one transaction is open
+      // at once the FG Store operator must pick explicitly rather than the
+      // system guessing FIFO-by-age. Processes with no IAP-linked allocation
+      // at all (legacy data) fall back to the old free-text,
+      // locked-once-per-process behavior below.
+      const openFgIapCandidates = await fgIapTransactionModel
+        .find({ processId: process._id, status: "Open" })
+        .sort({ createdAt: 1, _id: 1 });
 
-        if (duplicateProcess) {
+      let openFgIap = null;
+      if (openFgIapCandidates.length > 1) {
+        if (!allocationTransactionId) {
           return res.status(400).json({
             success: false,
-            message: `FG IAP Number '${effectiveFgIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique FG IAP Number.`
+            message: "Multiple IAP allocations are open for this process — select which one this carton is being received against.",
+            openAllocations: openFgIapCandidates.map((f) => ({
+              allocationTransactionId: f._id,
+              iapNo: f.iapNo,
+              fgIapNo: f.fgIapNo || "",
+              approvedQuantity: f.approvedQuantity,
+              receivedQuantity: f.receivedQuantity,
+            })),
           });
+        }
+        openFgIap = openFgIapCandidates.find((f) => String(f._id) === String(allocationTransactionId)) || null;
+        if (!openFgIap) {
+          return res.status(400).json({
+            success: false,
+            message: "The selected IAP allocation is no longer open for this process. Please refresh and pick again.",
+          });
+        }
+      } else if (openFgIapCandidates.length === 1) {
+        openFgIap = openFgIapCandidates[0];
+        if (allocationTransactionId && String(openFgIap._id) !== String(allocationTransactionId)) {
+          return res.status(400).json({
+            success: false,
+            message: "The selected IAP allocation is no longer open for this process. Please refresh and pick again.",
+          });
+        }
+      } else {
+        // No open slot. Only a process that never had an IAP-linked allocation
+        // may use the legacy free-text path — once every capped slot is fully
+        // received, accepting more would silently exceed the approved quantity.
+        const hasAnyFgIap = await fgIapTransactionModel.exists({ processId: process._id });
+        if (hasAnyFgIap) {
+          return res.status(400).json({
+            success: false,
+            message: "All IAP allocations for this process are fully received. Issue a new kit allocation (IAP) before keeping more cartons in store.",
+          });
+        }
+      }
+
+      if (openFgIap) {
+        // First carton against this IAP transaction — the FG Store operator
+        // must type its FG IAP Number themselves; it then locks for every
+        // later carton in this same batch (until the cap closes it).
+        if (!openFgIap.fgIapNo) {
+          if (!effectiveFgIapNo) {
+            return res.status(400).json({
+              success: false,
+              message: "FG IAP Number is required for the first carton received against this IAP allocation.",
+            });
+          }
+          // Check both stores — a legacy process may already have locked this
+          // same string onto Process.fgIapNo/iapNo before this feature existed.
+          const [duplicateFgIap, duplicateProcess] = await Promise.all([
+            fgIapTransactionModel
+              .findOne({ _id: { $ne: openFgIap._id }, fgIapNo: effectiveFgIapNo })
+              .lean(),
+            ProcessModel.findOne({
+              _id: { $ne: process._id },
+              $or: [{ fgIapNo: effectiveFgIapNo }, { iapNo: effectiveFgIapNo }],
+            }).lean(),
+          ]);
+          if (duplicateFgIap) {
+            return res.status(400).json({
+              success: false,
+              message: `FG IAP Number '${effectiveFgIapNo}' has already been used for another IAP allocation. Please enter a unique FG IAP Number.`,
+            });
+          }
+          if (duplicateProcess) {
+            return res.status(400).json({
+              success: false,
+              message: `FG IAP Number '${effectiveFgIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique FG IAP Number.`,
+            });
+          }
+        }
+      } else {
+        const existingProcessFgIapNo = String(process?.fgIapNo || "").trim();
+        if (!existingProcessFgIapNo && effectiveFgIapNo) {
+          // Check both stores — a new-style process elsewhere may already
+          // have locked this same string onto a FgIapTransaction.
+          const [duplicateProcess, duplicateFgIap] = await Promise.all([
+            ProcessModel.findOne({
+              _id: { $ne: process._id },
+              $or: [
+                { fgIapNo: effectiveFgIapNo },
+                { iapNo: effectiveFgIapNo }
+              ]
+            }).lean(),
+            fgIapTransactionModel.findOne({ fgIapNo: effectiveFgIapNo }).lean(),
+          ]);
+
+          if (duplicateProcess) {
+            return res.status(400).json({
+              success: false,
+              message: `FG IAP Number '${effectiveFgIapNo}' is already assigned to process batch '${duplicateProcess.name || duplicateProcess.processID}'. Please enter a unique FG IAP Number.`
+            });
+          }
+          if (duplicateFgIap) {
+            return res.status(400).json({
+              success: false,
+              message: `FG IAP Number '${effectiveFgIapNo}' has already been used for another IAP allocation. Please enter a unique FG IAP Number.`,
+            });
+          }
         }
       }
 
@@ -3168,6 +3277,65 @@ module.exports = {
         ? actorOperatorId
         : null;
 
+      if (openFgIap) {
+        const remainingCapacity = openFgIap.approvedQuantity - openFgIap.receivedQuantity;
+        if (deviceCount > remainingCapacity) {
+          const fgIapLabel = openFgIap.fgIapNo ? `'${openFgIap.fgIapNo}'` : "(not yet entered)";
+          return res.status(400).json({
+            success: false,
+            message: `Only ${remainingCapacity} PCS remaining against FG IAP Number ${fgIapLabel} (linked to IAP '${openFgIap.iapNo}', approved ${openFgIap.approvedQuantity} PCS). This carton has ${deviceCount} devices — split the carton or reduce its size.`,
+          });
+        }
+      }
+
+      let finalFgIapNo;
+      if (openFgIap) {
+        // Reserve this carton's quantity (and, on the first carton, lock the
+        // typed FG IAP Number) in ONE atomic conditional update, BEFORE any
+        // other write. The $expr cap is evaluated against current DB values,
+        // so concurrent receipts can't overshoot the approved quantity, and a
+        // request that loses the race is rejected with nothing written yet.
+        // Any failure after this point is rolled back in the catch below.
+        const isFirstCarton = !openFgIap.fgIapNo;
+        const reservationFilter = {
+          _id: openFgIap._id,
+          status: "Open",
+          $expr: { $lte: [{ $add: ["$receivedQuantity", deviceCount] }, "$approvedQuantity"] },
+          fgIapNo: isFirstCarton ? { $exists: false } : openFgIap.fgIapNo,
+        };
+        const reservationUpdate = { $inc: { receivedQuantity: deviceCount } };
+        if (isFirstCarton) reservationUpdate.$set = { fgIapNo: effectiveFgIapNo };
+
+        let reserved;
+        try {
+          reserved = await fgIapTransactionModel.findOneAndUpdate(reservationFilter, reservationUpdate, { new: true });
+        } catch (reserveError) {
+          if (reserveError?.code === 11000) {
+            return res.status(400).json({
+              success: false,
+              message: `FG IAP Number '${effectiveFgIapNo}' has already been used for another IAP allocation. Please enter a unique FG IAP Number.`,
+            });
+          }
+          throw reserveError;
+        }
+        if (!reserved) {
+          return res.status(409).json({
+            success: false,
+            message: "This IAP allocation just changed (another receipt may have landed first). Please refresh and try again.",
+          });
+        }
+        fgIapReservation = { id: reserved._id, count: deviceCount, lockedFgIapNo: isFirstCarton };
+
+        if (reserved.receivedQuantity >= reserved.approvedQuantity) {
+          await fgIapTransactionModel.updateOne({ _id: reserved._id, status: "Open" }, { $set: { status: "Closed" } });
+          reserved.status = "Closed";
+        }
+        openFgIap.fgIapNo = reserved.fgIapNo;
+        openFgIap.receivedQuantity = reserved.receivedQuantity;
+        openFgIap.status = reserved.status;
+        finalFgIapNo = openFgIap.fgIapNo;
+      }
+
       // 3. Create device test entries for each device in the carton
       const testEntries = devices.map((device) => ({
         deviceId: device._id,
@@ -3181,14 +3349,19 @@ module.exports = {
       }));
       await deviceTestModel.insertMany(testEntries);
 
-      const lockedProcessFgIapNo = String(process?.fgIapNo || "").trim();
-      const finalFgIapNo = lockedProcessFgIapNo || effectiveFgIapNo;
+      if (!openFgIap) {
+        const lockedProcessFgIapNo = String(process?.fgIapNo || "").trim();
+        finalFgIapNo = lockedProcessFgIapNo || effectiveFgIapNo;
+      }
 
       // 4. Update the count for the consumed kits into the process
       if (process) {
         process.consumedKits = (process.consumedKits || 0) + deviceCount;
         process.fgToStore = (process.fgToStore || 0) + deviceCount;
-        if (finalFgIapNo && !process.fgIapNo) {
+        if (openFgIap) {
+          // Reflects whichever FG IAP is currently active — rolls forward as each closes.
+          process.fgIapNo = finalFgIapNo;
+        } else if (finalFgIapNo && !process.fgIapNo) {
           process.fgIapNo = finalFgIapNo;
         }
         await process.save();
@@ -3268,9 +3441,37 @@ module.exports = {
         success: true,
         message: `${deviceCount} devices from carton ${selectedCarton} kept in store successfully`,
         devicesProcessed: deviceCount,
+        fgIap: openFgIap
+          ? {
+              fgIapNo: openFgIap.fgIapNo,
+              iapNo: openFgIap.iapNo,
+              approvedQuantity: openFgIap.approvedQuantity,
+              receivedQuantity: openFgIap.receivedQuantity,
+              status: openFgIap.status,
+            }
+          : null,
       });
     } catch (error) {
       console.error("Error in keepInStore:", error);
+      if (fgIapReservation) {
+        try {
+          const released = await fgIapTransactionModel.findOneAndUpdate(
+            { _id: fgIapReservation.id },
+            { $inc: { receivedQuantity: -fgIapReservation.count }, $set: { status: "Open" } },
+            { new: true }
+          );
+          // Unlock the FG IAP Number only if this request set it and nothing
+          // else has been received against it since.
+          if (fgIapReservation.lockedFgIapNo && released && released.receivedQuantity <= 0) {
+            await fgIapTransactionModel.updateOne(
+              { _id: fgIapReservation.id, receivedQuantity: { $lte: 0 } },
+              { $unset: { fgIapNo: 1 } }
+            );
+          }
+        } catch (rollbackError) {
+          console.error("keepInStore: failed to release FG IAP reservation", fgIapReservation, rollbackError);
+        }
+      }
       res
         .status(500)
         .json({ success: false, error: "Server error: " + error.message });
@@ -3561,6 +3762,92 @@ module.exports = {
         cartons,
         (carton) => carton.orderConfirmationNo
       );
+
+      // Attach each carton's own IAP / FG IAP linkage — a process can have
+      // several IAP transactions in flight at once, each capped and closed
+      // independently, so a single process-level summary isn't enough.
+      const fgIapNos = Array.from(
+        new Set(enrichedCartons.map((c) => String(c.fgIapNo || "").trim()).filter(Boolean))
+      );
+      const processIds = Array.from(
+        new Set(enrichedCartons.map((c) => String(c.processId || "")).filter(Boolean))
+      );
+
+      const [byFgIapNo, openByProcess] = await Promise.all([
+        fgIapNos.length
+          ? fgIapTransactionModel.find({ fgIapNo: { $in: fgIapNos } }).lean()
+          : Promise.resolve([]),
+        processIds.length
+          ? fgIapTransactionModel
+              .find({ processId: { $in: processIds }, status: "Open" })
+              .sort({ createdAt: 1, _id: 1 })
+              .lean()
+          : Promise.resolve([]),
+      ]);
+
+      const fgIapByNo = new Map(byFgIapNo.map((f) => [f.fgIapNo, f]));
+      const openCountByProcessId = new Map();
+      const soleOpenByProcessId = new Map();
+      openByProcess.forEach((f) => {
+        const pid = String(f.processId);
+        openCountByProcessId.set(pid, (openCountByProcessId.get(pid) || 0) + 1);
+        if (!soleOpenByProcessId.has(pid)) soleOpenByProcessId.set(pid, f);
+      });
+
+      enrichedCartons.forEach((carton) => {
+        const matched = carton.fgIapNo ? fgIapByNo.get(carton.fgIapNo) : null;
+        if (matched) {
+          carton.iapNo = matched.iapNo;
+          carton.fgIap = {
+            fgIapNo: matched.fgIapNo,
+            iapNo: matched.iapNo,
+            approvedQuantity: matched.approvedQuantity,
+            receivedQuantity: matched.receivedQuantity,
+            status: matched.status,
+            pending: false,
+          };
+          return;
+        }
+
+        // Not yet locked to any FgIapTransaction. Only a carton that's still
+        // genuinely awaiting receipt (FG_TO_STORE) can even be a candidate —
+        // an already-received, legacy, or dispatched carton has no reliable
+        // link to a transaction that just happens to be open right now, so
+        // leave its existing data untouched instead of mislabeling it.
+        const isPendingReceipt = String(carton.status || "").toUpperCase() === "FG_TO_STORE";
+        if (!isPendingReceipt) {
+          carton.fgIap = null;
+          return;
+        }
+
+        const pid = String(carton.processId);
+        const openCount = openCountByProcessId.get(pid) || 0;
+        if (openCount === 1) {
+          // Only one IAP transaction open for this process — safe to show it
+          // as the (soft) expected target, same as before.
+          const openTxn = soleOpenByProcessId.get(pid);
+          carton.iapNo = openTxn?.iapNo || carton.iapNo || "";
+          carton.fgIap = openTxn
+            ? {
+                fgIapNo: openTxn.fgIapNo || "",
+                iapNo: openTxn.iapNo,
+                approvedQuantity: openTxn.approvedQuantity,
+                receivedQuantity: openTxn.receivedQuantity,
+                status: "Open",
+                pending: !openTxn.fgIapNo,
+              }
+            : null;
+        } else {
+          // Zero or multiple IAP transactions open for this process — there
+          // is no physical/per-device way to know which one this carton's
+          // kits actually came from (quantity-only tracking), so it stays
+          // genuinely unassigned until the FG Store operator picks one at
+          // receipt time (cartonController.keepInStore).
+          carton.iapNo = carton.iapNo || "";
+          carton.fgIap = null;
+          carton.unassignedPending = openCount > 1;
+        }
+      });
 
       return res.status(200).json({
         success: true,

@@ -26,6 +26,7 @@ class GatePassService {
         serial: index + 1,
         cartonSerial: carton.cartonSerial,
         processName: carton.processName || "",
+        fgIapNo: carton.fgIapNo || "",
         deviceCount: Number(carton.deviceCount || 0),
       })),
       devices: includeImeiList
@@ -75,11 +76,12 @@ class GatePassService {
             <td class="num">${carton.serial}</td>
             <td>${this.toDisplayValue(carton.cartonSerial)}</td>
             <td>${this.toDisplayValue(carton.processName)}</td>
+            <td>${this.toDisplayValue(carton.fgIapNo)}</td>
             <td class="num">${Number(carton.deviceCount || 0)}</td>
           </tr>
         `
       )
-      .join("") || `<tr><td colspan="4" class="empty-cell">No cartons linked</td></tr>`;
+      .join("") || `<tr><td colspan="5" class="empty-cell">No cartons linked</td></tr>`;
 
     return `
       <!DOCTYPE html>
@@ -376,6 +378,7 @@ class GatePassService {
                     <th>#</th>
                     <th>Carton</th>
                     <th>Process</th>
+                    <th>FG IAP No.</th>
                     <th>Qty</th>
                   </tr>
                 </thead>
